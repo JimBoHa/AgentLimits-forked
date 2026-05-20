@@ -21,10 +21,10 @@ struct CCUsageClaudeResponse: Codable {
     let totals: Totals
 }
 
-/// @ccusage/codex daily -j output format (Codex)
+/// ccusage codex daily -j output format (Codex)
 struct CCUsageCodexResponse: Codable {
     struct DayEntry: Codable {
-        let date: String           // "Dec 14, 2025"
+        let date: String           // "YYYY-MM-DD"
         let totalTokens: Int
         let costUSD: Double
     }
@@ -74,14 +74,6 @@ final class CCUsageFetcher {
     private let isoFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd"
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        return formatter
-    }()
-
-    /// Formatter for English date strings (Dec 14, 2025), used by Codex/@ccusage responses
-    private let englishFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "MMM dd, yyyy"
         formatter.locale = Locale(identifier: "en_US_POSIX")
         return formatter
     }()
@@ -298,20 +290,14 @@ final class CCUsageFetcher {
         )
     }
 
-    /// Parses Codex (@ccusage/codex) response
+    /// Parses Codex (ccusage codex) response
     private func parseCodexResponse(
         jsonData: Data,
         provider: TokenUsageProvider,
         todayString: String,
         startOfWeek: Date
     ) throws -> TokenUsageSnapshot {
-        // Decode @ccusage/codex response and normalize fields.
         let response = try decodeResponse(CCUsageCodexResponse.self, jsonData: jsonData)
-
-        // Convert today's date to English format for comparison
-        let todayDate = outputFormatter.date(from: todayString) ?? Date()
-        let todayEnglish = englishFormatter.string(from: todayDate)
-        // Normalize daily entries into a common structure.
         let dailyEntries = response.daily.map { entry in
             InternalDailyEntry(
                 date: entry.date,
@@ -323,21 +309,14 @@ final class CCUsageFetcher {
             totalTokens: response.totals.totalTokens,
             costUSD: response.totals.costUSD
         )
-        // Build standardized snapshot from normalized entries.
-        // Convert Codex English dates ("Dec 14, 2025") to ISO8601 ("2025-12-14").
         return buildSnapshot(
             provider: provider,
             dailyEntries: dailyEntries,
             totals: totals,
             startOfWeek: startOfWeek,
-            isTodayEntry: { $0.date == todayEnglish },
-            parseDate: { englishFormatter.date(from: $0.date) },
-            normalizeToISO: { entry in
-                guard let date = englishFormatter.date(from: entry.date) else {
-                    return entry.date
-                }
-                return outputFormatter.string(from: date)
-            }
+            isTodayEntry: { $0.date == todayString },
+            parseDate: { isoFormatter.date(from: $0.date) },
+            normalizeToISO: { $0.date }
         )
     }
 }

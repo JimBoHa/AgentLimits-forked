@@ -6,8 +6,8 @@
   - Codex: `https://chatgpt.com/backend-api/wham/usage`
   - Claude Code: `https://claude.ai/api/organizations/{orgId}/usage`
 - ccusage token usage is fetched via CLI:
-  - Codex: `npx -y @ccusage/codex@latest daily`
-  - Claude Code: `npx -y ccusage@latest daily`
+  - Codex: `npx -y ccusage@latest codex daily`
+  - Claude Code: `npx -y ccusage@latest claude daily`
 - Each widget reads a provider-specific snapshot from the App Group storage and only renders UI.
 - Menu bar displays real-time usage percentages for enabled providers.
 

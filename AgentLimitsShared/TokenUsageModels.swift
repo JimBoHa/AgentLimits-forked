@@ -9,8 +9,8 @@ import Foundation
 /// Provider identifier for token usage tracking.
 /// Uses `codex`, `claude`, and `copilot` as rawValue for JSON compatibility.
 enum TokenUsageProvider: String, Codable, CaseIterable, Identifiable, SnapshotFileNaming, AIProviderProtocol {
-    case codex       // @ccusage/codex (Codex)
-    case claude      // ccusage (Claude Code)
+    case codex       // ccusage codex (Codex)
+    case claude      // ccusage claude (Claude Code)
     case copilot     // GitHub Copilot billing (WebView-based)
 
     var id: String { rawValue }
@@ -56,9 +56,9 @@ enum TokenUsageProvider: String, Codable, CaseIterable, Identifiable, SnapshotFi
         let npxExecutable = CLICommandPathResolver.resolveExecutable(for: .npx, defaultName: "npx")
         switch self {
         case .codex:
-            return "\(npxExecutable) -y @ccusage/codex@latest daily"
+            return "\(npxExecutable) -y ccusage@latest codex daily"
         case .claude:
-            return "\(npxExecutable) -y ccusage@latest daily"
+            return "\(npxExecutable) -y ccusage@latest claude daily"
         case .copilot:
             return ""
         }
@@ -262,7 +262,7 @@ struct CCUsageSettings: Codable, Equatable {
     func makeCLICommand(startDate: String) -> String {
         // Include start date and JSON flag for parsing.
         var cmd = cliCommand
-        cmd += " -s \(startDate) -j"
+        cmd += " --since \(startDate) -j"
         return cmd
     }
 

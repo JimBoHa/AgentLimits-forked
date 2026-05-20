@@ -23,8 +23,8 @@ Download the latest build: [Download](https://github.com/Nihondo/AgentLimits/rel
 - **Usage limits (GitHub Copilot):** Monthly premium interaction quota via entitlement API.
   - Copilot: `https://github.com/github-copilot/chat/entitlement`
 - **Token usage (ccusage):** daily/weekly/monthly tokens and cost via CLI.
-  - Codex: `npx -y @ccusage/codex@latest daily`
-  - Claude Code: `npx -y ccusage@latest daily`
+  - Codex: `npx -y ccusage@latest codex daily`
+  - Claude Code: `npx -y ccusage@latest claude daily`
 - **Premium request usage (Copilot):** daily premium request count and cost via WebView.
   - API: `https://github.com/settings/billing/usage_table` (fetched automatically with Copilot usage)
 

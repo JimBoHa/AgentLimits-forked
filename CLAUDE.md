@@ -30,8 +30,8 @@ xcodebuild test -scheme AgentLimits -destination 'platform=macOS'
 3. `UsageViewModel` manages auto-refresh (configurable 1-10 minutes) and per-provider state
 4. `UsageSnapshotStore` persists usage snapshots as JSON under App Group container
 5. `CCUsageFetcher` runs CLI to fetch token usage:
-   - Codex: `npx -y @ccusage/codex@latest daily`
-   - Claude Code: `npx -y ccusage@latest daily`
+   - Codex: `npx -y ccusage@latest codex daily`
+   - Claude Code: `npx -y ccusage@latest claude daily`
 6. `CopilotBillingFetcher` fetches billing usage via WebView JS (triggered after Copilot entitlement fetch):
    - API: `https://github.com/settings/billing/usage_table?group=0&period=3&product=&query=`
 7. `TokenUsageViewModel` manages auto-refresh (configurable 1-10 minutes) and snapshot persistence
