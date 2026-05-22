@@ -107,7 +107,8 @@ xcodebuild test -scheme AgentLimits -destination 'platform=macOS'
   - Two-line layout per provider: line 1 = provider name, line 2 = `X% / Y%` (5h/weekly)
   - Color-coded status; pacemaker indicator `↑` shown when over budget
   - Percentage and arrow colors are adjusted only at menu bar render time: darken by 22% in light color scheme, lighten by 28% in dark color scheme
-  - Responds to display mode (used/remaining) and color settings changes via Combine + debounce
+  - Responds to changes via Combine (`objectWillChange`) for snapshot updates and KVO for specific UserDefaults keys (display mode, menu bar toggles, provider order, pacemaker settings, status colors); 300 ms debounce before re-render
+  - `MenuBarIconCacheKey` (snapshot `fetchedAt`, enabled state, display mode, color scheme) skips `ImageRenderer` when inputs are identical; KVO-triggered setting changes always invalidate the cache
 - Dashboard section at the top of the menu (collapsible per provider via Usage settings):
   - Each row is `NSMenuItem.view = NSHostingView<DashboardMenuItemView>` for full SwiftUI rendering
   - Header: provider name + remaining time (clock) + reset time (calendar)
@@ -276,6 +277,7 @@ xcodebuild test -scheme AgentLimits -destination 'platform=macOS'
 - CLI execution uses the user login shell and prefixes PATH with `/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH`
 - Full-path overrides from Advanced Settings take precedence
 - Menu bar is managed by `MenuBarController` (AppKit `NSStatusItem`), not SwiftUI `MenuBarExtra`; `AgentLimitsApp` only declares a `Window` scene for the settings window
+- `MenuBarController` uses KVO (`addObserver(_:forKeyPath:options:context:)`) for specific UserDefaults keys rather than `UserDefaults.didChangeNotification` (which fires on every write); `observedAppGroupDefaults` is stored as a property so `addObserver` and `removeObserver` always use the same instance; KVO callbacks run `nonisolated` and dispatch to `@MainActor` via `Task`
 - `AppSharedState.openSettingsAction` bridges AppKit menu → SwiftUI `openWindow`; set in `SettingsTabView.onAppear`
 - Dashboard rows use `NSHostingView<DashboardMenuItemView>` with `fittingSize` + `autoresizingMask: [.width]`; `menuNeedsUpdate` uses `MainActor.assumeIsolated` for synchronous rebuild
 - `UsageLinearBarView` mirrors `UsageDonutView` logic: warning segment clipped to `min(dangerStart, totalEnd)`, pacemaker bar hidden when `calculatePacemakerPercent()` returns nil

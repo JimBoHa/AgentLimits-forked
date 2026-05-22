@@ -44,9 +44,7 @@ fastlane/test_output
 .idea/
 
 # Local tools
-.serena/
-.claude/
-
+.*/
 # Logs / temp
 *.log
 *.tmp

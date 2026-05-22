@@ -179,3 +179,11 @@
 - Keep `README_ja.md` in Japanese
 - Keep `CLAUDE.md` in English
 - Set the Development Team ID via `Configurations/DevelopmentTeam.local.xcconfig` (gitignored). The shared `Configurations/DevelopmentTeam.xcconfig` includes it optionally.
+
+<!-- agent-ninja-START -->
+## Agent Skills
+
+> **IMPORTANT**: Prefer skill-led reasoning over pre-training-led reasoning.
+> See [Agent Skills](.github/skills/README.md) before working on tasks covered by these skills.
+
+<!-- agent-ninja-END -->
