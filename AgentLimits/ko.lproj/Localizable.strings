@@ -53,7 +53,8 @@
 "content.popupClose" = "닫기";
 "settings.showInMenuBar" = "메뉴 막대에 표시";
 "settings.hideMenuBarIcon" = "메뉴 막대 아이콘 숨기기";
-"settings.hideMenuBarIcon.hint" = "숨김 중에는 앱을 다시 실행하면 일시적으로 표시됩니다.";
+"settings.hideMenuBarIcon.hint" = "숨김 중에는 앱 아이콘을 더블 클릭하면 일시적으로 표시됩니다.";
+"settings.menuBar.sectionTitle" = "메뉴 막대";
 
 /* Display Mode */
 "displayMode.used" = "사용률";

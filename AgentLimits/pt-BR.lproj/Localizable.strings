@@ -53,7 +53,8 @@
 "content.popupClose" = "Fechar";
 "settings.showInMenuBar" = "Mostrar na barra de menus";
 "settings.hideMenuBarIcon" = "Ocultar ícone da barra de menus";
-"settings.hideMenuBarIcon.hint" = "Enquanto oculto, reabra o app para exibi-lo temporariamente.";
+"settings.hideMenuBarIcon.hint" = "Enquanto oculto, clique duas vezes no ícone do app para exibi-lo temporariamente.";
+"settings.menuBar.sectionTitle" = "Barra de menus";
 
 /* Display Mode */
 "displayMode.used" = "Taxa de uso";

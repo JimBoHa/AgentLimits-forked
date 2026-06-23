@@ -23,6 +23,7 @@ struct CLICommandSettingsView: View {
     @State private var resolvedPaths: [CLICommandKind: String] = [:]
     @State private var scriptCopyFeedback: Bool = false
     @State private var widgetTapAction: WidgetTapAction = WidgetTapActionStore.loadAction()
+    @AppStorage(UserDefaultsKeys.menuBarIconHidden) private var menuBarIconHidden = false
 
     private var statusLineScriptPath: String? {
         Bundle.main.path(forResource: "agentlimits_statusline_claude", ofType: "sh")
@@ -43,6 +44,11 @@ struct CLICommandSettingsView: View {
             SettingsFormSection(title: "widgetTapAction.title".localized(),
                                 footerText: "widgetTapAction.note".localized()) {
                 widgetTapActionSection
+            }
+
+            SettingsFormSection(title: "settings.menuBar.sectionTitle".localized(),
+                                footerText: "settings.hideMenuBarIcon.hint".localized()) {
+                menuBarIconSection
             }
         }
         .formStyle(.grouped)
@@ -126,6 +132,11 @@ struct CLICommandSettingsView: View {
                 .settingsButtonStyle(.secondary)
             }
         }
+    }
+
+    private var menuBarIconSection: some View {
+        Toggle("settings.hideMenuBarIcon".localized(), isOn: $menuBarIconHidden)
+            .toggleStyle(.checkbox)
     }
 
     private var widgetTapActionSection: some View {

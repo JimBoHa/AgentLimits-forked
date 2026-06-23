@@ -45,7 +45,9 @@ final class SettingsWindowController: NSWindowController {
             object: window,
             queue: .main
         ) { [weak self] _ in
-            self?.appState.onSettingsWindowClosed?()
+            MainActor.assumeIsolated {
+                self?.appState.onSettingsWindowClosed?()
+            }
         }
     }
 

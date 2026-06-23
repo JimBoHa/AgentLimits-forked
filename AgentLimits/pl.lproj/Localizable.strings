@@ -53,7 +53,8 @@
 "content.popupClose" = "Zamknij";
 "settings.showInMenuBar" = "Pokaż na pasku menu";
 "settings.hideMenuBarIcon" = "Ukryj ikonę paska menu";
-"settings.hideMenuBarIcon.hint" = "Gdy jest ukryta, uruchom ponownie aplikację, aby tymczasowo ją wyświetlić.";
+"settings.hideMenuBarIcon.hint" = "Gdy jest ukryta, kliknij dwukrotnie ikonę aplikacji, aby tymczasowo ją wyświetlić.";
+"settings.menuBar.sectionTitle" = "Pasek menu";
 
 /* Display Mode */
 "displayMode.used" = "Wskaźnik użycia";

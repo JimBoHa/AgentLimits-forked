@@ -23,7 +23,6 @@ struct ContentView: View {
     @AppStorage(UserDefaultsKeys.menuBarDashboardCodexEnabled) private var menuBarDashboardCodexEnabled = true
     @AppStorage(UserDefaultsKeys.menuBarDashboardClaudeEnabled) private var menuBarDashboardClaudeEnabled = true
     @AppStorage(UserDefaultsKeys.menuBarDashboardCopilotEnabled) private var menuBarDashboardCopilotEnabled = true
-    @AppStorage(UserDefaultsKeys.menuBarIconHidden) private var menuBarIconHidden = false
     @State private var orderedProviders: [UsageProvider] = ProviderOrderStore.loadProviderOrder()
     @State private var isShowingClearDataConfirm = false
     @State private var isClearingData = false
@@ -212,13 +211,6 @@ struct ContentView: View {
                 .toggleStyle(.checkbox)
             Toggle("settings.showMenuDashboard".localized(), isOn: menuBarDashboardEnabledBinding)
                 .toggleStyle(.checkbox)
-            Toggle("settings.hideMenuBarIcon".localized(), isOn: $menuBarIconHidden)
-                .toggleStyle(.checkbox)
-            if menuBarIconHidden {
-                Text("settings.hideMenuBarIcon.hint".localized())
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
         }
     }
 

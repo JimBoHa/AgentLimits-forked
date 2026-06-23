@@ -53,7 +53,8 @@
 "content.popupClose" = "关闭";
 "settings.showInMenuBar" = "在菜单栏显示";
 "settings.hideMenuBarIcon" = "隐藏菜单栏图标";
-"settings.hideMenuBarIcon.hint" = "隐藏后，重新启动应用即可临时显示。";
+"settings.hideMenuBarIcon.hint" = "隐藏后，双击应用图标即可临时显示。";
+"settings.menuBar.sectionTitle" = "菜单栏";
 
 /* Display Mode */
 "displayMode.used" = "使用率";

@@ -54,7 +54,8 @@
 "content.popupClose" = "Close";
 "settings.showInMenuBar" = "Show in Menu Bar";
 "settings.hideMenuBarIcon" = "Hide menu bar icon";
-"settings.hideMenuBarIcon.hint" = "While hidden, relaunch the app to temporarily show it again.";
+"settings.hideMenuBarIcon.hint" = "While hidden, double-click the app icon to temporarily show it again.";
+"settings.menuBar.sectionTitle" = "Menu Bar";
 
 /* Display Mode */
 "displayMode.used" = "Usage rate";

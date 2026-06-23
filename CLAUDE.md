@@ -56,7 +56,7 @@ xcodebuild test -scheme AgentLimits -destination 'platform=macOS'
 | `AgentLimits/App/MenuBar/AppUsageColorResolver.swift` | App-side color resolver equivalent to `WidgetUsageColorResolver` in the widget target |
 | `AgentLimits/App/SettingsTabView.swift` | Tab-based settings UI (Usage, ccusage, Wake Up, Notification, Advanced) |
 | `AgentLimits/App/DesignTokens.swift` | Shared design tokens (spacing/corners/window min size) |
-| `AgentLimits/App/CLICommandSettingsView.swift` | Advanced Settings UI (CLI paths + scripts + widget tap action) |
+| `AgentLimits/App/CLICommandSettingsView.swift` | Advanced Settings UI (CLI paths + scripts + widget tap action + menu bar icon hide toggle) |
 | `AgentLimits/App/LanguageManager.swift` | Language settings management (Japanese/English/System) |
 | `AgentLimits/App/LoginItemManager.swift` | Login item (start at login) management |
 | `AgentLimits/App/AppLogger.swift` | Application-wide logging utility |
@@ -177,11 +177,12 @@ xcodebuild test -scheme AgentLimits -destination 'platform=macOS'
 - Duplicate prevention: notifies only once per reset cycle
 - Usage color settings (donut + status colors) live in Notification settings
 
-#### Advanced Settings (CLI Paths / Scripts / Widget Tap)
+#### Advanced Settings (CLI Paths / Scripts / Widget Tap / Menu Bar)
 - Full path overrides for `codex`, `claude`, `npx`
 - PATH resolution results shown in UI
 - Bundled status line script path shown with copy action
 - Widget tap action: open website (default) or refresh data
+- Menu bar icon hide toggle (`menu_bar_icon_hidden`) — app-wide setting lives here, not in per-provider Usage settings
 
 #### Claude Code Status Line Script
 - Bundled script for Claude Code status line integration

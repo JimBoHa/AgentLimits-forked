@@ -53,7 +53,8 @@
 "content.popupClose" = "Kapat";
 "settings.showInMenuBar" = "Menü çubuğunda göster";
 "settings.hideMenuBarIcon" = "Menü çubuğu simgesini gizle";
-"settings.hideMenuBarIcon.hint" = "Gizliyken uygulamayı yeniden başlatarak geçici olarak gösterebilirsiniz.";
+"settings.hideMenuBarIcon.hint" = "Gizliyken uygulama simgesine çift tıklayarak geçici olarak gösterebilirsiniz.";
+"settings.menuBar.sectionTitle" = "Menü çubuğu";
 
 /* Display Mode */
 "displayMode.used" = "Kullanım oranı";

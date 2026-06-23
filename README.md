@@ -38,7 +38,7 @@ Download the latest build: [Download](https://github.com/Nihondo/AgentLimits/rel
 - Status colors in the menu bar are automatically darkened or lightened to match the current menu bar text color.
 - Pacemaker indicator: optionally shows `<used>%↑` when over pace
 - Toggle icon visibility per provider in **Usage** settings
-- **Hide menu bar icon**: completely hides the menu bar icon. While hidden, relaunch the app (Finder double-click / Spotlight / `open -a AgentLimits`) to temporarily show the icon and open Settings. Closing the Settings window hides the icon again.
+- **Hide menu bar icon**: completely hides the menu bar icon. While hidden, double-click the app icon in Finder (or open via Spotlight / `open -a AgentLimits`) while it is still running to temporarily show the icon and open Settings. Closing the Settings window hides the icon again.
 - Provider display order (Codex / Claude Code / Copilot) is configurable in **Usage** settings (**Display Order**)
 
 ### Menu Dashboard
@@ -100,8 +100,7 @@ Pacemaker shows a time-based usage benchmark to help you stay on track.
 3. Choose refresh interval (1–10 minutes).
 4. Toggle **Show in menu bar** to show the usage percentage in the icon area.
 5. Toggle **Show dashboard in menu** to show/hide the provider's row in the menu dashboard.
-6. Toggle **Hide menu bar icon** to completely hide the icon from the menu bar. To access settings while hidden, relaunch the app.
-7. Drag rows in **Display Order** to change the order of providers in the menu bar icon and dashboard.
+6. Drag rows in **Display Order** to change the order of providers in the menu bar icon and dashboard.
 7. Click the bottom login bar (`▲`) to expand the embedded WebView panel.
 8. Sign in via the embedded WebView (chatgpt.com / claude.ai / github.com).
 9. Use **Clear Data** to remove login data and website storage if sign-in gets stuck.
@@ -140,7 +139,8 @@ Pacemaker shows a time-based usage benchmark to help you stay on track.
 2. Set full paths for `codex`, `claude`, `npx` if needed (blank = resolve via PATH).
 3. Review PATH resolution results.
 4. Choose widget tap action (open website / refresh data).
-5. Copy the bundled status line script path if needed.
+5. Toggle **Hide menu bar icon** to completely hide the icon from the menu bar. To access settings while hidden, double-click the app icon while it is still running.
+6. Copy the bundled status line script path if needed.
 
 ## Wake Up (CLI Scheduler)
 - Runs scheduled commands:

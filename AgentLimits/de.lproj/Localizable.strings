@@ -54,7 +54,8 @@
 "content.popupClose" = "Schließen";
 "settings.showInMenuBar" = "In der Menüleiste anzeigen";
 "settings.hideMenuBarIcon" = "Menüleistensymbol ausblenden";
-"settings.hideMenuBarIcon.hint" = "Während das Symbol ausgeblendet ist, starten Sie die App erneut, um es vorübergehend anzuzeigen.";
+"settings.hideMenuBarIcon.hint" = "Während das Symbol ausgeblendet ist, doppelklicken Sie auf das App-Symbol, um es vorübergehend anzuzeigen.";
+"settings.menuBar.sectionTitle" = "Menüleiste";
 
 /* Display Mode */
 "displayMode.used" = "Nutzungsrate";

@@ -54,7 +54,8 @@
 "content.popupClose" = "閉じる";
 "settings.showInMenuBar" = "メニューバーに表示";
 "settings.hideMenuBarIcon" = "メニューバーアイコンを隠す";
-"settings.hideMenuBarIcon.hint" = "隠している間は、アプリを再起動すると一時的に再表示されます。";
+"settings.hideMenuBarIcon.hint" = "隠している間は、起動中のままアプリアイコンをダブルクリックすると一時的に再表示されます。";
+"settings.menuBar.sectionTitle" = "メニューバー";
 
 /* Display Mode */
 "displayMode.used" = "使用率";

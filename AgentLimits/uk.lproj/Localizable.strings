@@ -53,7 +53,8 @@
 "content.popupClose" = "Закрити";
 "settings.showInMenuBar" = "Показувати в рядку меню";
 "settings.hideMenuBarIcon" = "Сховати іконку рядка меню";
-"settings.hideMenuBarIcon.hint" = "Поки приховано, перезапустіть програму для тимчасового відображення.";
+"settings.hideMenuBarIcon.hint" = "Поки приховано, двічі клацніть іконку програми для тимчасового відображення.";
+"settings.menuBar.sectionTitle" = "Рядок меню";
 
 /* Display Mode */
 "displayMode.used" = "Рівень використання";

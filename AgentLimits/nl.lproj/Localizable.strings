@@ -53,7 +53,8 @@
 "content.popupClose" = "Sluiten";
 "settings.showInMenuBar" = "Toon in menubalk";
 "settings.hideMenuBarIcon" = "Menubalkicoon verbergen";
-"settings.hideMenuBarIcon.hint" = "Terwijl het verborgen is, herstart de app om het tijdelijk weer te tonen.";
+"settings.hideMenuBarIcon.hint" = "Terwijl het verborgen is, dubbelklik op het app-icoon om het tijdelijk weer te tonen.";
+"settings.menuBar.sectionTitle" = "Menubalk";
 
 /* Display Mode */
 "displayMode.used" = "Gebruikspercentage";
