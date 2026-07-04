@@ -58,6 +58,7 @@ final class SettingsWindowController: NSWindowController {
             )
         )
         appState.startBackgroundRefresh()
+        appState.resumeWebViewForSettings()
         LoginItemManager.shared.updateStatus()
         _ = AppUpdateController.shared
     }

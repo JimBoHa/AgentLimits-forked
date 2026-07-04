@@ -18,6 +18,7 @@ final class WebViewStore: ObservableObject {
     @Published var isPageReady = false
     @Published var popupWebView: WKWebView?
     @Published var cookieChangeToken = UUID()
+    private(set) var isSuspended: Bool
     let targetHost: String
     private var coordinator: WebViewCoordinator?
     private let cookieStore: WKHTTPCookieStore
@@ -26,8 +27,9 @@ final class WebViewStore: ObservableObject {
     var onPopupNavigationFinished: ((WKWebView) async -> Bool)?
     private var isClosingPopup = false
 
-    init(initialProvider: UsageProvider = .chatgptCodex) {
+    init(initialProvider: UsageProvider = .chatgptCodex, loadImmediately: Bool = true) {
         self.provider = initialProvider
+        self.isSuspended = !loadImmediately
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .default()
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = true
@@ -43,7 +45,9 @@ final class WebViewStore: ObservableObject {
         let observer = CookieObserver(store: self)
         self.cookieObserver = observer
         cookieStore.add(observer)
-        loadIfNeeded()
+        if loadImmediately {
+            loadIfNeeded()
+        }
     }
 
     deinit {
@@ -56,6 +60,7 @@ final class WebViewStore: ObservableObject {
 
     /// Loads the usage URL if not already loaded
     func loadIfNeeded() {
+        guard !isSuspended else { return }
         if webView.url == nil {
             // Initial navigation to provider usage page.
             webView.load(URLRequest(url: usageURL))
@@ -65,6 +70,7 @@ final class WebViewStore: ObservableObject {
     /// Reloads the usage URL, ignoring cache
     func reloadFromOrigin() {
         // Reset readiness and force a fresh load.
+        isSuspended = false
         isPageReady = false
         let request = URLRequest(
             url: usageURL,
@@ -72,6 +78,25 @@ final class WebViewStore: ObservableObject {
             timeoutInterval: 60
         )
         webView.load(request)
+    }
+
+    /// 非アクティブなログインページがバックグラウンドで動き続けないようにWebViewを停止する。
+    func suspend() {
+        isSuspended = true
+        isPageReady = false
+        closePopupWebView()
+        webView.stopLoading()
+        if webView.url != nil,
+           let blankURL = URL(string: "about:blank") {
+            webView.load(URLRequest(url: blankURL))
+        }
+    }
+
+    /// プロバイダーの使用状況ページを読み込んでWebViewを復帰する。
+    func resume() {
+        guard isSuspended else { return }
+        isSuspended = false
+        reloadFromOrigin()
     }
 
     /// Closes any open popup WebView

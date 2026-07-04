@@ -41,7 +41,7 @@
 "content.refreshNow" = "Refresh Now";
 "content.clearData" = "Clear Data";
 "content.clearDataConfirmTitle" = "Clear Data";
-"content.clearDataConfirmMessage" = "This will remove login data and website storage for the embedded browser.";
+"content.clearDataConfirmMessage" = "This will remove embedded browser login data, website storage, and cached usage snapshots.";
 "content.clearDataConfirmAction" = "Clear";
 "content.clearDataCancel" = "Cancel";
 "content.provider" = "Service";

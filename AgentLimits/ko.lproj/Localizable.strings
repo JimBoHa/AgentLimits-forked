@@ -40,7 +40,7 @@
 "content.refreshNow" = "지금 새로 고침";
 "content.clearData" = "데이터 지우기";
 "content.clearDataConfirmTitle" = "데이터 지우기";
-"content.clearDataConfirmMessage" = "내장 브라우저의 로그인 데이터와 웹사이트 저장소를 제거합니다.";
+"content.clearDataConfirmMessage" = "내장 브라우저의 로그인 데이터, 웹사이트 저장소 및 캐시된 사용량 스냅샷을 제거합니다.";
 "content.clearDataConfirmAction" = "지우기";
 "content.clearDataCancel" = "취소";
 "content.provider" = "서비스";

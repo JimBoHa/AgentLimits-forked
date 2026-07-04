@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-AgentLimits is a macOS Sonoma+ menu bar app with WidgetKit widgets that display usage limits (Codex/Claude Code) and ccusage token usage (today/this week/this month). The app embeds WKWebView for service login and fetches usage data from internal backend APIs. ccusage token usage is fetched via CLI and stored as snapshots for widgets.
+AgentLimits is a macOS Sonoma+ menu bar app with WidgetKit widgets that display usage limits (Codex/Claude Code) and ccusage token usage (today/this week/this month). The app embeds WKWebView for service login and fetches usage data from internal backend APIs. Login WebViews are kept active in the background only for providers with a successful cached usage snapshot. ccusage token usage is fetched via CLI and stored as snapshots for widgets.
 
 ## Build Commands
 
@@ -30,6 +30,7 @@ xcodebuild test -scheme AgentLimits -destination 'platform=macOS'
    - Codex monthly-only responses are detected from `limit_window_seconds > UsageLimitDuration.sevenDays + 1`, not from `plan_type`; monthly Codex snapshots keep `primaryWindow` and drop `secondaryWindow`.
 3. `UsageViewModel` manages auto-refresh (configurable 1-10 minutes) and per-provider state
 4. `UsageSnapshotStore` persists usage snapshots as JSON under App Group container
+   - A cached usage snapshot is also the login-history signal used to decide whether a provider WebView may stay active in the background.
 5. `CCUsageFetcher` runs CLI to fetch token usage:
    - Codex: `npx -y ccusage@latest codex daily`
    - Claude Code: `npx -y ccusage@latest claude daily`
@@ -48,7 +49,7 @@ xcodebuild test -scheme AgentLimits -destination 'platform=macOS'
 | File | Purpose |
 |------|---------|
 | `AgentLimits/App/AgentLimitsApp.swift` | Main app entry (`@main`), settings Window scene, deep link handling |
-| `AgentLimits/App/AppSharedState.swift` | Shared app state; holds `openSettingsAction` callback for AppKit → SwiftUI window bridging |
+| `AgentLimits/App/AppSharedState.swift` | Shared app state; applies login-history-based WebView background policy and owns settings window close callbacks |
 | `AgentLimits/App/MenuBar/MenuBarController.swift` | `NSStatusItem` + `NSMenu` management; renders icon via `ImageRenderer`, dashboard rows via `NSHostingView` |
 | `AgentLimits/App/MenuBar/MenuBarLabelContent.swift` | SwiftUI views for menu bar icon (`MenuBarLabelContentView`, `MenuBarProviderStatusView`, `MenuBarPercentLineView`) |
 | `AgentLimits/App/MenuBar/DashboardMenuItemView.swift` | Per-provider dashboard row (header + linear bars + percent labels) used as `NSMenuItem.view` |
@@ -71,9 +72,9 @@ xcodebuild test -scheme AgentLimits -destination 'platform=macOS'
 | `AgentLimits/Usage/UsageDisplayModeStore.swift` | Display mode persistence and snapshot conversion |
 | `AgentLimits/Usage/AppUsageModels.swift` | App-only display mode + localized errors + `ProviderOrderStore` (provider display order persistence) |
 | `AgentLimits/Usage/ContentView.swift` | Usage limits settings UI with WebView |
-| `AgentLimits/Usage/WebViewStore.swift` | WKWebView lifecycle, page-ready detection |
+| `AgentLimits/Usage/WebViewStore.swift` | WKWebView lifecycle, page-ready detection, suspend/resume for inactive login pages |
 | `AgentLimits/Usage/WebViewScriptRunner.swift` | JavaScript injection executor |
-| `AgentLimits/Usage/UsageWebViewPool.swift` | Per-provider WebViewStore management |
+| `AgentLimits/Usage/UsageWebViewPool.swift` | Per-provider WebViewStore management and background active-provider policy |
 | `AgentLimits/CCUsage/TokenUsageViewModel.swift` | ccusage state, auto-refresh, snapshot persistence |
 | `AgentLimits/CCUsage/CCUsageFetcher.swift` | CLI execution + parsing for ccusage |
 | `AgentLimits/CCUsage/CCUsageSettingsView.swift` | ccusage settings UI |
@@ -147,7 +148,7 @@ xcodebuild test -scheme AgentLimits -destination 'platform=macOS'
 - Display mode (used/remaining) shared across app + widgets
 - Color-coded percentage display in widgets based on usage level and display mode
 - Widget tap action configurable: open website or refresh data (Advanced Settings)
-- Usage screen includes **Clear Data** to remove embedded browser login data and website storage
+- Usage screen includes **Clear Data** to remove embedded browser login data, website storage, and cached usage snapshots, which resets login-history-based background WebView eligibility
 
 #### Token Usage (ccusage)
 - CLI-based fetch and parsing for Codex/Claude Code
@@ -291,7 +292,8 @@ Monthly-only usage windows:
 - Full-path overrides from Advanced Settings take precedence
 - Menu bar is managed by `MenuBarController` (AppKit `NSStatusItem`), not SwiftUI `MenuBarExtra`; `AgentLimitsApp` only declares a `Window` scene for the settings window
 - `MenuBarController` uses KVO (`addObserver(_:forKeyPath:options:context:)`) for specific UserDefaults keys rather than `UserDefaults.didChangeNotification` (which fires on every write); `observedAppGroupDefaults` is stored as a property so `addObserver` and `removeObserver` always use the same instance; KVO callbacks run `nonisolated` and dispatch to `@MainActor` via `Task`
-- `AppSharedState.onSettingsWindowClosed` bridges `SettingsWindowController` window-close → `MenuBarController.endTemporaryRevealIfNeeded()`; set in `AppDelegate.applicationDidFinishLaunching`
+- `AppSharedState.onSettingsWindowClosed` bridges `SettingsWindowController` window-close → `MenuBarController.endTemporaryRevealIfNeeded()` and reapplies the login-history-based WebView background policy; set in `AppDelegate.applicationDidFinishLaunching`
+- Usage login WebViews are created without loading their provider pages by default. `AppSharedState` resumes only providers with cached snapshots in the background, `SettingsWindowController` resumes the currently selected provider when settings opens, and `ContentView` resumes newly selected providers for login. Clear Data deletes usage snapshots and resets provider state so providers return to the no-history background policy.
 - `applicationShouldHandleReopen` in `AppDelegate` handles relaunch-to-reveal when menu bar icon is hidden; a 2-second post-launch guard prevents accidental reveal from LaunchServices startup events
 - Dashboard rows use `NSHostingView<DashboardMenuItemView>` with `fittingSize` + `autoresizingMask: [.width]`; `menuNeedsUpdate` uses `MainActor.assumeIsolated` for synchronous rebuild
 - `UsageLinearBarView` mirrors `UsageDonutView` logic: warning segment clipped to `min(dangerStart, totalEnd)`, pacemaker bar hidden when `calculatePacemakerPercent()` returns nil

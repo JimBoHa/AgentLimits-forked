@@ -90,6 +90,16 @@ final class UsageViewModel: ObservableObject {
         stateManager.allFetchStatuses
     }
 
+    /// 指定プロバイダーに過去の取得成功実績があるかを返す。
+    func hasLoginHistory(for provider: UsageProvider) -> Bool {
+        stateManager.hasLoginHistory(for: provider)
+    }
+
+    /// バックグラウンドでWebViewを稼働させるプロバイダー一覧。
+    var backgroundActiveProviders: [UsageProvider] {
+        stateManager.backgroundActiveProviders
+    }
+
     /// Checks if user is logged in for the specified provider.
     /// Used by popup auto-close to detect OAuth completion.
     func checkLoginStatus(for provider: UsageProvider) async -> Bool {
@@ -170,6 +180,16 @@ final class UsageViewModel: ObservableObject {
         // Apply new mode, persist it, and refresh UI state.
         self.displayMode = displayMode
         displayModeStore.applyDisplayMode(displayMode)
+        updateSelectedProviderState()
+    }
+
+    /// 保存済みの使用量スナップショットを削除し、ログイン実績を未取得状態に戻す。
+    func clearCachedUsageSnapshots() {
+        for provider in UsageProvider.allCases {
+            try? store.deleteSnapshot(for: provider)
+            stateManager.clearLoginHistory(for: provider)
+            WidgetCenter.shared.reloadTimelines(ofKind: provider.widgetKind)
+        }
         updateSelectedProviderState()
     }
 

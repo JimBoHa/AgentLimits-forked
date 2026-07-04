@@ -16,7 +16,7 @@ final class UsageWebViewPool: ObservableObject {
     init(providers: [UsageProvider] = UsageProvider.allCases) {
         var stores: [UsageProvider: WebViewStore] = [:]
         for provider in providers {
-            stores[provider] = WebViewStore(initialProvider: provider)
+            stores[provider] = WebViewStore(initialProvider: provider, loadImmediately: false)
         }
         self.webViewStoreByProvider = stores
     }
@@ -27,13 +27,34 @@ final class UsageWebViewPool: ObservableObject {
             return existingStore
         }
         // Lazily create a WebViewStore when requested.
-        let newStore = WebViewStore(initialProvider: provider)
+        let newStore = WebViewStore(initialProvider: provider, loadImmediately: false)
         webViewStoreByProvider[provider] = newStore
         return newStore
     }
 
-    /// Clears all website data (cookies, cache) and reloads all WebViews
-    func clearWebsiteData() async {
+    /// 指定プロバイダーのWebViewを停止状態にする。
+    func suspend(_ provider: UsageProvider) {
+        getWebViewStore(for: provider).suspend()
+    }
+
+    /// 指定プロバイダーのWebViewを復帰する。
+    func resume(_ provider: UsageProvider) {
+        getWebViewStore(for: provider).resume()
+    }
+
+    /// 取得実績のあるプロバイダーだけをバックグラウンドで稼働状態に保つ。
+    func applyBackgroundPolicy(activeProviders: Set<UsageProvider>) {
+        for provider in UsageProvider.allCases {
+            if activeProviders.contains(provider) {
+                resume(provider)
+            } else {
+                suspend(provider)
+            }
+        }
+    }
+
+    /// すべてのWebサイトデータ（Cookie/キャッシュ）を削除し、必要に応じてWebViewを再読み込みする。
+    func clearWebsiteData(reloadsWebViews: Bool = true) async {
         // Remove cookies/cache and refresh all web views.
         let dataStore = WKWebsiteDataStore.default()
         let dataTypes = WKWebsiteDataStore.allWebsiteDataTypes()
@@ -43,7 +64,9 @@ final class UsageWebViewPool: ObservableObject {
             }
         }
         await clearHttpCookies(in: dataStore)
-        reloadAllWebViews()
+        if reloadsWebViews {
+            reloadAllWebViews()
+        }
     }
 
     private func clearHttpCookies(in dataStore: WKWebsiteDataStore) async {

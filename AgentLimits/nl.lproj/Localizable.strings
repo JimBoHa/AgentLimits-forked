@@ -40,7 +40,7 @@
 "content.refreshNow" = "Nu verversen";
 "content.clearData" = "Gegevens wissen";
 "content.clearDataConfirmTitle" = "Gegevens wissen";
-"content.clearDataConfirmMessage" = "Dit verwijdert inloggegevens en website-opslag voor de ingebouwde browser.";
+"content.clearDataConfirmMessage" = "Dit verwijdert inloggegevens van de ingebouwde browser, website-opslag en gecachte gebruikssnapshots.";
 "content.clearDataConfirmAction" = "Wissen";
 "content.clearDataCancel" = "Annuleren";
 "content.provider" = "Service";

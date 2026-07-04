@@ -40,7 +40,7 @@
 "content.refreshNow" = "Actualizar ahora";
 "content.clearData" = "Borrar datos";
 "content.clearDataConfirmTitle" = "Borrar datos";
-"content.clearDataConfirmMessage" = "Esto eliminará los datos de inicio de sesión y el almacenamiento del navegador integrado.";
+"content.clearDataConfirmMessage" = "Esto eliminará los datos de inicio de sesión del navegador integrado, el almacenamiento de sitios web y las instantáneas de uso en caché.";
 "content.clearDataConfirmAction" = "Borrar";
 "content.clearDataCancel" = "Cancelar";
 "content.provider" = "Servicio";

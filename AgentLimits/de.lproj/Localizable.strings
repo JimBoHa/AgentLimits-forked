@@ -41,7 +41,7 @@
 "content.refreshNow" = "Jetzt aktualisieren";
 "content.clearData" = "Daten löschen";
 "content.clearDataConfirmTitle" = "Daten löschen";
-"content.clearDataConfirmMessage" = "Dies entfernt Anmeldedaten und Website-Daten für den eingebetteten Browser.";
+"content.clearDataConfirmMessage" = "Dies entfernt Anmeldedaten des eingebetteten Browsers, Website-Speicher und zwischengespeicherte Nutzungs-Snapshots.";
 "content.clearDataConfirmAction" = "Löschen";
 "content.clearDataCancel" = "Abbrechen";
 "content.provider" = "Dienst";

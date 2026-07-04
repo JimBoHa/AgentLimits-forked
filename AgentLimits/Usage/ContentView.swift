@@ -109,6 +109,14 @@ struct ContentView: View {
             viewModel.restartAutoRefresh()
             WidgetCenter.shared.reloadAllTimelines()
         }
+        .onChange(of: viewModel.selectedProvider) { _, newProvider in
+            webViewPool.resume(newProvider)
+        }
+        .onChange(of: isWebViewExpanded) { _, isExpanded in
+            if isExpanded {
+                webViewPool.resume(viewModel.selectedProvider)
+            }
+        }
         .onAppear {
             orderedProviders = ProviderOrderStore.loadProviderOrder()
         }
@@ -119,9 +127,12 @@ struct ContentView: View {
         ) {
             Button("content.clearDataConfirmAction".localized(), role: .destructive) {
                 Task {
-                    // Clear all website data and force re-login.
+                    // Clear login state, cached usage snapshots, and force re-login for the selected provider.
                     isClearingData = true
-                    await webViewPool.clearWebsiteData()
+                    viewModel.clearCachedUsageSnapshots()
+                    await webViewPool.clearWebsiteData(reloadsWebViews: false)
+                    webViewPool.applyBackgroundPolicy(activeProviders: Set(viewModel.backgroundActiveProviders))
+                    webViewPool.resume(viewModel.selectedProvider)
                     isClearingData = false
                 }
             }

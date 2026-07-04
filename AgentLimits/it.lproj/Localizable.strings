@@ -40,7 +40,7 @@
 "content.refreshNow" = "Aggiorna ora";
 "content.clearData" = "Cancella dati";
 "content.clearDataConfirmTitle" = "Cancella dati";
-"content.clearDataConfirmMessage" = "Questo rimuoverà i dati di accesso e l'archiviazione del browser incorporato.";
+"content.clearDataConfirmMessage" = "Questo rimuoverà i dati di accesso del browser incorporato, l'archiviazione dei siti web e gli snapshot di utilizzo nella cache.";
 "content.clearDataConfirmAction" = "Cancella";
 "content.clearDataCancel" = "Annulla";
 "content.provider" = "Servizio";

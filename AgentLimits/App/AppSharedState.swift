@@ -53,11 +53,23 @@ final class AppSharedState: ObservableObject {
         tokenUsageViewModel.startAutoRefresh()
     }
 
-    /// Preloads WebViews for all providers
+    /// Applies the background WebView policy for providers with fetch history.
     private func loadWebViews() {
-        for provider in UsageProvider.allCases {
-            webViewPool.getWebViewStore(for: provider).loadIfNeeded()
-        }
+        webViewPool.applyBackgroundPolicy(
+            activeProviders: Set(viewModel.backgroundActiveProviders)
+        )
+    }
+
+    /// 設定画面で操作するため、選択中プロバイダーのWebViewを復帰する。
+    func resumeWebViewForSettings() {
+        webViewPool.resume(viewModel.selectedProvider)
+    }
+
+    /// 設定画面を閉じた後、取得実績のないWebViewを停止状態に戻す。
+    func applyBackgroundPolicyOnSettingsClose() {
+        webViewPool.applyBackgroundPolicy(
+            activeProviders: Set(viewModel.backgroundActiveProviders)
+        )
     }
 
     /// Sets up Combine subscriptions to observe page-ready state changes

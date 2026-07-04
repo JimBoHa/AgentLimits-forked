@@ -103,7 +103,7 @@ Pacemaker shows a time-based usage benchmark to help you stay on track.
 6. Drag rows in **Display Order** to change the order of providers in the menu bar icon and dashboard.
 7. Click the bottom login bar (`▲`) to expand the embedded WebView panel.
 8. Sign in via the embedded WebView (chatgpt.com / claude.ai / github.com).
-9. Use **Clear Data** to remove login data and website storage if sign-in gets stuck.
+9. Use **Clear Data** to remove login data, website storage, and cached usage snapshots if sign-in gets stuck or you want to reset login history.
 
 ### ccusage
 1. Open **ccusage**.

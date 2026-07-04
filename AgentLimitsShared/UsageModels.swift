@@ -1013,6 +1013,20 @@ struct AppGroupSnapshotStore<Provider: SnapshotFileNaming, Snapshot: SnapshotDat
         }
     }
 
+    /// Deletes the snapshot for the specified provider if it exists.
+    /// - Parameter provider: The provider whose snapshot should be deleted.
+    /// - Throws: `UsageSnapshotStoreError.appGroupUnavailable` if the App Group is unavailable.
+    func deleteSnapshot(for provider: Provider) throws {
+        guard let url = snapshotFileURL(for: provider) else {
+            throw UsageSnapshotStoreError.appGroupUnavailable
+        }
+        try withSecurityScopedAccess(url) {
+            if fileManager.fileExists(atPath: url.path) {
+                try fileManager.removeItem(at: url)
+            }
+        }
+    }
+
     /// Returns the file URL for the snapshot of the given provider.
     /// - Parameters:
     ///   - provider: The provider whose snapshot URL to return

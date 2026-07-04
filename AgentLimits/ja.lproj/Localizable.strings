@@ -41,7 +41,7 @@
 "content.refreshNow" = "今すぐ更新";
 "content.clearData" = "データを削除";
 "content.clearDataConfirmTitle" = "データ削除";
-"content.clearDataConfirmMessage" = "内部ブラウザのログイン情報とサイトデータを削除します。";
+"content.clearDataConfirmMessage" = "内部ブラウザのログイン情報、サイトデータ、保存済みの使用量スナップショットを削除します。";
 "content.clearDataConfirmAction" = "削除する";
 "content.clearDataCancel" = "キャンセル";
 "content.provider" = "サービス";

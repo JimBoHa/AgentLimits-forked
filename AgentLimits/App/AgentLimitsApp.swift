@@ -78,6 +78,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 設定ウィンドウクローズ時にメニューバーアイコンの一時復活を終了する
         AppSharedState.shared.onSettingsWindowClosed = { [weak self] in
             self?.menuBarController?.endTemporaryRevealIfNeeded()
+            AppSharedState.shared.applyBackgroundPolicyOnSettingsClose()
         }
     }
 

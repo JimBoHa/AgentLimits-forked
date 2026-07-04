@@ -96,6 +96,16 @@ final class ProviderStateManager {
         return result
     }
 
+    /// 指定プロバイダーに過去の取得成功実績があるかを返す。
+    func hasLoginHistory(for provider: UsageProvider) -> Bool {
+        states[provider]?.snapshot != nil
+    }
+
+    /// バックグラウンドでWebViewを稼働させるプロバイダー一覧。
+    var backgroundActiveProviders: [UsageProvider] {
+        UsageProvider.allCases.filter { hasLoginHistory(for: $0) }
+    }
+
     // MARK: - State Updates
 
     /// Updates the entire state for a provider
@@ -110,6 +120,14 @@ final class ProviderStateManager {
         // Update snapshot without touching other state fields.
         var state = getState(for: provider)
         state.snapshot = snapshot
+        states[provider] = state
+        onStateChange?()
+    }
+
+    /// 指定プロバイダーの取得実績を消去し、未取得状態に戻す。
+    func clearLoginHistory(for provider: UsageProvider) {
+        var state = ProviderState.initial()
+        state.isAutoRefreshEnabled = false
         states[provider] = state
         onStateChange?()
     }

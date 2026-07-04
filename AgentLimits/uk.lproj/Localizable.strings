@@ -40,7 +40,7 @@
 "content.refreshNow" = "Оновити зараз";
 "content.clearData" = "Очистити дані";
 "content.clearDataConfirmTitle" = "Очистити дані";
-"content.clearDataConfirmMessage" = "Це видалить дані входу та сховище сайтів для вбудованого браузера.";
+"content.clearDataConfirmMessage" = "Це видалить дані входу вбудованого браузера, сховище сайтів і кешовані знімки використання.";
 "content.clearDataConfirmAction" = "Очистити";
 "content.clearDataCancel" = "Скасувати";
 "content.provider" = "Сервіс";

@@ -40,7 +40,7 @@
 "content.refreshNow" = "立即更新";
 "content.clearData" = "清除資料";
 "content.clearDataConfirmTitle" = "清除資料";
-"content.clearDataConfirmMessage" = "這將移除內建瀏覽器的登入資料與網站儲存。";
+"content.clearDataConfirmMessage" = "這將移除內建瀏覽器的登入資料、網站儲存空間，以及快取的使用量快照。";
 "content.clearDataConfirmAction" = "清除";
 "content.clearDataCancel" = "取消";
 "content.provider" = "服務";
