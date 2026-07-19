@@ -276,11 +276,21 @@ debug_log "json.secondary.usedPercent=${secondary_percent:-unset}"
 debug_log "json.secondary.resetAt=${secondary_reset_at:-unset}"
 debug_log "json.fetchedAt=${fetched_at:-unset}"
 
-# Validate required fields
-if [[ -z "$primary_percent" || -z "$secondary_percent" || -z "$fetched_at" ]]; then
+# A snapshot may legitimately omit either usage window. Only the fetch timestamp
+# is required for the status line as a whole.
+if [[ -z "$fetched_at" ]]; then
     echo "$L_ERROR_PARSE" >&2
     exit 1
 fi
+
+round_percent() {
+    local value="$1"
+    if [[ "$value" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+        printf "%.0f" "$value"
+    else
+        echo ""
+    fi
+}
 
 # Convert ISO8601 date to local time (macOS date command)
 convert_iso8601_to_local() {
@@ -354,14 +364,15 @@ secondary_reset_time=$(convert_iso8601_to_local "$secondary_reset_at" "%Y-%m-%d 
 updated_text=$(format_updated_at "$fetched_at")
 debug_log "updated_text=${updated_text:-unset}"
 
-# Round percentages to integer
+# Round available percentages to integers. Missing or malformed windows keep an
+# empty marker so they can render as unavailable rather than as zero usage.
 # Snapshot values are stored as used% for consistent color determination
-primary_snapshot_int=$(printf "%.0f" "$primary_percent")
-secondary_snapshot_int=$(printf "%.0f" "$secondary_percent")
+primary_snapshot_int=$(round_percent "$primary_percent")
+secondary_snapshot_int=$(round_percent "$secondary_percent")
 
 # Snapshot always contains used % (no conversion needed)
-primary_used_int=$primary_snapshot_int
-secondary_used_int=$secondary_snapshot_int
+primary_used_int=${primary_snapshot_int:-0}
+secondary_used_int=${secondary_snapshot_int:-0}
 
 # Read thresholds for Claude Code
 PRIMARY_WARNING=$(read_threshold "usage_color_threshold_warning_claudeCode_primary" "$DEFAULT_WARNING_THRESHOLD")
@@ -455,6 +466,16 @@ if [[ "$EFFECTIVE_DISPLAY_MODE" == "usedWithPacemaker" ]]; then
 else
     primary_text="${primary_percent_int}%"
     secondary_text="${secondary_percent_int}%"
+fi
+
+# Preserve the two-window layout while making unavailable data explicit.
+if [[ -z "$primary_snapshot_int" ]]; then
+    primary_color="$GRAY"
+    primary_text="--%"
+fi
+if [[ -z "$secondary_snapshot_int" ]]; then
+    secondary_color="$GRAY"
+    secondary_text="--%"
 fi
 
 # Output formatted string with colored percentages and gray reset times/updated time
