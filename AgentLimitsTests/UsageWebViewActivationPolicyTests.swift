@@ -10,13 +10,10 @@ final class UsageWebViewActivationPolicyTests: XCTestCase {
         let codexID = UUID()
         let claudeID = UUID()
         let copilotID = UUID()
-        policy.setBackgroundAccounts([
-            .chatgptCodex: codexID,
-            .claudeCode: claudeID
-        ])
+        policy.setBackgroundAccounts([codexID, claudeID])
         policy.setForegroundAccountID(copilotID, for: .githubCopilot)
 
-        policy.setBackgroundAccounts([:])
+        policy.setBackgroundAccounts([])
 
         XCTAssertEqual(policy.activeAccountIDs, [copilotID])
     }
@@ -26,38 +23,97 @@ final class UsageWebViewActivationPolicyTests: XCTestCase {
         let codexID = UUID()
         let claudeID = UUID()
         let copilotID = UUID()
-        policy.setBackgroundAccounts([.chatgptCodex: codexID])
+        policy.setBackgroundAccounts([codexID])
         policy.setForegroundAccountID(copilotID, for: .githubCopilot)
 
-        policy.setBackgroundAccounts([.claudeCode: claudeID])
+        policy.setBackgroundAccounts([claudeID])
         policy.clearForegroundAccount()
 
         XCTAssertEqual(policy.activeAccountIDs, [claudeID])
     }
 
-    func testForegroundSelectionReplacesBackgroundSiblingForSameProvider() {
+    func testForegroundSelectionKeepsBackgroundSiblingForSameProvider() {
         var policy = UsageWebViewActivationPolicy()
         let personalID = UUID()
         let workID = UUID()
-        policy.setBackgroundAccounts([.chatgptCodex: personalID])
+        policy.setBackgroundAccounts([personalID])
 
         policy.setForegroundAccountID(workID, for: .chatgptCodex)
+
+        XCTAssertEqual(policy.activeAccountIDs, [personalID, workID])
         policy.clearForegroundAccount()
 
-        XCTAssertEqual(policy.activeAccountIDs, [workID])
+        XCTAssertEqual(policy.activeAccountIDs, [personalID])
     }
 
-    func testBackgroundUpdateCannotReactivateForegroundSibling() {
+    func testBackgroundUpdateKeepsForegroundAndBackgroundSiblingsActive() {
         var policy = UsageWebViewActivationPolicy()
         let personalID = UUID()
         let workID = UUID()
         policy.setForegroundAccountID(personalID, for: .chatgptCodex)
 
-        policy.setBackgroundAccounts([.chatgptCodex: workID])
+        policy.setBackgroundAccounts([workID])
 
-        XCTAssertEqual(policy.activeAccountIDs, [personalID])
+        XCTAssertEqual(policy.activeAccountIDs, [personalID, workID])
         policy.clearForegroundAccount()
         XCTAssertEqual(policy.activeAccountIDs, [workID])
+    }
+
+    func testMultipleBackgroundAccountsForSameProviderRemainActive() {
+        var policy = UsageWebViewActivationPolicy()
+        let personalID = UUID()
+        let workID = UUID()
+
+        policy.setBackgroundAccounts([personalID, workID])
+
+        XCTAssertEqual(policy.backgroundAccountIDs, [personalID, workID])
+        XCTAssertEqual(policy.activeAccountIDs, [personalID, workID])
+    }
+
+    func testAccountReplacementPreservesOtherBackgroundAccounts() {
+        var policy = UsageWebViewActivationPolicy()
+        let removedID = UUID()
+        let replacementID = UUID()
+        let otherID = UUID()
+        policy.setBackgroundAccounts([removedID, otherID])
+        policy.setForegroundAccountID(removedID, for: .chatgptCodex)
+
+        XCTAssertTrue(
+            policy.replaceAccountID(
+                removedID,
+                with: replacementID,
+                for: .chatgptCodex
+            )
+        )
+
+        XCTAssertEqual(policy.backgroundAccountIDs, [replacementID, otherID])
+        XCTAssertEqual(policy.activeAccountIDs, [replacementID, otherID])
+    }
+
+    func testPoolKeepsMultipleSameProviderBackgroundAccountsActive() throws {
+        let accountStore = makeAccountStore()
+        let personal = accountStore.selectedAccount(for: .chatgptCodex)
+        let work = try accountStore.addAccount(
+            provider: .chatgptCodex,
+            label: "Work"
+        )
+        let pool = UsageWebViewPool(
+            providers: [.chatgptCodex],
+            accountStore: accountStore,
+            websiteDataStoreProvider: { _ in .nonPersistent() }
+        )
+        let personalStore = pool.getWebViewStore(for: personal)
+        let workStore = pool.getWebViewStore(for: work)
+
+        pool.applyBackgroundPolicy(activeAccounts: [personal, work])
+
+        XCTAssertFalse(personalStore.isSuspended)
+        XCTAssertFalse(workStore.isSuspended)
+
+        pool.applyBackgroundPolicy(activeAccounts: [work])
+
+        XCTAssertTrue(personalStore.isSuspended)
+        XCTAssertFalse(workStore.isSuspended)
     }
 
     func testPoolBlocksResumeAndReloadUntilClearFinishes() throws {

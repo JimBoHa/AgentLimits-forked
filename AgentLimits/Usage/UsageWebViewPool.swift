@@ -34,33 +34,26 @@ final class DefaultWebsiteDataClearer: WebsiteDataClearing {
 /// Tracks background login-history needs separately from the provider that is
 /// currently needed by the settings UI.
 struct UsageWebViewActivationPolicy {
-    private(set) var backgroundAccountIDByProvider: [UsageProvider: UUID] = [:]
+    private(set) var backgroundAccountIDs: Set<UUID> = []
     private(set) var foregroundAccountID: UUID?
     private(set) var foregroundProvider: UsageProvider?
 
     var activeAccountIDs: Set<UUID> {
-        var accountIDs = Set(backgroundAccountIDByProvider.values)
-        if let foregroundProvider,
-           let backgroundAccountID = backgroundAccountIDByProvider[foregroundProvider] {
-            accountIDs.remove(backgroundAccountID)
-        }
+        var accountIDs = backgroundAccountIDs
         if let foregroundAccountID {
             accountIDs.insert(foregroundAccountID)
         }
         return accountIDs
     }
 
-    mutating func setBackgroundAccounts(_ accounts: [UsageProvider: UUID]) {
-        backgroundAccountIDByProvider = accounts
+    mutating func setBackgroundAccounts(_ accountIDs: Set<UUID>) {
+        backgroundAccountIDs = accountIDs
     }
 
     mutating func setForegroundAccountID(
         _ accountID: UUID,
         for provider: UsageProvider
     ) {
-        if backgroundAccountIDByProvider[provider] != nil {
-            backgroundAccountIDByProvider[provider] = accountID
-        }
         foregroundAccountID = accountID
         foregroundProvider = provider
     }
@@ -77,8 +70,8 @@ struct UsageWebViewActivationPolicy {
         for provider: UsageProvider
     ) -> Bool {
         var didReplace = false
-        if backgroundAccountIDByProvider[provider] == removedAccountID {
-            backgroundAccountIDByProvider[provider] = replacementAccountID
+        if backgroundAccountIDs.remove(removedAccountID) != nil {
+            backgroundAccountIDs.insert(replacementAccountID)
             didReplace = true
         }
         if foregroundProvider == provider,
@@ -190,13 +183,15 @@ final class UsageWebViewPool: ObservableObject {
     private var activeAccountRetirement: ActiveAccountRetirement?
     private var nextAccountRetirementIdentifier: UInt64 = 0
     private var retiringOrRemovedAccountIDs: Set<UUID>
-    private let accountStore: ProviderAccountStore
+    let accountStore: ProviderAccountStore
     private let websiteDataClearer: any WebsiteDataClearing
     private let websiteDataStoreProvider: (ProviderAccount) -> WKWebsiteDataStore
     private let quiescenceTimeout: Duration
 
     /// Called after a newly registered account WebViewStore is ready to observe.
     var onWebViewStoreCreated: ((WebViewStore) -> Void)?
+    /// Invalidates account-bound async work before local data can be deleted.
+    let webViewStoreRetirementDidBegin = PassthroughSubject<UUID, Never>()
     /// Synchronous release boundary for observers and visible popup/page views.
     let webViewStoreWillRetire = PassthroughSubject<UUID, Never>()
 
@@ -277,6 +272,23 @@ final class UsageWebViewPool: ObservableObject {
         return accountStore.selectedAccount(for: provider).id == accountID
     }
 
+    /// Confirms that a callback still belongs to this pool's live store and
+    /// immutable registry identity. Selection is intentionally irrelevant.
+    func isAvailable(_ store: WebViewStore) -> Bool {
+        let account = store.account
+        guard !retiringOrRemovedAccountIDs.contains(account.id),
+              webViewStoreByAccountID[account.id] === store,
+              let registered = accountStore.account(id: account.id) else {
+            return false
+        }
+        return registered.provider == account.provider
+    }
+
+    func isActive(_ store: WebViewStore) -> Bool {
+        isAvailable(store)
+            && activationPolicy.activeAccountIDs.contains(store.account.id)
+    }
+
     /// Makes the selected account for one provider active for the settings UI.
     /// During a clear this only updates the policy; no navigation occurs.
     func resume(_ provider: UsageProvider) {
@@ -299,21 +311,23 @@ final class UsageWebViewPool: ObservableObject {
         reconcileActiveStores()
     }
 
-    /// Updates providers that should remain active due to login history.
+    /// Keeps each selected account for provider-level login history active.
     /// During a clear this only records the latest policy.
     func applyBackgroundPolicy(activeProviders: Set<UsageProvider>) {
         let accounts = activeProviders.map { accountStore.selectedAccount(for: $0) }
         applyBackgroundPolicy(activeAccounts: accounts)
     }
 
+    /// Keeps every supplied account active, including multiple accounts owned
+    /// by the same provider.
     func applyBackgroundPolicy(activeAccounts: [ProviderAccount]) {
-        var accountIDByProvider: [UsageProvider: UUID] = [:]
+        var accountIDs: Set<UUID> = []
         for account in activeAccounts
             where !retiringOrRemovedAccountIDs.contains(account.id) {
             _ = getWebViewStore(for: account)
-            accountIDByProvider[account.provider] = account.id
+            accountIDs.insert(account.id)
         }
-        activationPolicy.setBackgroundAccounts(accountIDByProvider)
+        activationPolicy.setBackgroundAccounts(accountIDs)
         reconcileActiveStores()
     }
 
@@ -357,6 +371,7 @@ final class UsageWebViewPool: ObservableObject {
             accountID: plan.target.id
         )
         retiringOrRemovedAccountIDs.insert(plan.target.id)
+        webViewStoreRetirementDidBegin.send(plan.target.id)
         let replacedActiveAccount = activationPolicy.replaceAccountID(
             plan.target.id,
             with: plan.replacement.id,

@@ -21,6 +21,8 @@ protocol CCUsageFetching {
 
 extension CCUsageFetcher: CCUsageFetching {}
 
+private typealias TokenUsageOperationGate = UsageOperationGate<TokenUsageProvider>
+
 struct TokenUsageSnapshotClearFailure {
     let provider: TokenUsageProvider
     let reason: String
@@ -47,14 +49,14 @@ enum TokenUsageSnapshotClearError: LocalizedError {
 @MainActor
 final class TokenUsageViewModel: ObservableObject {
     struct ExternalSnapshotContext: Equatable {
-        fileprivate let value: UsageOperationGate.Context
+        fileprivate let value: TokenUsageOperationGate.Context
         fileprivate let provider: TokenUsageProvider
         fileprivate let settingsRevision: UInt64
         fileprivate let requestIdentifier: UInt64
     }
 
     struct DataClearToken: Equatable {
-        fileprivate let value: UsageOperationGate.ClearToken
+        fileprivate let value: TokenUsageOperationGate.ClearToken
     }
 
     // MARK: - Published Properties
@@ -78,7 +80,7 @@ final class TokenUsageViewModel: ObservableObject {
     private let snapshotVisibilityStore: any SnapshotVisibilityControlling
     private var autoRefreshCoordinator: AutoRefreshCoordinator?
     private var suppressedSnapshots: Set<TokenUsageProvider> = []
-    private var operationGate = UsageOperationGate()
+    private var operationGate = TokenUsageOperationGate()
     private var settingsRevisions: [TokenUsageProvider: UInt64] = [:]
     private var latestExternalRequestIdentifiers: [TokenUsageProvider: UInt64] = [:]
     private var nextExternalRequestIdentifier: UInt64 = 0
@@ -189,7 +191,7 @@ final class TokenUsageViewModel: ObservableObject {
         for provider: TokenUsageProvider
     ) -> ExternalSnapshotContext? {
         guard settings[provider]?.isEnabled == true,
-              let value = operationGate.captureContext() else {
+              let value = operationGate.captureContext(for: provider) else {
             return nil
         }
         nextExternalRequestIdentifier &+= 1
@@ -324,7 +326,7 @@ final class TokenUsageViewModel: ObservableObject {
     // MARK: - Private Methods
 
     private func refresh(for provider: TokenUsageProvider) async {
-        guard let fetchToken = operationGate.beginFetch(for: provider.usageProvider) else {
+        guard let fetchToken = operationGate.beginFetch(for: provider) else {
             return
         }
         isFetching[provider] = true

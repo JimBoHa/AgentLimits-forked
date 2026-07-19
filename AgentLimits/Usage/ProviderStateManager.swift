@@ -7,7 +7,7 @@ import Foundation
 // MARK: - Provider State
 
 /// Last fetch outcome for usage data.
-enum ProviderFetchStatus {
+enum ProviderFetchStatus: Equatable {
     case notFetched
     case success(Date)
     case failure(String)
@@ -41,160 +41,177 @@ struct ProviderState {
 
 // MARK: - Provider State Manager
 
-/// Manages per-provider state for usage tracking.
-/// Centralizes state storage and updates for all providers.
+/// Manages independent runtime state for every immutable account UUID.
 @MainActor
 final class ProviderStateManager {
-    /// Current state for each provider
-    private var states: [UsageProvider: ProviderState] = [:]
+    private var statesByAccountID: [UUID: ProviderState] = [:]
+    private var accountsByID: [UUID: ProviderAccount] = [:]
 
     /// Callback for state changes (used by ViewModel for objectWillChange)
-    var onStateChange: (() -> Void)?
+    var onStateChange: ((UUID) -> Void)?
 
     // MARK: - Initialization
 
-    init() {
-        for provider in UsageProvider.allCases {
-            states[provider] = .initial()
+    init(accounts: [ProviderAccount] = []) {
+        synchronizeAccounts(accounts)
+    }
+
+    /// Adds new accounts, refreshes mutable metadata, and removes stale state.
+    func synchronizeAccounts(_ accounts: [ProviderAccount]) {
+        let incomingIDs = Set(accounts.map(\.id))
+        statesByAccountID = statesByAccountID.filter {
+            incomingIDs.contains($0.key)
+        }
+        accountsByID = Dictionary(uniqueKeysWithValues: accounts.map {
+            ($0.id, $0)
+        })
+        for account in accounts where statesByAccountID[account.id] == nil {
+            statesByAccountID[account.id] = .initial()
         }
     }
 
-    /// Initializes with cached snapshots from store
+    /// Initializes every account from its isolated snapshot namespace.
     func loadCachedSnapshots(
-        from store: any UsageSnapshotStoring,
-        snapshotVisibilityStore: (any SnapshotVisibilityControlling)? = nil
+        for accounts: [ProviderAccount],
+        from repository: any AccountUsageSnapshotRepository
     ) {
-        let visibilityStore = snapshotVisibilityStore ?? SnapshotVisibilityStore.shared
-        for provider in UsageProvider.allCases {
-            guard !visibilityStore.isSnapshotSuppressed(
-                fileName: provider.snapshotFileName
-            ) else { continue }
-            if let cachedSnapshot = store.loadSnapshot(for: provider) {
-                // Keep stored used% intact and use snapshot display mode as-is.
-                states[provider] = .initial(snapshot: cachedSnapshot)
-            }
+        synchronizeAccounts(accounts)
+        for account in accounts {
+            statesByAccountID[account.id] = .initial(
+                snapshot: repository.loadSnapshot(for: account)
+            )
         }
     }
 
     // MARK: - State Access
 
-    /// Returns state for a provider
-    func getState(for provider: UsageProvider) -> ProviderState {
-        states[provider] ?? .initial()
+    func getState(for accountID: UUID) -> ProviderState {
+        statesByAccountID[accountID] ?? .initial()
     }
 
-    /// Returns all provider snapshots (for menu bar status display)
-    var allSnapshots: [UsageProvider: UsageSnapshot] {
-        var result: [UsageProvider: UsageSnapshot] = [:]
-        for (provider, state) in states {
-            if let snapshot = state.snapshot {
-                result[provider] = snapshot
-            }
+    var snapshotsByAccountID: [UUID: UsageSnapshot] {
+        statesByAccountID.compactMapValues(\.snapshot)
+    }
+
+    var accountIDs: Set<UUID> {
+        Set(accountsByID.keys)
+    }
+
+    var accounts: [ProviderAccount] {
+        accountsByID.values.sorted(by: Self.accountSort)
+    }
+
+    func account(id: UUID) -> ProviderAccount? {
+        accountsByID[id]
+    }
+
+    func selectedSnapshots(
+        for accountsByProvider: [UsageProvider: ProviderAccount]
+    ) -> [UsageProvider: UsageSnapshot] {
+        accountsByProvider.compactMapValues {
+            statesByAccountID[$0.id]?.snapshot
         }
-        return result
     }
 
-    /// Returns fetch status for all providers
-    var allFetchStatuses: [UsageProvider: ProviderFetchStatus] {
-        var result: [UsageProvider: ProviderFetchStatus] = [:]
-        for (provider, state) in states {
-            result[provider] = state.lastFetchStatus
+    func selectedFetchStatuses(
+        for accountsByProvider: [UsageProvider: ProviderAccount]
+    ) -> [UsageProvider: ProviderFetchStatus] {
+        accountsByProvider.mapValues {
+            statesByAccountID[$0.id]?.lastFetchStatus ?? .notFetched
         }
-        return result
     }
 
-    /// 指定プロバイダーに過去の取得成功実績があるかを返す。
-    func hasLoginHistory(for provider: UsageProvider) -> Bool {
-        states[provider]?.snapshot != nil
+    func hasLoginHistory(for accountID: UUID) -> Bool {
+        statesByAccountID[accountID]?.snapshot != nil
     }
 
-    /// バックグラウンドでWebViewを稼働させるプロバイダー一覧。
-    var backgroundActiveProviders: [UsageProvider] {
-        UsageProvider.allCases.filter { hasLoginHistory(for: $0) }
+    /// Every enabled account with fetch history remains independently active.
+    var backgroundActiveAccounts: [ProviderAccount] {
+        accountsByID.values
+            .filter { $0.isEnabled && hasLoginHistory(for: $0.id) }
+            .sorted(by: Self.accountSort)
     }
 
     // MARK: - State Updates
 
-    /// Updates the entire state for a provider
-    func setState(_ state: ProviderState, for provider: UsageProvider) {
-        // Replace entire state and notify observers.
-        states[provider] = state
-        onStateChange?()
+    func setState(_ state: ProviderState, for accountID: UUID) {
+        guard accountsByID[accountID] != nil else { return }
+        statesByAccountID[accountID] = state
+        onStateChange?(accountID)
     }
 
-    /// Updates only the snapshot for a provider
-    func setSnapshot(_ snapshot: UsageSnapshot?, for provider: UsageProvider) {
-        // Update snapshot without touching other state fields.
-        var state = getState(for: provider)
+    func setSnapshot(_ snapshot: UsageSnapshot?, for accountID: UUID) {
+        var state = getState(for: accountID)
         state.snapshot = snapshot
-        states[provider] = state
-        onStateChange?()
+        setState(state, for: accountID)
     }
 
-    /// 指定プロバイダーの取得実績を消去し、未取得状態に戻す。
-    func clearLoginHistory(for provider: UsageProvider) {
+    func clearLoginHistory(for accountID: UUID) {
         var state = ProviderState.initial()
         state.isAutoRefreshEnabled = false
-        states[provider] = state
-        onStateChange?()
+        setState(state, for: accountID)
     }
 
-    /// Updates fetching status for a provider
-    func setFetching(_ isFetching: Bool, for provider: UsageProvider) {
-        // Update fetch flag for provider.
-        var state = getState(for: provider)
+    func setFetching(_ isFetching: Bool, for accountID: UUID) {
+        var state = getState(for: accountID)
         state.isFetching = isFetching
-        states[provider] = state
+        setState(state, for: accountID)
     }
 
-    /// Updates status message for a provider
-    func setStatusMessage(_ message: String, for provider: UsageProvider) {
-        // Update status message for provider.
-        var state = getState(for: provider)
+    func setStatusMessage(_ message: String, for accountID: UUID) {
+        var state = getState(for: accountID)
         state.statusMessage = message
-        states[provider] = state
+        setState(state, for: accountID)
     }
 
-    /// Updates last fetch status for a provider
-    func setFetchStatus(_ status: ProviderFetchStatus, for provider: UsageProvider) {
-        // Update last fetch status for provider.
-        var state = getState(for: provider)
+    func setFetchStatus(_ status: ProviderFetchStatus, for accountID: UUID) {
+        var state = getState(for: accountID)
         state.lastFetchStatus = status
-        states[provider] = state
-        onStateChange?()
+        setState(state, for: accountID)
     }
 
-    /// Updates auto-refresh enabled status for a provider
-    func setAutoRefreshEnabled(_ enabled: Bool?, for provider: UsageProvider) {
-        // Update auto-refresh flag for provider.
-        var state = getState(for: provider)
+    func setAutoRefreshEnabled(_ enabled: Bool?, for accountID: UUID) {
+        var state = getState(for: accountID)
         state.isAutoRefreshEnabled = enabled
-        states[provider] = state
+        setState(state, for: accountID)
     }
 
-    /// Updates snapshot and marks auto-refresh as enabled
     func updateAfterSuccessfulFetch(
         snapshot: UsageSnapshot,
-        for provider: UsageProvider
+        for accountID: UUID
     ) {
-        // Store snapshot and mark auto-refresh as enabled.
-        var state = getState(for: provider)
+        var state = getState(for: accountID)
         state.snapshot = snapshot
         state.lastFetchStatus = .success(snapshot.fetchedAt)
         state.isAutoRefreshEnabled = true
-        states[provider] = state
-        onStateChange?()
+        setState(state, for: accountID)
     }
 
     // MARK: - Auto Refresh Eligibility
 
-    /// Returns providers eligible for auto-refresh
-    func autoRefreshEligibleProviders(selectedProvider: UsageProvider) -> [UsageProvider] {
-        // Eligible when explicitly enabled, or undetermined but selected.
-        UsageProvider.allCases.filter { provider in
-            let isEnabled = states[provider]?.isAutoRefreshEnabled
-            // Refresh if explicitly enabled, or if nil (undetermined) and is selected
-            return isEnabled == true || (isEnabled == nil && provider == selectedProvider)
+    func autoRefreshEligibleAccounts(
+        selectedAccountIDs: Set<UUID>
+    ) -> [ProviderAccount] {
+        accountsByID.values
+            .filter { account in
+                guard account.isEnabled else { return false }
+                let isEnabled = statesByAccountID[account.id]?.isAutoRefreshEnabled
+                return isEnabled == true
+                    || (isEnabled == nil && selectedAccountIDs.contains(account.id))
+            }
+            .sorted(by: Self.accountSort)
+    }
+
+    private static func accountSort(
+        _ left: ProviderAccount,
+        _ right: ProviderAccount
+    ) -> Bool {
+        if left.provider != right.provider {
+            return left.provider.rawValue < right.provider.rawValue
         }
+        if left.createdAt != right.createdAt {
+            return left.createdAt < right.createdAt
+        }
+        return left.id.uuidString < right.id.uuidString
     }
 }
