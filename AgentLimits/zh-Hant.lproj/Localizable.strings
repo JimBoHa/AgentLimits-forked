@@ -207,6 +207,7 @@
 "update.checkNow" = "Check for Updates Now";
 "update.automaticChecks" = "Check for updates automatically";
 "update.releasesPage" = "View All Releases";
+"update.privacyPolicy" = "隱私權政策";
 "update.neverChecked" = "Never";
 
 "settings.providerOrder" = "顯示順序";

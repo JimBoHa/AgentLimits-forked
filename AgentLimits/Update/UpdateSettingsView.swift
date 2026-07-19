@@ -3,10 +3,17 @@
 
 import SwiftUI
 
+nonisolated enum UpdateSettingsLinks {
+    static let releases = URL(
+        string: "https://github.com/JimBoHa/AgentLimits-forked/releases"
+    )!
+    static let privacyPolicy = URL(
+        string: "https://github.com/JimBoHa/AgentLimits-forked/blob/main/PRIVACY.md"
+    )!
+}
+
 /// アップデート設定タブ UI
 struct UpdateSettingsView: View {
-
-    let releasesURL: URL
 
     @ObservedObject private var updateController = AppUpdateController.shared
 
@@ -24,6 +31,7 @@ struct UpdateSettingsView: View {
 
             Section {
                 releasesLink
+                privacyPolicyLink
             }
         }
         .formStyle(.grouped)
@@ -65,7 +73,7 @@ struct UpdateSettingsView: View {
     }
 
     private var releasesLink: some View {
-        Link(destination: releasesURL) {
+        Link(destination: UpdateSettingsLinks.releases) {
             HStack {
                 Text("update.releasesPage".localized())
                 Spacer()
@@ -73,6 +81,18 @@ struct UpdateSettingsView: View {
                     .foregroundStyle(.secondary)
             }
         }
+    }
+
+    private var privacyPolicyLink: some View {
+        Link(destination: UpdateSettingsLinks.privacyPolicy) {
+            HStack {
+                Text("update.privacyPolicy".localized())
+                Spacer()
+                Image(systemName: "arrow.up.right.square")
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .accessibilityIdentifier("update.privacyPolicyLink")
     }
 
     // MARK: - Helpers
