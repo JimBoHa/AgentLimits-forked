@@ -2,7 +2,7 @@
 
 Effective date: July 19, 2026
 
-Policy version: 1.0
+Policy version: 1.1
 
 This policy applies to AgentLimits Forked for macOS, iOS, and watchOS,
 distributed from
@@ -33,11 +33,27 @@ Depending on platform and enabled features, the app may process:
   feature on macOS.
 - A GitHub credential that you voluntarily save for Copilot cloud-agent session
   counts.
+- Wake Up schedules, additional CLI arguments, generated LaunchAgent
+  configuration, and local command-output logs on macOS.
 
 This information supports app features only. AgentLimits does not use it to
 build a profile, identify you across apps or websites, or deliver advertising.
 
 ## Credentials
+
+### GitHub Credential on macOS
+
+Each saved GitHub credential is stored for its specific account in the macOS
+Data Protection Keychain using the `AfterFirstUnlockThisDeviceOnly`
+accessibility class. It remains on that Mac, does not synchronize through
+iCloud Keychain, and becomes available after the first unlock following a
+restart so enabled refreshes can continue while the app runs.
+
+When you refresh Copilot cloud-agent session counts, AgentLimits sends the
+credential directly to `https://api.github.com` over HTTPS. The app restricts
+the request to GitHub's API host and rejects redirects. Remove an account's
+credential or use the macOS clear-data control before uninstalling if you want
+the Keychain item deleted.
 
 ### GitHub Credential on iPhone and iPad
 
@@ -65,6 +81,19 @@ in app-managed website storage on your Mac. They are sent directly to the
 relevant provider as part of normal HTTPS requests. Account sessions are
 isolated where the app supports isolation. The app discloses any migrated
 legacy session that remains shared between accounts.
+
+## Wake Up Storage on macOS
+
+Wake Up stores its schedule and additional arguments in local app settings and
+generates owner-readable LaunchAgent property lists at
+`~/Library/LaunchAgents/com.jimboha.agentlimits.macos.wakeup-*.plist`.
+Additional arguments appear as plain text in both locations. Never enter
+passwords, tokens, or other secrets in that field.
+
+Scheduled command output and errors are appended to
+`~/Library/Logs/AgentLimitsForked/agentlimits-forked-wakeup-*.log`. Commands run
+from `~/.agentlimits-forked/`. These files can contain CLI output and remain
+until you remove them. They are not sent to the maintainer.
 
 ## Network Requests and Third Parties
 
@@ -104,9 +133,14 @@ Available deletion controls include:
   current-session counts while keeping account names.
 - Use the macOS clear-data controls to remove app-managed provider website data,
   cached usage data, and saved session credentials.
-- Remove the app to delete its app-container data. Keychain items can survive
-  app removal, so use the in-app clear or account-removal control before
-  uninstalling if you want to ensure credentials are deleted.
+- Before removing the macOS app, disable every Wake Up schedule and use the
+  in-app clear or account-removal controls. Deleting the app bundle alone does
+  not remove its preferences, App Group data, Keychain items, LaunchAgents,
+  Wake Up logs, or working directory. Remove retained local files manually if
+  you no longer need them.
+- Removing the iOS app deletes its app-container data, but Keychain items can
+  survive app removal. Use **Clear Session Data** before uninstalling if you
+  want to ensure credentials are deleted.
 - Remove the watch app to delete its local watch container and cached display
   data.
 
@@ -135,5 +169,9 @@ it may have been exposed.
 ## Changes and Contact
 
 Material policy changes will update the effective date and policy version in
-this file. For privacy questions or reports, open an issue in the
-[AgentLimits Forked repository](https://github.com/JimBoHa/AgentLimits-forked/issues).
+this file. Use
+[GitHub Issues](https://github.com/JimBoHa/AgentLimits-forked/issues) for
+privacy questions and non-sensitive reports. Send suspected vulnerabilities or
+other confidential security reports through
+[private vulnerability reporting](https://github.com/JimBoHa/AgentLimits-forked/security/advisories/new),
+and never post credentials or personal data publicly.

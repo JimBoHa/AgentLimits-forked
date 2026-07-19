@@ -96,6 +96,7 @@
 "wakeUp.command" = "Команда";
 "wakeUp.additionalArgs" = "Додаткові аргументи";
 "wakeUp.additionalArgsPlaceholder" = "напр. --model=\"<<model-name>>\"";
+"wakeUp.additionalArgsSecurityWarning" = "Ніколи не вводьте тут паролі, токени чи інші секрети. Аргументи зберігаються як звичайний текст у налаштуваннях програми та plist LaunchAgent.";
 "wakeUp.status" = "Статус";
 "wakeUp.notScheduled" = "Не заплановано";
 "wakeUp.lastResult" = "Останній результат:";
@@ -207,6 +208,7 @@
 "update.checkNow" = "Check for Updates Now";
 "update.automaticChecks" = "Check for updates automatically";
 "update.releasesPage" = "View All Releases";
+"update.privacyPolicy" = "Політика конфіденційності";
 "update.neverChecked" = "Never";
 
 "settings.providerOrder" = "Порядок відображення";

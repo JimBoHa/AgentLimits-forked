@@ -96,6 +96,7 @@
 "wakeUp.command" = "명령";
 "wakeUp.additionalArgs" = "추가 인수";
 "wakeUp.additionalArgsPlaceholder" = "예: --model=\"<<model-name>>\"";
+"wakeUp.additionalArgsSecurityWarning" = "암호, 토큰 또는 기타 비밀 정보를 절대 입력하지 마세요. 인수는 앱 설정과 LaunchAgent plist에 일반 텍스트로 저장됩니다.";
 "wakeUp.status" = "상태";
 "wakeUp.notScheduled" = "예약되지 않음";
 "wakeUp.lastResult" = "마지막 결과:";
@@ -207,6 +208,7 @@
 "update.checkNow" = "Check for Updates Now";
 "update.automaticChecks" = "Check for updates automatically";
 "update.releasesPage" = "View All Releases";
+"update.privacyPolicy" = "개인정보 처리방침";
 "update.neverChecked" = "Never";
 
 "settings.providerOrder" = "표시 순서";

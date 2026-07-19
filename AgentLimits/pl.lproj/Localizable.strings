@@ -96,6 +96,7 @@
 "wakeUp.command" = "Polecenie";
 "wakeUp.additionalArgs" = "Dodatkowe argumenty";
 "wakeUp.additionalArgsPlaceholder" = "np. --model=\"<<model-name>>\"";
+"wakeUp.additionalArgsSecurityWarning" = "Nigdy nie wpisuj tu haseł, tokenów ani innych sekretów. Argumenty są zapisywane jawnym tekstem w ustawieniach aplikacji i pliku plist LaunchAgent.";
 "wakeUp.status" = "Status";
 "wakeUp.notScheduled" = "Nie zaplanowano";
 "wakeUp.lastResult" = "Ostatni wynik:";
@@ -207,6 +208,7 @@
 "update.checkNow" = "Check for Updates Now";
 "update.automaticChecks" = "Check for updates automatically";
 "update.releasesPage" = "View All Releases";
+"update.privacyPolicy" = "Polityka prywatności";
 "update.neverChecked" = "Never";
 
 "settings.providerOrder" = "Kolejność wyświetlania";

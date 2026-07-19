@@ -96,6 +96,7 @@
 "wakeUp.command" = "命令";
 "wakeUp.additionalArgs" = "附加参数";
 "wakeUp.additionalArgsPlaceholder" = "例如：--model=\"<<model-name>>\"";
+"wakeUp.additionalArgsSecurityWarning" = "切勿在此输入密码、令牌或其他机密信息。参数会以明文形式存储在 App 设置和 LaunchAgent plist 中。";
 "wakeUp.status" = "状态";
 "wakeUp.notScheduled" = "未计划";
 "wakeUp.lastResult" = "上次结果：";
@@ -207,6 +208,7 @@
 "update.checkNow" = "Check for Updates Now";
 "update.automaticChecks" = "Check for updates automatically";
 "update.releasesPage" = "View All Releases";
+"update.privacyPolicy" = "隐私政策";
 "update.neverChecked" = "Never";
 
 "settings.providerOrder" = "显示顺序";
