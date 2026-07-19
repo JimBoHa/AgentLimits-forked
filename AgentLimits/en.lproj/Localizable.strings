@@ -97,6 +97,7 @@
 "wakeUp.command" = "Command";
 "wakeUp.additionalArgs" = "Additional Arguments";
 "wakeUp.additionalArgsPlaceholder" = "e.g. --model=\"<<model-name>>\"";
+"wakeUp.additionalArgsSecurityWarning" = "Never enter passwords, tokens, or other secrets. Arguments are stored as plain text in app settings and the LaunchAgent plist.";
 "wakeUp.status" = "Status";
 "wakeUp.notScheduled" = "Not scheduled";
 "wakeUp.lastResult" = "Last result:";

@@ -96,6 +96,7 @@
 "wakeUp.command" = "指令";
 "wakeUp.additionalArgs" = "附加參數";
 "wakeUp.additionalArgsPlaceholder" = "例如：--model=\"<<model-name>>\"";
+"wakeUp.additionalArgsSecurityWarning" = "切勿在此輸入密碼、權杖或其他機密資訊。參數會以純文字形式儲存在 App 設定和 LaunchAgent plist 中。";
 "wakeUp.status" = "狀態";
 "wakeUp.notScheduled" = "未排程";
 "wakeUp.lastResult" = "上次結果：";

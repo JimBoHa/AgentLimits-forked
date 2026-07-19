@@ -24,6 +24,7 @@ final class LaunchAgentManagerTests: XCTestCase {
 
         XCTAssertThrowsError(try context.manager.install(schedule: context.schedule))
         XCTAssertEqual(try context.plistData(), previousData)
+        XCTAssertEqual(try context.plistPermissions(), 0o600)
         XCTAssertTrue(context.launchCtl.isLoaded)
         XCTAssertTrue(context.manager.isInstalled(for: context.schedule))
         XCTAssertEqual(context.launchCtl.bootstrapCallCount, 2)
@@ -219,6 +220,15 @@ final class LaunchAgentManagerTests: XCTestCase {
         )
     }
 
+    func testInstallRestrictsLaunchAgentPlistPermissions() throws {
+        let context = makeContext()
+        defer { context.cleanup() }
+
+        try context.manager.install(schedule: context.schedule)
+
+        XCTAssertEqual(try context.plistPermissions(), 0o600)
+    }
+
     func testInstallRejectsSymlinkedLogDirectory() throws {
         let context = makeContext()
         defer { context.cleanup() }
@@ -316,6 +326,14 @@ private struct TestContext {
     func plistData() throws -> Data {
         let url = try XCTUnwrap(manager.plistURL(for: schedule))
         return try Data(contentsOf: url)
+    }
+
+    func plistPermissions() throws -> Int {
+        let url = try XCTUnwrap(manager.plistURL(for: schedule))
+        let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+        return try XCTUnwrap(
+            attributes[.posixPermissions] as? NSNumber
+        ).intValue & 0o777
     }
 }
 

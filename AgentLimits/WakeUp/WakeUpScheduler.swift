@@ -335,6 +335,8 @@ private enum LaunchCtlProcessRunner {
 
 /// Manages LaunchAgent plist files for scheduled CLI execution
 final class LaunchAgentManager {
+    private static let privatePlistPermissions = 0o600
+
     private let fileManager: FileManager
     private let homeDirectoryOverride: URL?
     private let launchCtlRunner: ([String]) throws -> LaunchCtlResult
@@ -453,8 +455,7 @@ final class LaunchAgentManager {
 
         // Write plist file
         do {
-            // Persist plist atomically to avoid partial writes.
-            try plistData.write(to: url, options: .atomic)
+            try writePrivatePlist(plistData, to: url)
             Logger.wakeup.info("LaunchAgentManager: Plist written successfully")
         } catch {
             Logger.wakeup.error("LaunchAgentManager: Failed to write plist: \(error.localizedDescription)")
@@ -516,7 +517,7 @@ final class LaunchAgentManager {
                 let removalError = WakeUpError.launchAgentWriteFailed(error)
                 do {
                     if !fileManager.fileExists(atPath: url.path), let previousPlistData {
-                        try previousPlistData.write(to: url, options: .atomic)
+                        try writePrivatePlist(previousPlistData, to: url)
                     }
                     try load(schedule: schedule)
                 } catch {
@@ -586,7 +587,7 @@ final class LaunchAgentManager {
         schedule: WakeUpSchedule
     ) throws {
         if let previousData {
-            try previousData.write(to: url, options: .atomic)
+            try writePrivatePlist(previousData, to: url)
             if try serviceIsLoaded(schedule) {
                 // A failed bootstrap can still leave the replacement loaded.
                 // Stop it before loading the restored plist so success means
@@ -612,6 +613,51 @@ final class LaunchAgentManager {
             }
             updateCachedLoadedState(false, for: schedule)
         }
+    }
+
+    /// LaunchAgent arguments can contain user-entered values. Keep every
+    /// generated or restored plist readable only by its owning account.
+    private func writePrivatePlist(_ data: Data, to url: URL) throws {
+        let privateAttributes: [FileAttributeKey: Any] = [
+            .posixPermissions: NSNumber(value: Self.privatePlistPermissions)
+        ]
+        let temporaryURL = url.deletingLastPathComponent().appendingPathComponent(
+            ".\(url.lastPathComponent).\(UUID().uuidString).tmp"
+        )
+        guard fileManager.createFile(
+            atPath: temporaryURL.path,
+            contents: data,
+            attributes: privateAttributes
+        ) else {
+            throw CocoaError(
+                .fileWriteUnknown,
+                userInfo: [NSFilePathErrorKey: temporaryURL.path]
+            )
+        }
+        defer {
+            try? fileManager.removeItem(at: temporaryURL)
+        }
+
+        // Never publish the new contents under a permissive mode, even for
+        // the short interval between an atomic write and a later chmod.
+        try fileManager.setAttributes(
+            privateAttributes,
+            ofItemAtPath: temporaryURL.path
+        )
+        if fileManager.fileExists(atPath: url.path) {
+            _ = try fileManager.replaceItemAt(
+                url,
+                withItemAt: temporaryURL,
+                backupItemName: nil,
+                options: .usingNewMetadataOnly
+            )
+        } else {
+            try fileManager.moveItem(at: temporaryURL, to: url)
+        }
+        try fileManager.setAttributes(
+            privateAttributes,
+            ofItemAtPath: url.path
+        )
     }
 
     private func serviceIsLoaded(_ schedule: WakeUpSchedule) throws -> Bool {

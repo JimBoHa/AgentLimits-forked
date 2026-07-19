@@ -96,6 +96,7 @@
 "wakeUp.command" = "Opdracht";
 "wakeUp.additionalArgs" = "Aanvullende argumenten";
 "wakeUp.additionalArgsPlaceholder" = "bijv. --model=\"<<model-name>>\"";
+"wakeUp.additionalArgsSecurityWarning" = "Voer hier nooit wachtwoorden, tokens of andere geheimen in. Argumenten worden als platte tekst opgeslagen in de appinstellingen en de LaunchAgent-plist.";
 "wakeUp.status" = "Status";
 "wakeUp.notScheduled" = "Niet gepland";
 "wakeUp.lastResult" = "Laatste resultaat:";

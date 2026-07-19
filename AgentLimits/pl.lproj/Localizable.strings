@@ -96,6 +96,7 @@
 "wakeUp.command" = "Polecenie";
 "wakeUp.additionalArgs" = "Dodatkowe argumenty";
 "wakeUp.additionalArgsPlaceholder" = "np. --model=\"<<model-name>>\"";
+"wakeUp.additionalArgsSecurityWarning" = "Nigdy nie wpisuj tu haseł, tokenów ani innych sekretów. Argumenty są zapisywane jawnym tekstem w ustawieniach aplikacji i pliku plist LaunchAgent.";
 "wakeUp.status" = "Status";
 "wakeUp.notScheduled" = "Nie zaplanowano";
 "wakeUp.lastResult" = "Ostatni wynik:";
