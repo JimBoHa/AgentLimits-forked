@@ -178,22 +178,85 @@ enum ProviderAccountStoreError: LocalizedError, Equatable {
     }
 }
 
+struct ProviderAccountRemovalPlan: Equatable {
+    let target: ProviderAccount
+    let replacement: ProviderAccount
+    let targetWasSelected: Bool
+}
+
+struct ProviderAccountRemovalCommit: Equatable {
+    let removed: ProviderAccount
+    let replacement: ProviderAccount
+    let queuedWebKitDataStoreIdentifier: UUID?
+}
+
 /// Persists the account registry independently from cookies and usage data.
 /// Existing installs automatically receive one stable account per provider.
+@MainActor
 struct ProviderAccountStore {
     static let shared = ProviderAccountStore()
 
     private struct Payload: Codable {
         let version: Int
         let accounts: [ProviderAccount]
+        let pendingWebKitDataStoreDeletionIDs: [UUID]
+
+        private enum CodingKeys: String, CodingKey {
+            case version
+            case accounts
+            case pendingWebKitDataStoreDeletionIDs
+        }
+
+        init(
+            version: Int,
+            accounts: [ProviderAccount],
+            pendingWebKitDataStoreDeletionIDs: Set<UUID>
+        ) {
+            self.version = version
+            self.accounts = accounts
+            self.pendingWebKitDataStoreDeletionIDs =
+                pendingWebKitDataStoreDeletionIDs.sorted {
+                    $0.uuidString < $1.uuidString
+                }
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            version = try container.decode(Int.self, forKey: .version)
+            accounts = try container.decode(
+                [ProviderAccount].self,
+                forKey: .accounts
+            )
+            let decodedIDs: [UUID]
+            if version >= ProviderAccountStore.currentVersion {
+                decodedIDs = try container.decode(
+                    [UUID].self,
+                    forKey: .pendingWebKitDataStoreDeletionIDs
+                )
+            } else {
+                decodedIDs = try container.decodeIfPresent(
+                    [UUID].self,
+                    forKey: .pendingWebKitDataStoreDeletionIDs
+                ) ?? []
+            }
+            pendingWebKitDataStoreDeletionIDs = Array(Set(decodedIDs.filter {
+                ProviderAccount.isUsableWebKitIdentifier($0)
+            })).sorted {
+                $0.uuidString < $1.uuidString
+            }
+        }
     }
 
     private struct VersionHeader: Decodable {
         let version: Int
     }
 
-    private static let currentVersion = 2
-    private static let webKitStorageVersion = 2
+    private struct PendingDeletionSalvage: Decodable {
+        let pendingWebKitDataStoreDeletionIDs: [UUID]?
+    }
+
+    nonisolated private static let currentVersion = 3
+    nonisolated private static let webKitStorageVersion = 2
     private let userDefaults: UserDefaults
     private let key: String
     private let encoder = JSONEncoder()
@@ -212,6 +275,19 @@ struct ProviderAccountStore {
     /// placeholder IDs cannot strand credentials after a compatible relaunch.
     var supportsPersistentWebSessions: Bool {
         unsupportedStoredVersion() == nil
+    }
+
+    /// Identified WebKit stores whose accounts are already gone but whose
+    /// static WebKit deletion has not yet been confirmed.
+    var pendingWebKitDataStoreDeletionIDs: Set<UUID> {
+        guard unsupportedStoredVersion() == nil,
+              let payload = storedPayload() else {
+            return []
+        }
+        return sanitizePendingDeletionIDs(
+            Set(payload.pendingWebKitDataStoreDeletionIDs),
+            activeAccountIDs: Set(payload.accounts.map(\.id))
+        )
     }
 
     func loadAccounts() -> [ProviderAccount] {
@@ -233,20 +309,31 @@ struct ProviderAccountStore {
         }
 
         guard let payload = try? decoder.decode(Payload.self, from: data) else {
-            return recoverCorruptAccounts()
+            return recoverCorruptAccounts(
+                pendingDeletionIDs: salvagePendingDeletionIDs(from: data)
+            )
         }
 
         let accounts = sanitize(
             payload.accounts,
             migratesLegacyWebKitStorage: payload.version < Self.webKitStorageVersion
         )
+        let pendingDeletionIDs = sanitizePendingDeletionIDs(
+            Set(payload.pendingWebKitDataStoreDeletionIDs),
+            activeAccountIDs: Set(accounts.map(\.id))
+        )
         // Do not rewrite data produced by a newer app version: it may contain
         // fields this version cannot preserve.
         if payload.version <= Self.currentVersion,
            payload.version != Self.currentVersion
             || accounts != payload.accounts
-            || payload.accounts.contains(where: \.needsWebKitStorageRepair) {
-            try? persist(accounts)
+            || payload.accounts.contains(where: \.needsWebKitStorageRepair)
+            || pendingDeletionIDs
+                != Set(payload.pendingWebKitDataStoreDeletionIDs) {
+            try? persist(
+                accounts,
+                pendingDeletionIDs: pendingDeletionIDs
+            )
         }
         return accounts
     }
@@ -259,6 +346,7 @@ struct ProviderAccountStore {
         loadAccounts().first { $0.id == id }
     }
 
+    @MainActor
     func primaryAccount(for provider: UsageProvider) -> ProviderAccount {
         selectedAccount(for: provider)
     }
@@ -266,6 +354,7 @@ struct ProviderAccountStore {
     /// Returns the persisted account selection for one provider. Invalid,
     /// missing, and cross-provider selections repair to a deterministic local
     /// account without displacing a valid disabled selection.
+    @MainActor
     func selectedAccount(for provider: UsageProvider) -> ProviderAccount {
         let providerAccounts = accounts(for: provider)
         let selectionKey = selectedAccountKey(for: provider)
@@ -288,6 +377,7 @@ struct ProviderAccountStore {
         return fallback
     }
 
+    @MainActor
     @discardableResult
     func selectAccount(id: UUID) throws -> ProviderAccount {
         try requireSupportedMutationVersion()
@@ -301,6 +391,7 @@ struct ProviderAccountStore {
         return account
     }
 
+    @MainActor
     @discardableResult
     func addAccount(
         provider: UsageProvider,
@@ -309,16 +400,21 @@ struct ProviderAccountStore {
     ) throws -> ProviderAccount {
         try requireSupportedMutationVersion()
         var accounts = loadAccounts()
-        let account = ProviderAccount(
-            provider: provider,
-            label: label,
-            cliDataRoot: cliDataRoot
-        )
+        let blockedIDs = pendingWebKitDataStoreDeletionIDs
+        var account: ProviderAccount
+        repeat {
+            account = ProviderAccount(
+                provider: provider,
+                label: label,
+                cliDataRoot: cliDataRoot
+            )
+        } while blockedIDs.contains(account.id)
         accounts.append(account)
         try persist(sanitize(accounts))
         return account
     }
 
+    @MainActor
     func updateAccount(_ account: ProviderAccount) throws {
         try requireSupportedMutationVersion()
         var accounts = loadAccounts()
@@ -339,40 +435,86 @@ struct ProviderAccountStore {
         try persist(sanitize(accounts))
     }
 
-    #if DEBUG
-    /// Registry-only test seam. Production account removal must first retire
-    /// every WKWebView and delete or durably queue its identified data store.
-    /// The account lifecycle manager supplies that orchestration in a later
-    /// feature; Release builds cannot orphan credentials through this store.
-    func removeAccount(id: UUID) throws {
+    /// Validates a removal and switches selection away from the target before
+    /// any awaited cleanup. This invalidates account-bound async work.
+    @MainActor
+    func prepareRemoval(id: UUID) throws -> ProviderAccountRemovalPlan {
         try requireSupportedMutationVersion()
-        var accounts = loadAccounts()
-        guard let account = accounts.first(where: { $0.id == id }) else {
+        let accounts = loadAccounts()
+        guard let target = accounts.first(where: { $0.id == id }) else {
             throw ProviderAccountStoreError.accountNotFound
         }
-        guard accounts.lazy.filter({ $0.provider == account.provider }).count > 1 else {
-            throw ProviderAccountStoreError.cannotRemoveLastAccount(account.provider)
+        let siblings = accounts.filter {
+            $0.provider == target.provider && $0.id != target.id
         }
-        let selectionKey = selectedAccountKey(for: account.provider)
-        let removedWasSelected = userDefaults.string(forKey: selectionKey)
-            .flatMap(UUID.init(uuidString:)) == id
-        accounts.removeAll { $0.id == id }
-        let sanitized = sanitize(accounts)
-        try persist(sanitized)
-
-        if removedWasSelected {
-            let replacement = sanitized.first {
-                $0.provider == account.provider && $0.isEnabled
-            } ?? sanitized.first { $0.provider == account.provider }
-            if let replacement {
-                userDefaults.set(
-                    replacement.id.uuidString.lowercased(),
-                    forKey: selectionKey
-                )
-            }
+        guard let replacement = siblings.first(where: \.isEnabled)
+            ?? siblings.first else {
+            throw ProviderAccountStoreError.cannotRemoveLastAccount(target.provider)
         }
+        let targetWasSelected = selectedAccount(for: target.provider).id == target.id
+        if targetWasSelected {
+            userDefaults.set(
+                replacement.id.uuidString.lowercased(),
+                forKey: selectedAccountKey(for: target.provider)
+            )
+        }
+        return ProviderAccountRemovalPlan(
+            target: target,
+            replacement: replacement,
+            targetWasSelected: targetWasSelected
+        )
     }
-    #endif
+
+    /// Atomically removes the registry entry and queues its identified WebKit
+    /// store for deletion. Call only after the target session is quiesced and
+    /// account-scoped local data is gone.
+    @MainActor
+    func commitRemoval(
+        _ plan: ProviderAccountRemovalPlan
+    ) throws -> ProviderAccountRemovalCommit {
+        try requireSupportedMutationVersion()
+        var accounts = loadAccounts()
+        guard let currentTarget = accounts.first(where: { $0.id == plan.target.id }),
+              currentTarget.provider == plan.target.provider,
+              currentTarget.webKitStorage == plan.target.webKitStorage else {
+            throw ProviderAccountStoreError.accountNotFound
+        }
+        guard accounts.contains(where: {
+            $0.provider == currentTarget.provider && $0.id != currentTarget.id
+        }) else {
+            throw ProviderAccountStoreError.cannotRemoveLastAccount(
+                currentTarget.provider
+            )
+        }
+
+        accounts.removeAll { $0.id == currentTarget.id }
+        let sanitized = sanitize(accounts)
+        var pendingIDs = pendingWebKitDataStoreDeletionIDs
+        let queuedIdentifier = currentTarget.isolatedWebKitDataStoreIdentifier
+        if let queuedIdentifier {
+            pendingIDs.insert(queuedIdentifier)
+        }
+        try persist(sanitized, pendingDeletionIDs: pendingIDs)
+        let replacement = repairSelection(
+            for: currentTarget.provider,
+            among: sanitized
+        )
+        return ProviderAccountRemovalCommit(
+            removed: currentTarget,
+            replacement: replacement,
+            queuedWebKitDataStoreIdentifier: queuedIdentifier
+        )
+    }
+
+    /// Removes one durable cleanup tombstone only after WebKit confirms the
+    /// identified store no longer exists. Missing tombstones are idempotent.
+    @MainActor
+    func markWebKitDataStoreDeletionComplete(id: UUID) throws {
+        try requireSupportedMutationVersion()
+        var pendingIDs = pendingWebKitDataStoreDeletionIDs
+        guard pendingIDs.remove(id) != nil else { return }
+        try persist(loadAccounts(), pendingDeletionIDs: pendingIDs)
+    }
 
     private func makeDefaultAccounts(
         webKitStorage: ProviderAccountWebKitStorage
@@ -510,11 +652,13 @@ struct ProviderAccountStore {
         }
     }
 
-    private func recoverCorruptAccounts() -> [ProviderAccount] {
+    private func recoverCorruptAccounts(
+        pendingDeletionIDs: Set<UUID> = []
+    ) -> [ProviderAccount] {
         // Existing but unreadable state must not be reconnected to shared
         // cookies under a newly generated identity.
         let accounts = makeDefaultAccounts(webKitStorage: .isolated)
-        try? persist(accounts)
+        try? persist(accounts, pendingDeletionIDs: pendingDeletionIDs)
         return accounts
     }
 
@@ -562,15 +706,88 @@ struct ProviderAccountStore {
         return header.version
     }
 
+    private func storedPayload() -> Payload? {
+        guard let data = userDefaults.object(forKey: key) as? Data else {
+            return nil
+        }
+        return try? decoder.decode(Payload.self, from: data)
+    }
+
+    private func salvagePendingDeletionIDs(from data: Data) -> Set<UUID> {
+        guard let salvage = try? decoder.decode(
+            PendingDeletionSalvage.self,
+            from: data
+        ) else {
+            return []
+        }
+        return sanitizePendingDeletionIDs(
+            Set(salvage.pendingWebKitDataStoreDeletionIDs ?? []),
+            activeAccountIDs: []
+        )
+    }
+
+    private func sanitizePendingDeletionIDs(
+        _ identifiers: Set<UUID>,
+        activeAccountIDs: Set<UUID>
+    ) -> Set<UUID> {
+        identifiers.filter {
+            ProviderAccount.isUsableWebKitIdentifier($0)
+                && !activeAccountIDs.contains($0)
+        }
+    }
+
     private func selectedAccountKey(for provider: UsageProvider) -> String {
         "\(key).selected.\(provider.rawValue)"
     }
 
-    private func persist(_ accounts: [ProviderAccount]) throws {
-        let payload = Payload(version: Self.currentVersion, accounts: accounts)
+    @MainActor
+    private func repairSelection(
+        for provider: UsageProvider,
+        among accounts: [ProviderAccount]
+    ) -> ProviderAccount {
+        let providerAccounts = accounts.filter { $0.provider == provider }
+        let selectionKey = selectedAccountKey(for: provider)
+        if let rawID = userDefaults.string(forKey: selectionKey),
+           let selectedID = UUID(uuidString: rawID),
+           let selected = providerAccounts.first(where: { $0.id == selectedID }) {
+            return selected
+        }
+        guard let fallback = providerAccounts.first(where: \.isEnabled)
+            ?? providerAccounts.first else {
+            preconditionFailure("Removal must preserve one account per provider")
+        }
+        userDefaults.set(
+            fallback.id.uuidString.lowercased(),
+            forKey: selectionKey
+        )
+        return fallback
+    }
+
+    private func persist(
+        _ accounts: [ProviderAccount],
+        pendingDeletionIDs: Set<UUID>? = nil
+    ) throws {
+        let requestedPendingIDs = pendingDeletionIDs
+            ?? Set(storedPayload()?.pendingWebKitDataStoreDeletionIDs ?? [])
+        let pendingIDs = sanitizePendingDeletionIDs(
+            requestedPendingIDs,
+            activeAccountIDs: Set(accounts.map(\.id))
+        )
+        let payload = Payload(
+            version: Self.currentVersion,
+            accounts: accounts,
+            pendingWebKitDataStoreDeletionIDs: pendingIDs
+        )
         guard let data = try? encoder.encode(payload) else {
             throw ProviderAccountStoreError.persistenceFailed
         }
         userDefaults.set(data, forKey: key)
+        // Account removal relies on this blob as its crash journal. Do not let
+        // the caller release or delete WebKit credentials until cfprefsd has
+        // acknowledged the complete registry+tombstone transaction.
+        guard userDefaults.synchronize(),
+              userDefaults.data(forKey: key) == data else {
+            throw ProviderAccountStoreError.persistenceFailed
+        }
     }
 }

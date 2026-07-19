@@ -11,7 +11,7 @@ import WidgetKit
 /// Settings window content displaying usage data and login WebView
 struct ContentView: View {
     @ObservedObject private var viewModel: UsageViewModel
-    private let webViewPool: UsageWebViewPool
+    @ObservedObject private var webViewPool: UsageWebViewPool
     @AppStorage(UserDefaultsKeys.displayMode) private var displayMode: UsageDisplayMode = .used
     @AppStorage(
         AppGroupConfig.usageRefreshIntervalMinutesKey,
@@ -33,7 +33,7 @@ struct ContentView: View {
 
     init(viewModel: UsageViewModel, webViewPool: UsageWebViewPool) {
         self.viewModel = viewModel
-        self.webViewPool = webViewPool
+        self._webViewPool = ObservedObject(wrappedValue: webViewPool)
     }
 
     var body: some View {
@@ -183,6 +183,12 @@ struct ContentView: View {
                     }
                 )
             }
+        }
+        .onReceive(webViewPool.webViewStoreWillRetire) { accountID in
+            guard popupWebViewStore?.account.id == accountID else { return }
+            popupWebViewStore?.closePopupWebView()
+            popupWebViewStore = nil
+            popupWebView = nil
         }
     }
 
@@ -368,13 +374,16 @@ struct ContentView: View {
             ForEach(UsageProvider.allCases) { provider in
                 let store = webViewPool.getWebViewStore(for: provider)
                 WebViewRepresentable(store: store)
-                    .onReceive(store.$popupWebView) { popup in
+                    .id(store.account.id)
+                    .onReceive(store.$popupWebView) { [weak store] popup in
+                        guard let store else { return }
                         if let popup {
                             popupWebView = popup
                             popupWebViewStore = store
                             // Set up login check callback for auto-close.
-                            store.onPopupNavigationFinished = { [weak viewModel] _ in
-                                guard let viewModel else { return false }
+                            store.onPopupNavigationFinished = {
+                                [weak viewModel, weak store] _ in
+                                guard let viewModel, let store else { return false }
                                 return await viewModel.checkLoginStatus(using: store)
                             }
                         } else {

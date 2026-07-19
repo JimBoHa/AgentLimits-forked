@@ -2,6 +2,7 @@ import Foundation
 import XCTest
 @testable import AgentLimits
 
+@MainActor
 final class ProviderAccountStoreTests: XCTestCase {
     func testFirstLoadCreatesStablePrimaryAccountForEveryProvider() {
         withStore { store in
@@ -41,9 +42,97 @@ final class ProviderAccountStoreTests: XCTestCase {
             XCTAssertNil(store.account(id: work.id)?.cliDataRoot)
             XCTAssertEqual(store.account(id: work.id)?.webKitStorage, .isolated)
 
-            try store.removeAccount(id: work.id)
+            try removeAccount(id: work.id, from: store)
             XCTAssertNil(store.account(id: work.id))
             XCTAssertEqual(store.accounts(for: .chatgptCodex).count, 1)
+        }
+    }
+
+    func testRemovalPreselectsQueuesAndPreservesInterveningChanges() throws {
+        try withStoreAndDefaults { store, defaults in
+            let primary = store.primaryAccount(for: .chatgptCodex)
+            try store.updateAccount(primary.updating(
+                label: primary.label,
+                isEnabled: false,
+                cliDataRoot: primary.cliDataRoot
+            ))
+            let target = try store.addAccount(
+                provider: .chatgptCodex,
+                label: "Target"
+            )
+            let replacement = try store.addAccount(
+                provider: .chatgptCodex,
+                label: "Replacement"
+            )
+            try store.selectAccount(id: target.id)
+
+            let plan = try store.prepareRemoval(id: target.id)
+
+            XCTAssertTrue(plan.targetWasSelected)
+            XCTAssertEqual(plan.replacement.id, replacement.id)
+            XCTAssertEqual(
+                store.selectedAccount(for: .chatgptCodex).id,
+                replacement.id
+            )
+            XCTAssertNotNil(store.account(id: target.id))
+            XCTAssertTrue(store.pendingWebKitDataStoreDeletionIDs.isEmpty)
+
+            let third = try store.addAccount(
+                provider: .chatgptCodex,
+                label: "Selected During Cleanup"
+            )
+            try store.selectAccount(id: third.id)
+            let unrelated = try store.addAccount(
+                provider: .claudeCode,
+                label: "Unrelated"
+            )
+            try store.updateAccount(unrelated.updating(
+                label: "Unrelated Updated",
+                isEnabled: false,
+                cliDataRoot: "/tmp/unrelated"
+            ))
+
+            let commit = try store.commitRemoval(plan)
+
+            XCTAssertEqual(commit.removed.id, target.id)
+            XCTAssertEqual(commit.replacement.id, third.id)
+            XCTAssertEqual(
+                commit.queuedWebKitDataStoreIdentifier,
+                target.id
+            )
+            XCTAssertNil(store.account(id: target.id))
+            XCTAssertEqual(
+                store.selectedAccount(for: .chatgptCodex).id,
+                third.id
+            )
+            XCTAssertEqual(store.account(id: unrelated.id)?.label, "Unrelated Updated")
+            XCTAssertEqual(store.pendingWebKitDataStoreDeletionIDs, [target.id])
+
+            let reloaded = ProviderAccountStore(
+                userDefaults: defaults,
+                key: Self.accountKey
+            )
+            XCTAssertEqual(
+                reloaded.pendingWebKitDataStoreDeletionIDs,
+                [target.id]
+            )
+            let addedAfterCommit = try reloaded.addAccount(
+                provider: .githubCopilot,
+                label: "Queue Preserver"
+            )
+            try reloaded.updateAccount(addedAfterCommit.updating(
+                label: "Queue Still Preserved",
+                isEnabled: true,
+                cliDataRoot: nil
+            ))
+            XCTAssertEqual(
+                reloaded.pendingWebKitDataStoreDeletionIDs,
+                [target.id]
+            )
+
+            try reloaded.markWebKitDataStoreDeletionComplete(id: target.id)
+            try reloaded.markWebKitDataStoreDeletionComplete(id: target.id)
+            XCTAssertTrue(reloaded.pendingWebKitDataStoreDeletionIDs.isEmpty)
         }
     }
 
@@ -51,7 +140,7 @@ final class ProviderAccountStoreTests: XCTestCase {
         try withStore { store in
             let account = store.primaryAccount(for: .claudeCode)
 
-            XCTAssertThrowsError(try store.removeAccount(id: account.id)) { error in
+            XCTAssertThrowsError(try removeAccount(id: account.id, from: store)) { error in
                 XCTAssertEqual(
                     error as? ProviderAccountStoreError,
                     .cannotRemoveLastAccount(.claudeCode)
@@ -172,7 +261,7 @@ final class ProviderAccountStoreTests: XCTestCase {
             }
 
             let stored = try decodeStoredPayload(defaults)
-            XCTAssertEqual(stored.version, 2)
+            XCTAssertEqual(stored.version, 3)
             XCTAssertEqual(stored.accounts, migrated)
         }
     }
@@ -289,6 +378,93 @@ final class ProviderAccountStoreTests: XCTestCase {
         }
     }
 
+    func testV2MigrationWritesEmptyV3DeletionQueue() throws {
+        try withStoreAndDefaults { store, defaults in
+            let accounts = UsageProvider.allCases.map {
+                ProviderAccount(
+                    provider: $0,
+                    label: $0.displayName,
+                    webKitStorage: .isolated
+                )
+            }
+            defaults.set(
+                try JSONEncoder().encode(
+                    StoredPayload(version: 2, accounts: accounts)
+                ),
+                forKey: Self.accountKey
+            )
+
+            XCTAssertEqual(store.loadAccounts(), accounts)
+            let data = try XCTUnwrap(defaults.data(forKey: Self.accountKey))
+            let migrated = try JSONDecoder().decode(StoredV3Payload.self, from: data)
+            XCTAssertEqual(migrated.version, 3)
+            XCTAssertEqual(migrated.accounts, accounts)
+            XCTAssertTrue(migrated.pendingWebKitDataStoreDeletionIDs.isEmpty)
+        }
+    }
+
+    func testV3DeletionQueueRejectsZeroDuplicateAndActiveIdentifiers() throws {
+        try withStoreAndDefaults { store, defaults in
+            let accounts = UsageProvider.allCases.map {
+                ProviderAccount(
+                    provider: $0,
+                    label: $0.displayName,
+                    webKitStorage: .isolated
+                )
+            }
+            let activeID = accounts[0].id
+            let orphanID = UUID()
+            let zeroID = try XCTUnwrap(
+                UUID(uuidString: Self.zeroUUIDString)
+            )
+            defaults.set(
+                try JSONEncoder().encode(StoredV3Payload(
+                    version: 3,
+                    accounts: accounts,
+                    pendingWebKitDataStoreDeletionIDs: [
+                        activeID,
+                        orphanID,
+                        zeroID,
+                        orphanID
+                    ]
+                )),
+                forKey: Self.accountKey
+            )
+
+            XCTAssertEqual(store.pendingWebKitDataStoreDeletionIDs, [orphanID])
+            XCTAssertEqual(store.loadAccounts(), accounts)
+
+            let data = try XCTUnwrap(defaults.data(forKey: Self.accountKey))
+            let normalized = try JSONDecoder().decode(
+                StoredV3Payload.self,
+                from: data
+            )
+            XCTAssertEqual(normalized.pendingWebKitDataStoreDeletionIDs, [orphanID])
+        }
+    }
+
+    func testCorruptAccountListSalvagesValidDeletionQueue() throws {
+        try withStoreAndDefaults { store, defaults in
+            let orphanID = UUID()
+            defaults.set(
+                try JSONSerialization.data(withJSONObject: [
+                    "version": 3,
+                    "accounts": "corrupt",
+                    "pendingWebKitDataStoreDeletionIDs": [orphanID.uuidString]
+                ], options: [.sortedKeys]),
+                forKey: Self.accountKey
+            )
+
+            let recovered = store.loadAccounts()
+
+            XCTAssertEqual(recovered.count, UsageProvider.allCases.count)
+            XCTAssertTrue(recovered.allSatisfy {
+                $0.webKitStorage == .isolated
+            })
+            XCTAssertEqual(store.pendingWebKitDataStoreDeletionIDs, [orphanID])
+        }
+    }
+
     func testMissingAndUnknownModernStorageValuesDefaultToIsolated() throws {
         try withStoreAndDefaults { store, defaults in
             let accounts = UsageProvider.allCases.map {
@@ -362,6 +538,22 @@ final class ProviderAccountStoreTests: XCTestCase {
             )
             XCTAssertThrowsError(
                 try store.addAccount(provider: .chatgptCodex, label: "Blocked")
+            ) { error in
+                XCTAssertEqual(
+                    error as? ProviderAccountStoreError,
+                    .unsupportedVersion(99)
+                )
+            }
+            XCTAssertThrowsError(
+                try store.prepareRemoval(id: firstLoad[0].id)
+            ) { error in
+                XCTAssertEqual(
+                    error as? ProviderAccountStoreError,
+                    .unsupportedVersion(99)
+                )
+            }
+            XCTAssertThrowsError(
+                try store.markWebKitDataStoreDeletionComplete(id: futureID)
             ) { error in
                 XCTAssertEqual(
                     error as? ProviderAccountStoreError,
@@ -591,9 +783,11 @@ final class ProviderAccountStoreTests: XCTestCase {
             let legacy = store.accounts(for: .chatgptCodex)[0]
             let isolated = try store.addAccount(provider: .chatgptCodex, label: "Work")
 
-            try store.removeAccount(id: legacy.id)
+            let commit = try removeAccount(id: legacy.id, from: store)
 
             XCTAssertEqual(store.accounts(for: .chatgptCodex), [isolated])
+            XCTAssertNil(commit.queuedWebKitDataStoreIdentifier)
+            XCTAssertTrue(store.pendingWebKitDataStoreDeletionIDs.isEmpty)
             XCTAssertEqual(
                 store.accounts(for: .chatgptCodex)[0].webKitStorage,
                 .isolated
@@ -685,7 +879,7 @@ final class ProviderAccountStoreTests: XCTestCase {
             let replacement = try store.addAccount(provider: .chatgptCodex, label: "Replacement")
             try store.selectAccount(id: selected.id)
 
-            try store.removeAccount(id: selected.id)
+            try removeAccount(id: selected.id, from: store)
 
             XCTAssertEqual(store.selectedAccount(for: .chatgptCodex).id, replacement.id)
         }
@@ -705,7 +899,7 @@ final class ProviderAccountStoreTests: XCTestCase {
             }
             try store.selectAccount(id: selected.id)
 
-            try store.removeAccount(id: selected.id)
+            try removeAccount(id: selected.id, from: store)
 
             XCTAssertEqual(store.selectedAccount(for: .chatgptCodex).id, primary.id)
             XCTAssertEqual(
@@ -721,7 +915,7 @@ final class ProviderAccountStoreTests: XCTestCase {
             let selected = try store.addAccount(provider: .chatgptCodex, label: "Selected")
             try store.selectAccount(id: selected.id)
 
-            try store.removeAccount(id: primary.id)
+            try removeAccount(id: primary.id, from: store)
 
             XCTAssertEqual(store.selectedAccount(for: .chatgptCodex).id, selected.id)
         }
@@ -739,12 +933,27 @@ final class ProviderAccountStoreTests: XCTestCase {
         }
     }
 
+    @discardableResult
+    private func removeAccount(
+        id: UUID,
+        from store: ProviderAccountStore
+    ) throws -> ProviderAccountRemovalCommit {
+        let plan = try store.prepareRemoval(id: id)
+        return try store.commitRemoval(plan)
+    }
+
     private static let accountKey = "test_accounts"
     private static let zeroUUIDString = "00000000-0000-0000-0000-000000000000"
 
     private struct StoredPayload: Codable {
         let version: Int
         let accounts: [ProviderAccount]
+    }
+
+    private struct StoredV3Payload: Codable {
+        let version: Int
+        let accounts: [ProviderAccount]
+        let pendingWebKitDataStoreDeletionIDs: [UUID]
     }
 
     private struct V1Payload: Codable {

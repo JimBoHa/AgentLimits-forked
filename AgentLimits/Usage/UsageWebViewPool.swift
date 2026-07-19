@@ -69,6 +69,25 @@ struct UsageWebViewActivationPolicy {
         foregroundAccountID = nil
         foregroundProvider = nil
     }
+
+    @discardableResult
+    mutating func replaceAccountID(
+        _ removedAccountID: UUID,
+        with replacementAccountID: UUID,
+        for provider: UsageProvider
+    ) -> Bool {
+        var didReplace = false
+        if backgroundAccountIDByProvider[provider] == removedAccountID {
+            backgroundAccountIDByProvider[provider] = replacementAccountID
+            didReplace = true
+        }
+        if foregroundProvider == provider,
+           foregroundAccountID == removedAccountID {
+            foregroundAccountID = replacementAccountID
+            didReplace = true
+        }
+        return didReplace
+    }
 }
 
 // MARK: - WebView Pool
@@ -79,6 +98,34 @@ struct UsageWebViewActivationPolicy {
 final class UsageWebViewPool: ObservableObject {
     struct DataClearToken: Equatable {
         fileprivate let identifier: UInt64
+    }
+
+    struct AccountRetirementToken: Equatable {
+        fileprivate let identifier: UInt64
+        let accountID: UUID
+    }
+
+    enum AccountRetirementError: LocalizedError {
+        case globalClearInProgress
+        case anotherRetirementInProgress
+        case accountUnavailable
+        case webViewDidNotQuiesce
+        case invalidToken
+
+        var errorDescription: String? {
+            switch self {
+            case .globalClearInProgress:
+                return "Finish clearing website data before removing an account."
+            case .anotherRetirementInProgress:
+                return "Another provider account is already being removed."
+            case .accountUnavailable:
+                return "The provider account session is no longer available."
+            case .webViewDidNotQuiesce:
+                return "The provider account login page could not be stopped safely."
+            case .invalidToken:
+                return "The provider account removal is no longer active."
+            }
+        }
     }
 
     enum DataClearError: LocalizedError {
@@ -125,6 +172,14 @@ final class UsageWebViewPool: ObservableObject {
         case coverageInvalidated
     }
 
+    private struct ActiveAccountRetirement {
+        let token: AccountRetirementToken
+        let plan: ProviderAccountRemovalPlan
+        let webViewStore: WebViewStore
+        let replacedActiveAccount: Bool
+        var globalDataClearToken: DataClearToken?
+    }
+
     private var webViewStoreByAccountID: [UUID: WebViewStore] = [:]
     private var dataStoreByKey: [WebsiteDataStoreKey: WKWebsiteDataStore] = [:]
     private var managedProviders: Set<UsageProvider>
@@ -132,6 +187,9 @@ final class UsageWebViewPool: ObservableObject {
     private var activeDataClear: DataClearToken?
     private var activeDataClearPhase: DataClearPhase?
     private var nextDataClearIdentifier: UInt64 = 0
+    private var activeAccountRetirement: ActiveAccountRetirement?
+    private var nextAccountRetirementIdentifier: UInt64 = 0
+    private var retiringOrRemovedAccountIDs: Set<UUID>
     private let accountStore: ProviderAccountStore
     private let websiteDataClearer: any WebsiteDataClearing
     private let websiteDataStoreProvider: (ProviderAccount) -> WKWebsiteDataStore
@@ -139,9 +197,13 @@ final class UsageWebViewPool: ObservableObject {
 
     /// Called after a newly registered account WebViewStore is ready to observe.
     var onWebViewStoreCreated: ((WebViewStore) -> Void)?
+    /// Synchronous release boundary for observers and visible popup/page views.
+    let webViewStoreWillRetire = PassthroughSubject<UUID, Never>()
 
     var webViewStores: [WebViewStore] {
-        webViewStoreByAccountID.values.sorted {
+        webViewStoreByAccountID.values
+            .filter { !retiringOrRemovedAccountIDs.contains($0.account.id) }
+            .sorted {
             if $0.account.provider != $1.account.provider {
                 return $0.account.provider.rawValue < $1.account.provider.rawValue
             }
@@ -161,6 +223,8 @@ final class UsageWebViewPool: ObservableObject {
     ) {
         self.managedProviders = Set(providers)
         self.accountStore = accountStore
+        self.retiringOrRemovedAccountIDs =
+            accountStore.pendingWebKitDataStoreDeletionIDs
         self.websiteDataClearer = websiteDataClearer ?? DefaultWebsiteDataClearer()
         if accountStore.supportsPersistentWebSessions {
             self.websiteDataStoreProvider = websiteDataStoreProvider
@@ -183,6 +247,10 @@ final class UsageWebViewPool: ObservableObject {
 
     /// Returns one stable WebViewStore per immutable account UUID.
     func getWebViewStore(for account: ProviderAccount) -> WebViewStore {
+        precondition(
+            !retiringOrRemovedAccountIDs.contains(account.id),
+            "Retired provider account sessions cannot be recreated"
+        )
         managedProviders.insert(account.provider)
         if let existingStore = webViewStoreByAccountID[account.id] {
             return existingStore
@@ -205,7 +273,8 @@ final class UsageWebViewPool: ObservableObject {
     }
 
     func isSelectedAccount(_ accountID: UUID, for provider: UsageProvider) -> Bool {
-        accountStore.selectedAccount(for: provider).id == accountID
+        guard !retiringOrRemovedAccountIDs.contains(accountID) else { return false }
+        return accountStore.selectedAccount(for: provider).id == accountID
     }
 
     /// Makes the selected account for one provider active for the settings UI.
@@ -215,6 +284,7 @@ final class UsageWebViewPool: ObservableObject {
     }
 
     func resume(_ account: ProviderAccount) {
+        guard !retiringOrRemovedAccountIDs.contains(account.id) else { return }
         _ = getWebViewStore(for: account)
         activationPolicy.setForegroundAccountID(
             account.id,
@@ -238,7 +308,8 @@ final class UsageWebViewPool: ObservableObject {
 
     func applyBackgroundPolicy(activeAccounts: [ProviderAccount]) {
         var accountIDByProvider: [UsageProvider: UUID] = [:]
-        for account in activeAccounts {
+        for account in activeAccounts
+            where !retiringOrRemovedAccountIDs.contains(account.id) {
             _ = getWebViewStore(for: account)
             accountIDByProvider[account.provider] = account.id
         }
@@ -253,14 +324,163 @@ final class UsageWebViewPool: ObservableObject {
 
     func reloadFromOrigin(_ account: ProviderAccount) {
         guard activeDataClear == nil else { return }
+        guard !retiringOrRemovedAccountIDs.contains(account.id) else { return }
         guard activationPolicy.activeAccountIDs.contains(account.id) else { return }
         getWebViewStore(for: account).reloadFromOrigin()
+    }
+
+    /// Blocks a target account immediately and captures its exact WebView
+    /// session. Registry selection must already point at the replacement.
+    func beginAccountRetirement(
+        _ plan: ProviderAccountRemovalPlan
+    ) throws -> AccountRetirementToken {
+        guard activeDataClear == nil else {
+            throw AccountRetirementError.globalClearInProgress
+        }
+        guard activeAccountRetirement == nil else {
+            throw AccountRetirementError.anotherRetirementInProgress
+        }
+        guard !retiringOrRemovedAccountIDs.contains(plan.target.id),
+              accountStore.account(id: plan.target.id) != nil else {
+            throw AccountRetirementError.accountUnavailable
+        }
+
+        let store = getWebViewStore(for: plan.target)
+        if plan.target.webKitStorage == .isolated,
+           !store.beginRetirement() {
+            throw AccountRetirementError.accountUnavailable
+        }
+
+        nextAccountRetirementIdentifier &+= 1
+        let token = AccountRetirementToken(
+            identifier: nextAccountRetirementIdentifier,
+            accountID: plan.target.id
+        )
+        retiringOrRemovedAccountIDs.insert(plan.target.id)
+        let replacedActiveAccount = activationPolicy.replaceAccountID(
+            plan.target.id,
+            with: plan.replacement.id,
+            for: plan.target.provider
+        )
+        activeAccountRetirement = ActiveAccountRetirement(
+            token: token,
+            plan: plan,
+            webViewStore: store,
+            replacedActiveAccount: replacedActiveAccount,
+            globalDataClearToken: nil
+        )
+        objectWillChange.send()
+        reconcileActiveStores()
+        return token
+    }
+
+    /// Quiesces the exact identified session, or every session when deleting a
+    /// legacy account that shares WKWebsiteDataStore.default().
+    func quiesceAccountForRetirement(
+        _ token: AccountRetirementToken
+    ) async throws {
+        guard var retirement = activeAccountRetirement,
+              retirement.token == token else {
+            throw AccountRetirementError.invalidToken
+        }
+
+        switch retirement.plan.target.webKitStorage {
+        case .isolated:
+            let didQuiesce = await retirement.webViewStore.quiesceForDataClear(
+                timeout: quiescenceTimeout
+            )
+            guard activeAccountRetirement?.token == token else {
+                throw AccountRetirementError.invalidToken
+            }
+            guard didQuiesce else {
+                throw AccountRetirementError.webViewDidNotQuiesce
+            }
+
+        case .legacyDefault:
+            let clearToken = startDataClear()
+            retirement.globalDataClearToken = clearToken
+            activeAccountRetirement = retirement
+            do {
+                while !isWebsiteDataClearComplete(clearToken) {
+                    try await clearWebsiteData(clearToken)
+                }
+            } catch {
+                throw error
+            }
+            guard activeAccountRetirement?.token == token,
+                  retirement.webViewStore.beginRetirementDuringDataClear() else {
+                throw AccountRetirementError.invalidToken
+            }
+        }
+    }
+
+    /// Drops every live reference owned by the pool after registry commit.
+    /// The account ID remains blocked for this process, including while a
+    /// durable identified-store cleanup tombstone is pending.
+    func finalizeAccountRetirement(
+        _ token: AccountRetirementToken,
+        commit: ProviderAccountRemovalCommit
+    ) throws {
+        guard let retirement = activeAccountRetirement,
+              retirement.token == token,
+              retirement.plan.target.id == commit.removed.id else {
+            throw AccountRetirementError.invalidToken
+        }
+
+        let accountID = commit.removed.id
+        webViewStoreWillRetire.send(accountID)
+        objectWillChange.send()
+        retirement.webViewStore.finalizeRetirement()
+        webViewStoreByAccountID.removeValue(forKey: accountID)
+        if let identifier = commit.removed.isolatedWebKitDataStoreIdentifier {
+            dataStoreByKey.removeValue(forKey: .isolated(identifier))
+        }
+
+        if retirement.replacedActiveAccount,
+           retirement.plan.replacement.id != commit.replacement.id {
+            activationPolicy.replaceAccountID(
+                retirement.plan.replacement.id,
+                with: commit.replacement.id,
+                for: commit.removed.provider
+            )
+        }
+
+        activeAccountRetirement = nil
+        if let clearToken = retirement.globalDataClearToken,
+           !finishDataClear(clearToken) {
+            _ = cancelDataClear(clearToken)
+        }
+        reconcileActiveStores()
+    }
+
+    /// Cancels only pre-commit retirement. Once registry commit succeeds, the
+    /// durable cleanup tombstone owns completion and this must not be called.
+    @discardableResult
+    func cancelAccountRetirement(_ token: AccountRetirementToken) -> Bool {
+        guard let retirement = activeAccountRetirement,
+              retirement.token == token else { return false }
+        if let clearToken = retirement.globalDataClearToken {
+            guard cancelDataClear(clearToken) else { return false }
+            retirement.webViewStore.cancelRetirement()
+        } else {
+            retirement.webViewStore.cancelRetirement()
+        }
+        activeAccountRetirement = nil
+        retiringOrRemovedAccountIDs.remove(token.accountID)
+        objectWillChange.send()
+        reconcileActiveStores()
+        return true
     }
 
     /// Starts an exclusive website-data clear and immediately blocks every
     /// provider navigation and popup.
     func beginDataClear() -> DataClearToken? {
-        guard activeDataClear == nil else { return nil }
+        guard activeDataClear == nil,
+              activeAccountRetirement == nil else { return nil }
+        return startDataClear()
+    }
+
+    private func startDataClear() -> DataClearToken {
         nextDataClearIdentifier &+= 1
         let token = DataClearToken(identifier: nextDataClearIdentifier)
         activeDataClear = token
@@ -367,9 +587,11 @@ final class UsageWebViewPool: ObservableObject {
     }
 
     private func configureNavigationGuard(for store: WebViewStore) {
+        let accountID = store.account.id
         store.isNavigationAllowed = { [weak self] in
             guard let self else { return false }
             return self.activeDataClear == nil
+                && !self.retiringOrRemovedAccountIDs.contains(accountID)
         }
     }
 
@@ -398,7 +620,8 @@ final class UsageWebViewPool: ObservableObject {
 
     private func registerCurrentAccounts() {
         for account in accountStore.loadAccounts()
-            where managedProviders.contains(account.provider) {
+            where managedProviders.contains(account.provider)
+                && !retiringOrRemovedAccountIDs.contains(account.id) {
             _ = getWebViewStore(for: account)
         }
     }

@@ -1147,6 +1147,39 @@ struct AppGroupSnapshotStore<Provider: SnapshotFileNaming, Snapshot: SnapshotDat
         }
     }
 
+    /// Deletes the complete account-scoped snapshot namespace, including
+    /// migration markers and any provider files stored there. A legacy store
+    /// with no account UUID is intentionally a no-op to protect shared data.
+    func deleteAccountNamespace() throws {
+        guard accountID != nil else { return }
+        guard let directoryURL = snapshotDirectoryURL(accountID: accountID) else {
+            throw UsageSnapshotStoreError.appGroupUnavailable
+        }
+        let accountsDirectoryURL = directoryURL.deletingLastPathComponent()
+        let snapshotsDirectoryURL = accountsDirectoryURL.deletingLastPathComponent()
+        try validateDeletionParent(snapshotsDirectoryURL)
+        try validateDeletionParent(accountsDirectoryURL)
+        try withSecurityScopedAccess(directoryURL) {
+            if fileManager.fileExists(atPath: directoryURL.path) {
+                try fileManager.removeItem(at: directoryURL)
+            }
+        }
+    }
+
+    /// Recursive deletion must never follow a user-replaced parent symlink out
+    /// of the trusted App Group container.
+    private func validateDeletionParent(_ url: URL) throws {
+        guard fileManager.fileExists(atPath: url.path) else { return }
+        let values = try url.resourceValues(forKeys: [
+            .isDirectoryKey,
+            .isSymbolicLinkKey
+        ])
+        guard values.isDirectory == true,
+              values.isSymbolicLink != true else {
+            throw CocoaError(.fileReadNoPermission)
+        }
+    }
+
     /// Returns the file URL for the snapshot of the given provider.
     /// - Parameters:
     ///   - provider: The provider whose snapshot URL to return

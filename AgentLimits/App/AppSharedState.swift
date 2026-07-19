@@ -15,6 +15,7 @@ final class AppSharedState: ObservableObject {
     static let shared = AppSharedState()
 
     let webViewPool: UsageWebViewPool
+    let accountRemovalManager: ProviderAccountRemovalManager
     let viewModel: UsageViewModel
     let tokenUsageViewModel: TokenUsageViewModel
 
@@ -22,24 +23,38 @@ final class AppSharedState: ObservableObject {
     var onSettingsWindowClosed: (() -> Void)?
 
     private var isStarted = false
-    private var cancellables: Set<AnyCancellable> = []
+    private var lifecycleCancellables: Set<AnyCancellable> = []
+    private var cancellablesByAccountID: [UUID: Set<AnyCancellable>] = [:]
     private var observedAccountIDs: Set<UUID> = []
 
     init() {
         let accountStore = ProviderAccountStore.shared
         let pool = UsageWebViewPool(accountStore: accountStore)
+        let removalManager = ProviderAccountRemovalManager(
+            accountStore: accountStore,
+            webViewPool: pool
+        )
         let tokenViewModel = TokenUsageViewModel()
         self.webViewPool = pool
+        self.accountRemovalManager = removalManager
         self.tokenUsageViewModel = tokenViewModel
         self.viewModel = UsageViewModel(
             webViewPool: pool,
             tokenUsageViewModel: tokenViewModel
         )
+        pool.webViewStoreWillRetire
+            .sink { [weak self] accountID in
+                self?.stopObservingWebViewStore(accountID: accountID)
+            }
+            .store(in: &lifecycleCancellables)
         for store in pool.webViewStores {
             observeWebViewStore(store)
         }
         pool.onWebViewStoreCreated = { [weak self] store in
             self?.observeWebViewStore(store)
+        }
+        Task { [weak removalManager] in
+            await removalManager?.drainPendingWebKitDataStoreDeletions()
         }
         let storedMode = UsageDisplayMode.makeSelectableMode(
             from: UserDefaults.standard.string(forKey: UserDefaultsKeys.displayMode)
@@ -87,20 +102,32 @@ final class AppSharedState: ObservableObject {
     /// ignored unless that account is currently selected for its provider.
     private func observeWebViewStore(_ store: WebViewStore) {
         guard observedAccountIDs.insert(store.account.id).inserted else { return }
+        let accountID = store.account.id
+        var storeCancellables: Set<AnyCancellable> = []
         store.$isPageReady
             .removeDuplicates()
-            .sink { [weak self] isReady in
+            .sink { [weak self, weak store] isReady in
+                guard let store else { return }
                 self?.viewModel.handlePageReadyChange(
                     for: store,
                     isReady: isReady
                 )
             }
-            .store(in: &cancellables)
+            .store(in: &storeCancellables)
 
         store.$cookieChangeToken
-            .sink { [weak self] _ in
+            .sink { [weak self, weak store] _ in
+                guard let store else { return }
                 self?.viewModel.handleCookieChange(for: store)
             }
-            .store(in: &cancellables)
+            .store(in: &storeCancellables)
+        cancellablesByAccountID[accountID] = storeCancellables
+    }
+
+    private func stopObservingWebViewStore(accountID: UUID) {
+        cancellablesByAccountID
+            .removeValue(forKey: accountID)?
+            .forEach { $0.cancel() }
+        observedAccountIDs.remove(accountID)
     }
 }

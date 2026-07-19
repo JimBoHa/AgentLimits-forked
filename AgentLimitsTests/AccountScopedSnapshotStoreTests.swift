@@ -298,6 +298,180 @@ final class AccountScopedSnapshotStoreTests: XCTestCase {
         }
     }
 
+    func testDeleteAccountNamespaceRemovesOnlyExactScopedDirectory() throws {
+        try withTemporaryContainer { containerURL in
+            let targetID = try XCTUnwrap(
+                UUID(uuidString: "b0000000-0000-0000-0000-00000000000b")
+            )
+            let siblingID = try XCTUnwrap(
+                UUID(uuidString: "c0000000-0000-0000-0000-00000000000c")
+            )
+            let targetStore = makeStore(
+                accountID: targetID,
+                containerURL: containerURL
+            )
+            let siblingStore = makeStore(
+                accountID: siblingID,
+                containerURL: containerURL
+            )
+            let legacyStore = makeStore(containerURL: containerURL)
+            try targetStore.saveSnapshot(
+                makeSnapshot(fetchedAt: Date(timeIntervalSince1970: 14_000))
+            )
+            try siblingStore.saveSnapshot(
+                makeSnapshot(fetchedAt: Date(timeIntervalSince1970: 15_000))
+            )
+            try legacyStore.saveSnapshot(
+                makeSnapshot(fetchedAt: Date(timeIntervalSince1970: 16_000))
+            )
+
+            let targetDirectory = containerURL
+                .appendingPathComponent(
+                    AppGroupConfig.snapshotDirectory,
+                    isDirectory: true
+                )
+                .appendingPathComponent("accounts", isDirectory: true)
+                .appendingPathComponent(
+                    targetID.uuidString.lowercased(),
+                    isDirectory: true
+                )
+            let nestedDirectory = targetDirectory.appendingPathComponent(
+                "future-schema",
+                isDirectory: true
+            )
+            try FileManager.default.createDirectory(
+                at: nestedDirectory,
+                withIntermediateDirectories: true
+            )
+            try Data([0xde, 0xad, 0xbe, 0xef]).write(
+                to: nestedDirectory.appendingPathComponent("artifact.bin")
+            )
+
+            try targetStore.deleteAccountNamespace()
+            try targetStore.deleteAccountNamespace()
+
+            XCTAssertFalse(
+                FileManager.default.fileExists(atPath: targetDirectory.path)
+            )
+            XCTAssertNil(targetStore.loadSnapshot(for: .chatgptCodex))
+            XCTAssertNotNil(siblingStore.loadSnapshot(for: .chatgptCodex))
+            XCTAssertNotNil(legacyStore.loadSnapshot(for: .chatgptCodex))
+
+            try legacyStore.deleteAccountNamespace()
+            XCTAssertNotNil(legacyStore.loadSnapshot(for: .chatgptCodex))
+            XCTAssertNotNil(siblingStore.loadSnapshot(for: .chatgptCodex))
+        }
+    }
+
+    func testDefaultLocalRemoverClearsMarkersWithoutDeletingCLIRoot() throws {
+        try withTemporaryContainer { containerURL in
+            let accountID = try XCTUnwrap(
+                UUID(uuidString: "d0000000-0000-0000-0000-00000000000d")
+            )
+            let externalRoot = containerURL.appendingPathComponent(
+                "external-cli-root",
+                isDirectory: true
+            )
+            try FileManager.default.createDirectory(
+                at: externalRoot,
+                withIntermediateDirectories: true
+            )
+            let sentinelURL = externalRoot.appendingPathComponent("credentials.json")
+            try Data("keep".utf8).write(to: sentinelURL)
+            let account = ProviderAccount(
+                id: accountID,
+                provider: .chatgptCodex,
+                label: "Work",
+                cliDataRoot: externalRoot.path,
+                webKitStorage: .isolated
+            )
+            let visibilityStore = RecordingAccountSnapshotVisibilityStore()
+            let scopedStore = makeStore(
+                visibilityStore: visibilityStore,
+                accountID: accountID,
+                containerURL: containerURL
+            )
+            try scopedStore.saveSnapshot(
+                makeSnapshot(fetchedAt: Date(timeIntervalSince1970: 17_000))
+            )
+            let prefix = "accounts/\(account.snapshotNamespace)/"
+            let visibilityKeys = UsageProvider.allCases.map {
+                prefix + $0.snapshotFileName
+            } + TokenUsageProvider.allCases.map {
+                prefix + $0.snapshotFileName
+            }
+            for key in visibilityKeys {
+                visibilityStore.setSnapshotSuppressed(true, fileName: key)
+            }
+            let remover = DefaultProviderAccountLocalDataRemover(
+                visibilityStore: visibilityStore,
+                makeUsageSnapshotStore: { id in
+                    UsageSnapshotStore(
+                        visibilityStore: visibilityStore,
+                        accountID: id,
+                        containerURLOverride: containerURL
+                    )
+                }
+            )
+
+            try remover.removeLocalData(for: account)
+
+            XCTAssertNil(scopedStore.loadSnapshot(for: .chatgptCodex))
+            XCTAssertTrue(visibilityKeys.allSatisfy {
+                !visibilityStore.isSnapshotSuppressed(fileName: $0)
+            })
+            XCTAssertTrue(FileManager.default.fileExists(atPath: sentinelURL.path))
+            XCTAssertEqual(try Data(contentsOf: sentinelURL), Data("keep".utf8))
+        }
+    }
+
+    func testDeleteAccountNamespaceRejectsSymlinkedParent() throws {
+        try withTemporaryContainer { containerURL in
+            let accountID = try XCTUnwrap(
+                UUID(uuidString: "e0000000-0000-0000-0000-00000000000e")
+            )
+            let externalDirectory = containerURL.appendingPathComponent(
+                "external",
+                isDirectory: true
+            )
+            let externalAccountDirectory = externalDirectory.appendingPathComponent(
+                accountID.uuidString.lowercased(),
+                isDirectory: true
+            )
+            try FileManager.default.createDirectory(
+                at: externalAccountDirectory,
+                withIntermediateDirectories: true
+            )
+            let sentinelURL = externalAccountDirectory.appendingPathComponent(
+                "sentinel"
+            )
+            try Data("keep".utf8).write(to: sentinelURL)
+            let snapshotsDirectory = containerURL.appendingPathComponent(
+                AppGroupConfig.snapshotDirectory,
+                isDirectory: true
+            )
+            try FileManager.default.createDirectory(
+                at: snapshotsDirectory,
+                withIntermediateDirectories: true
+            )
+            try FileManager.default.createSymbolicLink(
+                at: snapshotsDirectory.appendingPathComponent(
+                    "accounts",
+                    isDirectory: true
+                ),
+                withDestinationURL: externalDirectory
+            )
+            let store = makeStore(
+                accountID: accountID,
+                containerURL: containerURL
+            )
+
+            XCTAssertThrowsError(try store.deleteAccountNamespace())
+            XCTAssertTrue(FileManager.default.fileExists(atPath: sentinelURL.path))
+            XCTAssertEqual(try Data(contentsOf: sentinelURL), Data("keep".utf8))
+        }
+    }
+
     private func makeStore(
         visibilityStore: any SnapshotVisibilityControlling = RecordingAccountSnapshotVisibilityStore(),
         accountID: UUID? = nil,
