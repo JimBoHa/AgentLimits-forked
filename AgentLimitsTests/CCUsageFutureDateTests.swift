@@ -2,6 +2,7 @@ import Foundation
 import XCTest
 @testable import AgentLimits
 
+@MainActor
 final class CCUsageFutureDateTests: XCTestCase {
     func testFutureAndMalformedEntriesDoNotInflateAggregates() throws {
         let calendar = Calendar.current
@@ -41,5 +42,41 @@ final class CCUsageFutureDateTests: XCTestCase {
             "2026-07-15"
         ])
         XCTAssertEqual(snapshot.fetchedAt, now)
+    }
+
+    func testNonGregorianPreferenceStillAggregatesGregorianMonth() throws {
+        var gregorian = Calendar(identifier: .gregorian)
+        gregorian.timeZone = try XCTUnwrap(
+            TimeZone(identifier: "America/Los_Angeles")
+        )
+        let now = try XCTUnwrap(gregorian.date(from: DateComponents(
+            year: 2026,
+            month: 7,
+            day: 18,
+            hour: 12
+        )))
+        var preferredCalendar = Calendar(identifier: .islamicCivil)
+        preferredCalendar.timeZone = gregorian.timeZone
+        let response = CCUsageClaudeResponse(
+            daily: [
+                .init(date: "2026-06-30", totalTokens: 30, totalCost: 30),
+                .init(date: "2026-07-01", totalTokens: 1, totalCost: 1),
+                .init(date: "2026-07-16", totalTokens: 16, totalCost: 16),
+                .init(date: "2026-07-18", totalTokens: 18, totalCost: 18),
+                .init(date: "2026-07-19", totalTokens: 900, totalCost: 900)
+            ],
+            totals: .init(totalTokens: 965, totalCost: 965)
+        )
+
+        let snapshot = try CCUsageFetcher().parseResponse(
+            jsonData: JSONEncoder().encode(response),
+            provider: .claude,
+            now: now,
+            calendar: preferredCalendar
+        )
+
+        XCTAssertEqual(snapshot.today.totalTokens, 18)
+        XCTAssertEqual(snapshot.thisWeek.totalTokens, 34)
+        XCTAssertEqual(snapshot.thisMonth.totalTokens, 35)
     }
 }
