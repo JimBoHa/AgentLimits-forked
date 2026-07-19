@@ -42,6 +42,8 @@ The local file is gitignored and must remain Team-only. Signed release scripts
 reject includes, conditional assignments, compiler flags, symlinks, ACLs, and
 group/other-writable files. They build from a clean `git archive` snapshot with
 a generated Team-only config, then record and recheck the local config hash.
+They also replace inherited Xcode config/toolchain overrides and use the system
+release-tool path before invoking Xcode.
 Never commit certificates, private keys, provisioning profiles, App Store
 Connect keys, passwords, or notarization credentials.
 

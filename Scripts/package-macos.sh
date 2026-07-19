@@ -2,6 +2,9 @@
 
 set -euo pipefail
 
+PATH="/usr/bin:/bin:/usr/sbin:/sbin"
+export PATH
+
 usage() {
     echo "Usage: $0 OUTPUT_DIRECTORY NOTARY_KEYCHAIN_PROFILE \"DEVELOPER_ID_INSTALLER_IDENTITY\"" >&2
     echo "Example installer identity: Developer ID Installer: Example Corp (ABCDE12345)" >&2
@@ -79,6 +82,7 @@ git -C "$project_root" archive --format=tar "$source_commit" \
 snapshot_config="$build_root/Configurations/DevelopmentTeam.local.xcconfig"
 printf 'DEVELOPMENT_TEAM = %s\n' "$team_id" >"$snapshot_config"
 chmod 600 "$snapshot_config"
+prepare_xcode_signing_environment "$snapshot_config"
 verify_source_unchanged
 
 settings="$(xcodebuild \

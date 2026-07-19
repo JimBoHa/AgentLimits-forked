@@ -73,10 +73,31 @@ final class DistributionScriptTests: XCTestCase {
             XCTAssertTrue(script.contains("git -C \"$project_root\" archive"), name)
             XCTAssertTrue(script.contains("$build_root/AgentLimits.xcodeproj"), name)
             XCTAssertTrue(
+                script.contains("prepare_xcode_signing_environment \"$snapshot_config\""),
+                name
+            )
+            XCTAssertTrue(script.contains("PATH=\"/usr/bin:/bin:/usr/sbin:/sbin\""), name)
+            XCTAssertTrue(
                 script.contains("verify_development_team_config_unchanged"),
                 name
             )
         }
+    }
+
+    func testHostileXcodeEnvironmentIsReplaced() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let config = directory.appendingPathComponent("sanitized.xcconfig")
+        try Data("DEVELOPMENT_TEAM = ABCDE12345\n".utf8).write(to: config)
+        let command = #"source "$1"; export XCODE_XCCONFIG_FILE=/private/tmp/hostile.xcconfig; export TOOLCHAINS=hostile; export XCRUN_TOOLCHAIN_NAME=hostile; prepare_xcode_signing_environment "$2"; printf '%s\n%s\n%s\n' "$XCODE_XCCONFIG_FILE" "${TOOLCHAINS-unset}" "${XCRUN_TOOLCHAIN_NAME-unset}""#
+
+        let result = try runSigningConfigValidator(config: config, command: command)
+
+        XCTAssertEqual(result.status, 0, result.output)
+        XCTAssertEqual(
+            result.output.split(separator: "\n").map(String.init),
+            [config.path, "unset", "unset"]
+        )
     }
 
     func testMacPackageRequiresUsableDeveloperIDApplicationIdentity() throws {

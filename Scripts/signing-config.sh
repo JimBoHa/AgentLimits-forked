@@ -71,3 +71,11 @@ verify_development_team_config_unchanged() {
         return 65
     fi
 }
+
+prepare_xcode_signing_environment() {
+    local sanitized_config="$1"
+
+    XCODE_XCCONFIG_FILE="$sanitized_config"
+    export XCODE_XCCONFIG_FILE
+    unset TOOLCHAINS XCRUN_TOOLCHAIN_NAME
+}
