@@ -38,6 +38,10 @@
 
 - [ ] Archive records the intended Team and Developer ID Application identity.
 - [ ] App and widget signatures verify strictly; hardened runtime is present.
+- [ ] Every pinned Sparkle code object and architecture slice has the same Team,
+      Developer ID trust, hardened runtime, secure timestamp, expected
+      identifier, and no `get-task-allow`.
+- [ ] Sparkle has exactly the audited nested-code and symlink inventory.
 - [ ] App Group entitlement and provisioning profiles match the fork IDs.
 - [ ] No executable has `get-task-allow`.
 - [ ] App and widget are universal `arm64` + `x86_64`; dSYMs match UUIDs.
