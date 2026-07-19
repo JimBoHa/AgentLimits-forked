@@ -61,6 +61,7 @@ struct UpdateSettingsView: View {
                 set: { updateController.setAutomaticChecksEnabled($0) }
             )
         )
+        .disabled(!updateController.isConfigured)
     }
 
     private var releasesLink: some View {

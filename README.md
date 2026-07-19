@@ -9,7 +9,7 @@ AgentLimits is a macOS Sonoma+ menu bar app with Notification Center widgets. It
 ![](./images/agentlimit_sample.png)
 
 ## Download
-Download the latest build: [Download](https://github.com/Nihondo/AgentLimits/releases/latest/download/AgentLimits.zip)
+Fork releases: [JimBoHa/AgentLimits-forked releases](https://github.com/JimBoHa/AgentLimits-forked/releases)
 
 ## Quick Start (First-Time Setup)
 1. Run AgentLimits.
@@ -185,9 +185,4 @@ Snapshots are stored in the App Group container:
 
 ## Automatic Updates
 
-AgentLimits uses [Sparkle](https://sparkle-project.org/) for automatic updates.
-
-- **Startup check**: Checks for updates automatically when the app launches.
-- **Scheduled check**: Rechecks every 24 hours in the background.
-- **Manual check**: Open the **Update** tab in Settings or choose **Check for Updates...** from the menu bar menu.
-- Updates are downloaded and installed with one click after you confirm.
+Automatic updates are disabled in this fork until a fork-owned Sparkle appcast and EdDSA signing key are configured. Builds do not trust or install updates from the original project's update channel. Until fork signing is configured, use the fork's GitHub releases page.

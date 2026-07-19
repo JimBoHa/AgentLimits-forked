@@ -96,7 +96,7 @@ struct SettingsTabView: View {
         case .ccusage:
             CCUsageSettingsView(viewModel: tokenUsageViewModel)
         case .update:
-            UpdateSettingsView(releasesURL: URL(string: "https://github.com/Nihondo/AgentLimits/releases")!)
+            UpdateSettingsView(releasesURL: URL(string: "https://github.com/JimBoHa/AgentLimits-forked/releases")!)
         case .advanced:
             CLICommandSettingsView()
         }
