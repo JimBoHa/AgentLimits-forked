@@ -1229,10 +1229,6 @@ struct AppGroupSnapshotStore<Provider: SnapshotFileNaming, Snapshot: SnapshotDat
               let legacyDirectoryURL = snapshotDirectoryURL(accountID: nil) else {
             return
         }
-        try fileManager.createDirectory(
-            at: targetDirectoryURL,
-            withIntermediateDirectories: true
-        )
         let migrationMarkerURL = targetDirectoryURL.appendingPathComponent(
             ".legacy-migration-complete-\(provider.snapshotFileName)"
         )
@@ -1240,6 +1236,10 @@ struct AppGroupSnapshotStore<Provider: SnapshotFileNaming, Snapshot: SnapshotDat
         let legacyURL = legacyDirectoryURL.appendingPathComponent(provider.snapshotFileName)
 
         if visibilityStore.isSnapshotSuppressed(fileName: provider.snapshotFileName) {
+            try fileManager.createDirectory(
+                at: targetDirectoryURL,
+                withIntermediateDirectories: true
+            )
             visibilityStore.setSnapshotSuppressed(
                 true,
                 fileName: snapshotVisibilityKey(for: provider)
@@ -1254,9 +1254,16 @@ struct AppGroupSnapshotStore<Provider: SnapshotFileNaming, Snapshot: SnapshotDat
         }
 
         guard fileManager.fileExists(atPath: legacyURL.path) else {
-            try writeLegacyMigrationMarker(at: migrationMarkerURL)
+            // Avoid creating an empty account namespace merely to record that
+            // no legacy file currently exists. The account repository owns a
+            // durable external terminal marker for this case.
             return
         }
+
+        try fileManager.createDirectory(
+            at: targetDirectoryURL,
+            withIntermediateDirectories: true
+        )
 
         let data = try withSecurityScopedAccess(legacyURL) {
             try Data(contentsOf: legacyURL)
