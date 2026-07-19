@@ -229,7 +229,7 @@ final class CopilotBillingFetcher {
         return Int(bytes[index] - 48) * 10 + Int(bytes[index + 1] - 48)
     }
 
-    private static func isASCIIDigit(_ byte: UInt8) -> Bool {
+    nonisolated private static func isASCIIDigit(_ byte: UInt8) -> Bool {
         byte >= 48 && byte <= 57
     }
 
