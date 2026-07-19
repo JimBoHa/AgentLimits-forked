@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import XCTest
 @testable import AgentLimits
@@ -28,6 +29,19 @@ final class LaunchAgentManagerTests: XCTestCase {
         XCTAssertTrue(context.launchCtl.isLoaded)
         XCTAssertTrue(context.manager.isInstalled(for: context.schedule))
         XCTAssertEqual(context.launchCtl.bootstrapCallCount, 2)
+    }
+
+    func testFailedUpdateKeepsPreviouslyStoppedServiceStopped() throws {
+        let context = makeContext(initiallyLoaded: false)
+        defer { context.cleanup() }
+        let previousData = try context.seedPreviousPlist()
+        context.launchCtl.bootstrapStatuses = [78]
+
+        XCTAssertThrowsError(try context.manager.install(schedule: context.schedule))
+        XCTAssertEqual(try context.plistData(), previousData)
+        XCTAssertFalse(context.launchCtl.isLoaded)
+        XCTAssertFalse(context.manager.isInstalled(for: context.schedule))
+        XCTAssertEqual(context.launchCtl.bootstrapCallCount, 1)
     }
 
     func testStatus37IsFailureRatherThanFalseSuccess() throws {
@@ -102,6 +116,23 @@ final class LaunchAgentManagerTests: XCTestCase {
     }
 
     func testPlistRemovalFailureReloadsPriorService() throws {
+        let context = makeContext(
+            initiallyLoaded: true,
+            removeItem: { _ in
+                throw CocoaError(.fileWriteNoPermission)
+            }
+        )
+        defer { context.cleanup() }
+        let previousData = try context.seedPreviousPlist()
+
+        XCTAssertThrowsError(try context.manager.uninstall(schedule: context.schedule))
+        XCTAssertEqual(try context.plistData(), previousData)
+        XCTAssertTrue(context.launchCtl.isLoaded)
+        XCTAssertTrue(context.manager.isInstalled(for: context.schedule))
+        XCTAssertEqual(context.launchCtl.bootstrapCallCount, 1)
+    }
+
+    func testPlistRemovalFailureKeepsPriorStoppedServiceStopped() throws {
         let context = makeContext(removeItem: { _ in
             throw CocoaError(.fileWriteNoPermission)
         })
@@ -110,8 +141,55 @@ final class LaunchAgentManagerTests: XCTestCase {
 
         XCTAssertThrowsError(try context.manager.uninstall(schedule: context.schedule))
         XCTAssertEqual(try context.plistData(), previousData)
+        XCTAssertFalse(context.launchCtl.isLoaded)
+        XCTAssertFalse(context.manager.isInstalled(for: context.schedule))
+        XCTAssertEqual(context.launchCtl.bootstrapCallCount, 0)
+    }
+
+    func testUninstallDoesNotBootstrapPlistReplacedBySymlink() throws {
+        let redirectedData = Data("not a launch agent".utf8)
+        let context = makeContext(
+            initiallyLoaded: true,
+            removeItem: { url in
+                let home = url
+                    .deletingLastPathComponent()
+                    .deletingLastPathComponent()
+                    .deletingLastPathComponent()
+                let redirectedFile = home.appendingPathComponent("redirected.plist")
+                try FileManager.default.removeItem(at: url)
+                try redirectedData.write(to: redirectedFile)
+                try FileManager.default.createSymbolicLink(
+                    at: url,
+                    withDestinationURL: redirectedFile
+                )
+                throw CocoaError(.fileWriteNoPermission)
+            }
+        )
+        defer { context.cleanup() }
+        _ = try context.seedPreviousPlist()
+
+        XCTAssertThrowsError(try context.manager.uninstall(schedule: context.schedule)) {
+            XCTAssertTrue($0.localizedDescription.contains("rollback also failed"))
+        }
+        XCTAssertFalse(context.launchCtl.isLoaded)
+        XCTAssertEqual(context.launchCtl.bootstrapCallCount, 0)
+    }
+
+    func testUninstallRestoresVerifiedBytesBeforeReloadingAfterRace() throws {
+        let context = makeContext(
+            initiallyLoaded: true,
+            removeItem: { url in
+                try FileManager.default.removeItem(at: url)
+                try Data("unverified replacement".utf8).write(to: url)
+                throw CocoaError(.fileWriteNoPermission)
+            }
+        )
+        defer { context.cleanup() }
+        let previousData = try context.seedPreviousPlist()
+
+        XCTAssertThrowsError(try context.manager.uninstall(schedule: context.schedule))
+        XCTAssertEqual(try context.plistData(), previousData)
         XCTAssertTrue(context.launchCtl.isLoaded)
-        XCTAssertTrue(context.manager.isInstalled(for: context.schedule))
         XCTAssertEqual(context.launchCtl.bootstrapCallCount, 1)
     }
 
@@ -229,6 +307,210 @@ final class LaunchAgentManagerTests: XCTestCase {
         XCTAssertEqual(try context.plistPermissions(), 0o600)
     }
 
+    func testInstallRejectsSymlinkedLibraryDirectory() throws {
+        let context = makeContext()
+        defer { context.cleanup() }
+        let redirectedLibrary = context.home
+            .deletingLastPathComponent()
+            .appendingPathComponent("redirected-library-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: redirectedLibrary) }
+        try FileManager.default.createDirectory(
+            at: context.home,
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createDirectory(
+            at: redirectedLibrary,
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createSymbolicLink(
+            at: context.home.appendingPathComponent("Library"),
+            withDestinationURL: redirectedLibrary
+        )
+
+        XCTAssertThrowsError(try context.manager.install(schedule: context.schedule)) {
+            XCTAssertTrue($0.localizedDescription.contains("LaunchAgent storage"))
+        }
+        XCTAssertFalse(
+            FileManager.default.fileExists(
+                atPath: redirectedLibrary.appendingPathComponent("LaunchAgents").path
+            )
+        )
+    }
+
+    func testInstallRejectsSymlinkedLaunchAgentsDirectory() throws {
+        let context = makeContext()
+        defer { context.cleanup() }
+        let library = context.home.appendingPathComponent("Library")
+        let redirectedDirectory = context.home.appendingPathComponent("redirected-agents")
+        try FileManager.default.createDirectory(
+            at: library,
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createDirectory(
+            at: redirectedDirectory,
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createSymbolicLink(
+            at: library.appendingPathComponent("LaunchAgents"),
+            withDestinationURL: redirectedDirectory
+        )
+
+        XCTAssertThrowsError(try context.manager.install(schedule: context.schedule)) {
+            XCTAssertTrue($0.localizedDescription.contains("LaunchAgent storage"))
+        }
+        XCTAssertTrue(
+            try FileManager.default.contentsOfDirectory(atPath: redirectedDirectory.path)
+                .isEmpty
+        )
+    }
+
+    func testInstallRejectsSymlinkedPlistWithoutReadingTarget() throws {
+        let context = makeContext(initiallyLoaded: true)
+        defer { context.cleanup() }
+        let plistURL = try XCTUnwrap(context.manager.plistURL(for: context.schedule))
+        let redirectedFile = context.home.appendingPathComponent("redirected.plist")
+        let redirectedData = Data("must remain unchanged".utf8)
+        try FileManager.default.createDirectory(
+            at: plistURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try redirectedData.write(to: redirectedFile)
+        try FileManager.default.createSymbolicLink(
+            at: plistURL,
+            withDestinationURL: redirectedFile
+        )
+
+        XCTAssertThrowsError(try context.manager.install(schedule: context.schedule))
+        XCTAssertEqual(try Data(contentsOf: redirectedFile), redirectedData)
+        XCTAssertTrue(context.launchCtl.isLoaded)
+        XCTAssertEqual(context.launchCtl.bootoutCallCount, 0)
+    }
+
+    func testInstallRejectsFIFOTargetWithoutBlockingOrChangingService() throws {
+        let context = makeContext(initiallyLoaded: true)
+        defer { context.cleanup() }
+        let plistURL = try XCTUnwrap(context.manager.plistURL(for: context.schedule))
+        try FileManager.default.createDirectory(
+            at: plistURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        XCTAssertEqual(mkfifo(plistURL.path, 0o600), 0)
+
+        XCTAssertThrowsError(try context.manager.install(schedule: context.schedule)) {
+            XCTAssertTrue($0.localizedDescription.contains("LaunchAgent storage"))
+        }
+        XCTAssertTrue(context.launchCtl.isLoaded)
+        XCTAssertEqual(context.launchCtl.bootoutCallCount, 0)
+        XCTAssertEqual(context.launchCtl.bootstrapCallCount, 0)
+    }
+
+    func testInstallRejectsGroupWritableLaunchAgentsDirectory() throws {
+        let context = makeContext()
+        defer { context.cleanup() }
+        let directory = context.home.appendingPathComponent("Library/LaunchAgents")
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.setAttributes(
+            [.posixPermissions: NSNumber(value: 0o775)],
+            ofItemAtPath: directory.path
+        )
+
+        XCTAssertThrowsError(try context.manager.install(schedule: context.schedule)) {
+            XCTAssertTrue($0.localizedDescription.contains("LaunchAgent storage"))
+        }
+        XCTAssertFalse(context.manager.isPlistPresent(for: context.schedule))
+    }
+
+    func testInstallDoesNotRewriteSafeDirectoryPermissions() throws {
+        let context = makeContext()
+        defer { context.cleanup() }
+        let library = context.home.appendingPathComponent("Library")
+        let directory = library.appendingPathComponent("LaunchAgents")
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true
+        )
+        for url in [context.home, library, directory] {
+            try FileManager.default.setAttributes(
+                [.posixPermissions: NSNumber(value: 0o755)],
+                ofItemAtPath: url.path
+            )
+        }
+
+        try context.manager.install(schedule: context.schedule)
+
+        let attributes = try FileManager.default.attributesOfItem(
+            atPath: directory.path
+        )
+        let permissions = try XCTUnwrap(
+            attributes[.posixPermissions] as? NSNumber
+        ).intValue & 0o777
+        XCTAssertEqual(permissions, 0o755)
+    }
+
+    func testInstallRejectsDirectoryACLThatAllowsMutation() throws {
+        let context = makeContext()
+        defer { context.cleanup() }
+        let directory = context.home.appendingPathComponent("Library/LaunchAgents")
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true
+        )
+        try addACL(
+            "everyone allow add_file,delete_child",
+            to: directory
+        )
+
+        XCTAssertThrowsError(try context.manager.install(schedule: context.schedule)) {
+            XCTAssertTrue($0.localizedDescription.contains("LaunchAgent storage"))
+        }
+        XCTAssertFalse(context.manager.isPlistPresent(for: context.schedule))
+    }
+
+    func testInstallStripsInheritedReadACLBeforeWritingPlist() throws {
+        let context = makeContext()
+        defer { context.cleanup() }
+        let directory = context.home.appendingPathComponent("Library/LaunchAgents")
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true
+        )
+        try addACL("everyone allow read,file_inherit", to: directory)
+        XCTAssertTrue(try hasExtendedACLEntry(at: directory))
+
+        try context.manager.install(schedule: context.schedule)
+
+        let plistURL = try XCTUnwrap(context.manager.plistURL(for: context.schedule))
+        XCTAssertEqual(try context.plistPermissions(), 0o600)
+        XCTAssertFalse(try hasExtendedACLEntry(at: plistURL))
+    }
+
+    func testStagingFailurePreservesPriorPlistAndLoadedService() throws {
+        let context = makeContext(
+            initiallyLoaded: true,
+            beforePlistCommit: {
+                throw CocoaError(.fileWriteNoPermission)
+            }
+        )
+        defer { context.cleanup() }
+        let previousData = try context.seedPreviousPlist()
+
+        XCTAssertThrowsError(try context.manager.install(schedule: context.schedule))
+        XCTAssertEqual(try context.plistData(), previousData)
+        XCTAssertTrue(context.launchCtl.isLoaded)
+        XCTAssertEqual(context.launchCtl.bootoutCallCount, 0)
+        XCTAssertEqual(context.launchCtl.bootstrapCallCount, 0)
+        let directory = try XCTUnwrap(
+            context.manager.plistURL(for: context.schedule)
+        ).deletingLastPathComponent()
+        XCTAssertEqual(
+            try FileManager.default.contentsOfDirectory(atPath: directory.path),
+            [context.schedule.plistFileName]
+        )
+    }
+
     func testInstallRejectsSymlinkedLogDirectory() throws {
         let context = makeContext()
         defer { context.cleanup() }
@@ -278,7 +560,8 @@ final class LaunchAgentManagerTests: XCTestCase {
 
     private func makeContext(
         initiallyLoaded: Bool = false,
-        removeItem: ((URL) throws -> Void)? = nil
+        removeItem: ((URL) throws -> Void)? = nil,
+        beforePlistCommit: (() throws -> Void)? = nil
     ) -> TestContext {
         let home = FileManager.default.temporaryDirectory
             .appendingPathComponent("AgentLimitsLaunchAgentTests-\(UUID().uuidString)")
@@ -286,7 +569,8 @@ final class LaunchAgentManagerTests: XCTestCase {
         let manager = LaunchAgentManager(
             homeDirectory: home,
             launchCtlRunner: launchCtl.run(arguments:),
-            removeItem: removeItem
+            removeItem: removeItem,
+            beforePlistCommit: beforePlistCommit
         )
         return TestContext(
             home: home,
@@ -298,6 +582,53 @@ final class LaunchAgentManagerTests: XCTestCase {
                 isEnabled: true
             )
         )
+    }
+
+    private func addACL(_ entry: String, to url: URL) throws {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/chmod")
+        process.arguments = ["+a", entry, url.path]
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        try process.run()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else {
+            throw CocoaError(
+                .fileWriteUnknown,
+                userInfo: [NSFilePathErrorKey: url.path]
+            )
+        }
+    }
+
+    private func hasExtendedACLEntry(at url: URL) throws -> Bool {
+        let descriptor = open(
+            url.path,
+            O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK
+        )
+        guard descriptor >= 0 else {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
+        defer { _ = Darwin.close(descriptor) }
+
+        guard let acl = acl_get_fd_np(descriptor, ACL_TYPE_EXTENDED) else {
+            if errno == ENOENT {
+                return false
+            }
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
+        defer { _ = acl_free(UnsafeMutableRawPointer(acl)) }
+        var entry: acl_entry_t?
+        if acl_get_entry(
+            acl,
+            Int32(ACL_FIRST_ENTRY.rawValue),
+            &entry
+        ) == 0 {
+            return entry != nil
+        }
+        if errno == EINVAL {
+            return false
+        }
+        throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
     }
 }
 
