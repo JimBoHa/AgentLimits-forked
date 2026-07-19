@@ -23,6 +23,8 @@
   Apple notarization issue logs.
 - Made signed macOS releases verify the exact pinned Sparkle nested-code
   inventory, provenance, runtime, timestamps, slices, and entitlements.
+- Made signed macOS releases reopen and validate every final ZIP, PKG, and DMG
+  container before checksums are recorded.
 
 Original AgentLimits was created by Nihondo and remains credited under the MIT
 license: https://github.com/Nihondo/AgentLimits

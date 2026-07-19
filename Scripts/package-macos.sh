@@ -30,6 +30,10 @@ source "$script_dir/signing-config.sh"
 source "$script_dir/notary-log.sh"
 # shellcheck disable=SC1091
 source "$script_dir/macos-code-signing.sh"
+# shellcheck disable=SC1091
+source "$script_dir/macos-container-validation.sh"
+validated_container_app=""
+validated_dmg_device=""
 
 if [[ ! -x "$developer_dir/usr/bin/xcodebuild" ]]; then
     echo "Xcode not found at $developer_dir" >&2
@@ -67,9 +71,25 @@ verify_source_unchanged() {
 
 mkdir -p "$output_dir"
 output_dir="$(cd "$output_dir" && pwd)"
-work_dir="$(mktemp -d "${TMPDIR:-/tmp}/AgentLimits-macos-package.XXXXXX")"
+work_dir="$(mktemp -d "/private/tmp/AgentLimits-macos-package.XXXXXX")"
+dmg_attached_device=""
+dmg_mount=""
 
 cleanup() {
+    if [[ -n "${dmg_attached_device:-}" ]]; then
+        if ! hdiutil detach "$dmg_attached_device" -quiet 2>/dev/null \
+            && [[ -n "${dmg_mount:-}" ]]; then
+            hdiutil detach "$dmg_mount" -quiet 2>/dev/null || true
+        fi
+    elif [[ -n "${dmg_mount:-}" ]] \
+        && mount | grep -Fq " on $dmg_mount "; then
+        hdiutil detach "$dmg_mount" -quiet 2>/dev/null || true
+    fi
+    if [[ -n "${dmg_mount:-}" ]] \
+        && mount | grep -Fq " on $dmg_mount "; then
+        echo "DMG remains mounted; preserving temporary work at $work_dir" >&2
+        return
+    fi
     if [[ -n "${work_dir:-}" && -d "$work_dir" \
         && "$work_dir" == *"/AgentLimits-macos-package."* ]]; then
         rm -rf "$work_dir"
@@ -611,6 +631,107 @@ submit_notary() {
     validate_accepted_notary_log "$log" "$submission_id" || exit $?
 }
 
+code_directory_hash() {
+    local code="$1"
+    local architecture="$2"
+    local label="$3"
+    local details
+    local hash
+
+    details="$(codesign -d -a "$architecture" -vvv "$code" 2>&1)"
+    hash="$(printf '%s\n' "$details" \
+        | sed -n 's/^CDHash=//p' | head -1)"
+    if [[ ! "$hash" =~ ^[0-9a-f]{40}$ ]]; then
+        echo "$label has no valid $architecture Code Directory hash" >&2
+        return 1
+    fi
+    printf '%s\n' "$hash"
+}
+
+verify_packaged_app() {
+    local candidate_app="$1"
+    local label="$2"
+    local candidate_widget="$candidate_app/Contents/PlugIns/AgentLimitsWidgetExtension.appex"
+    local candidate_info="$candidate_app/Contents/Info.plist"
+    local candidate_widget_info="$candidate_widget/Contents/Info.plist"
+    local candidate_executable
+    local candidate_widget_executable
+    local candidate_architectures
+    local candidate_widget_architectures
+    local architecture
+    local actual_hash
+    local expected_hash
+
+    if [[ -L "$candidate_app" || ! -d "$candidate_app" \
+        || -L "$candidate_widget" || ! -d "$candidate_widget" ]]; then
+        echo "$label is missing the regular app or widget bundle" >&2
+        exit 1
+    fi
+    codesign --verify --all-architectures --deep --strict --verbose=4 \
+        "$candidate_app"
+    verify_developer_id_signature \
+        "$candidate_app" \
+        "$label" \
+        "com.jimboha.agentlimits.macos" \
+        "$application_identity"
+    verify_developer_id_signature \
+        "$candidate_widget" \
+        "$label widget" \
+        "com.jimboha.agentlimits.macos.widget" \
+        "$application_identity"
+
+    if [[ "$(plutil -extract CFBundleShortVersionString raw \
+            "$candidate_info")" != "$version" \
+        || "$(plutil -extract CFBundleVersion raw "$candidate_info")" \
+            != "$build" \
+        || "$(plutil -extract CFBundleShortVersionString raw \
+            "$candidate_widget_info")" != "$version" \
+        || "$(plutil -extract CFBundleVersion raw \
+            "$candidate_widget_info")" != "$build" ]]; then
+        echo "$label version metadata changed in its container" >&2
+        exit 1
+    fi
+    candidate_executable="$(plutil -extract CFBundleExecutable raw \
+        "$candidate_info")"
+    candidate_widget_executable="$(plutil -extract CFBundleExecutable raw \
+        "$candidate_widget_info")"
+    candidate_architectures="$(lipo -archs \
+        "$candidate_app/Contents/MacOS/$candidate_executable")"
+    candidate_widget_architectures="$(lipo -archs \
+        "$candidate_widget/Contents/MacOS/$candidate_widget_executable")"
+    validate_universal_binary_architectures \
+        "$candidate_architectures" "$label" || exit $?
+    validate_universal_binary_architectures \
+        "$candidate_widget_architectures" "$label widget" || exit $?
+
+    for architecture in arm64 x86_64; do
+        actual_hash="$(code_directory_hash \
+            "$candidate_app" "$architecture" "$label")"
+        case "$architecture" in
+            arm64) expected_hash="$reference_app_arm64_cdhash" ;;
+            x86_64) expected_hash="$reference_app_x86_64_cdhash" ;;
+        esac
+        if [[ "$actual_hash" != "$expected_hash" ]]; then
+            echo "$label $architecture signature changed in its container" >&2
+            exit 1
+        fi
+
+        actual_hash="$(code_directory_hash \
+            "$candidate_widget" "$architecture" "$label widget")"
+        case "$architecture" in
+            arm64) expected_hash="$reference_widget_arm64_cdhash" ;;
+            x86_64) expected_hash="$reference_widget_x86_64_cdhash" ;;
+        esac
+        if [[ "$actual_hash" != "$expected_hash" ]]; then
+            echo "$label widget $architecture signature changed in its container" >&2
+            exit 1
+        fi
+    done
+
+    xcrun stapler validate "$candidate_app"
+    spctl --assess --type execute --verbose=4 "$candidate_app"
+}
+
 base_name="AgentLimitsForked-$version-$build-macOS"
 temporary_notary_zip="$work_dir/$base_name-notary.zip"
 ditto -c -k --sequesterRsrc --keepParent "$app" "$temporary_notary_zip"
@@ -619,11 +740,23 @@ echo "Notarizing the app..."
 submit_notary "$temporary_notary_zip" app
 xcrun stapler staple "$app"
 xcrun stapler validate "$app"
+reference_app_arm64_cdhash="$(code_directory_hash "$app" arm64 "macOS app")"
+reference_app_x86_64_cdhash="$(code_directory_hash "$app" x86_64 "macOS app")"
+reference_widget_arm64_cdhash="$(code_directory_hash \
+    "$widget" arm64 "macOS widget")"
+reference_widget_x86_64_cdhash="$(code_directory_hash \
+    "$widget" x86_64 "macOS widget")"
 
 zip="$output_dir/$base_name.zip"
 dmg="$output_dir/$base_name.dmg"
 pkg="$output_dir/$base_name.pkg"
 ditto -c -k --sequesterRsrc --keepParent "$app" "$zip"
+zip_extract="$work_dir/zip-extract"
+mkdir -m 700 "$zip_extract"
+ditto -x -k "$zip" "$zip_extract"
+validate_zip_container_root "$zip_extract" || exit $?
+zip_app="$validated_container_app"
+verify_packaged_app "$zip_app" "ZIP app"
 
 echo "Building and signing installer package..."
 productbuild \
@@ -642,6 +775,20 @@ echo "Notarizing installer package..."
 submit_notary "$pkg" pkg
 xcrun stapler staple "$pkg"
 xcrun stapler validate "$pkg"
+final_package_signature="$(pkgutil --check-signature "$pkg" 2>&1)"
+if ! printf '%s\n' "$final_package_signature" \
+        | grep -Fq "$installer_identity" \
+    || ! printf '%s\n' "$final_package_signature" \
+        | grep -Fq 'Signed with a trusted timestamp'; then
+    echo "Final PKG lacks the expected identity or trusted timestamp" >&2
+    exit 1
+fi
+pkg_expanded="$work_dir/pkg-expanded"
+pkgutil --expand-full "$pkg" "$pkg_expanded"
+validate_product_package_layout \
+    "$pkg_expanded" "$version" "$build" || exit $?
+pkg_app="$validated_container_app"
+verify_packaged_app "$pkg_app" "PKG payload app"
 
 dmg_root="$work_dir/dmg-root"
 mkdir -p "$dmg_root"
@@ -677,6 +824,41 @@ submit_notary "$dmg" dmg
 xcrun stapler staple "$dmg"
 xcrun stapler validate "$dmg"
 codesign --verify --strict --verbose=4 "$dmg"
+hdiutil verify "$dmg" >/dev/null
+
+dmg_mount="$work_dir/dmg-mount"
+mkdir -m 700 "$dmg_mount"
+dmg_mount="$(cd "$dmg_mount" && pwd -P)"
+dmg_attach_plist="$work_dir/dmg-attach.plist"
+dmg_attach_json="$work_dir/dmg-attach.json"
+dmg_disk_plist="$work_dir/dmg-disk.plist"
+dmg_disk_json="$work_dir/dmg-disk.json"
+hdiutil attach \
+    -readonly \
+    -nobrowse \
+    -noautoopen \
+    -mountpoint "$dmg_mount" \
+    -plist \
+    "$dmg" \
+    >"$dmg_attach_plist"
+plutil -lint "$dmg_attach_plist" >/dev/null
+plutil -convert json -o "$dmg_attach_json" "$dmg_attach_plist"
+resolve_dmg_attached_device "$dmg_attach_json" "$dmg_mount" || exit $?
+dmg_attached_device="$validated_dmg_device"
+diskutil info -plist "$dmg_attached_device" >"$dmg_disk_plist"
+plutil -lint "$dmg_disk_plist" >/dev/null
+plutil -convert json -o "$dmg_disk_json" "$dmg_disk_plist"
+validate_dmg_attachment_metadata \
+    "$dmg_attach_json" "$dmg_disk_json" "$dmg_mount" || exit $?
+if [[ "$validated_dmg_device" != "$dmg_attached_device" ]]; then
+    echo "DMG device identity changed during validation" >&2
+    exit 1
+fi
+validate_dmg_container_root "$dmg_mount" || exit $?
+mounted_app="$validated_container_app"
+verify_packaged_app "$mounted_app" "DMG app"
+hdiutil detach "$dmg_attached_device" -quiet
+dmg_attached_device=""
 
 codesign --verify --all-architectures --deep --strict --verbose=4 "$app"
 pkgutil --check-signature "$pkg"
@@ -709,6 +891,7 @@ Sparkle: $sparkle_version ($sparkle_revision), build $sparkle_build
 Developer ID verification: passed
 Nested Sparkle Developer ID verification: passed
 Notarization and stapling: passed for app, PKG, and DMG
+Final ZIP, PKG, and DMG reopen verification: passed
 EOF
 
 echo "Signed and notarized macOS artifacts created at: $output_dir"

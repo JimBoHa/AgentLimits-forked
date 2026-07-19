@@ -116,6 +116,10 @@ also verifies the exact pinned Sparkle code inventory, bundle metadata,
 symlinks, same-Team Developer ID trust, hardened runtime, secure timestamps,
 universal slices, and absence of `get-task-allow` independently in both
 architectures. The workflow never performs an unsafe recursive ad-hoc re-sign.
+It then reopens the final ZIP, expanded product PKG, and read-only DMG; rejects
+unexpected layout or installer metadata; and rechecks the contained app's
+per-slice Code Directory hashes, signatures, stapled ticket, and Gatekeeper
+assessment before writing checksums.
 
 ## Release records
 

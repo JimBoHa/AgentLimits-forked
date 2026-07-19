@@ -461,6 +461,212 @@ final class DistributionScriptTests: XCTestCase {
         XCTAssertTrue(script.contains("codesign --verify --all-architectures"))
     }
 
+    func testZIPAndDMGLayoutsRejectExtraOrRedirectedContent() throws {
+        let zipRoot = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: zipRoot) }
+        let zipApp = zipRoot.appendingPathComponent("AgentLimitsForked.app")
+        try FileManager.default.createDirectory(at: zipApp, withIntermediateDirectories: false)
+        let zipCommand = #"source "$1"; validate_zip_container_root "$2" || exit $?; printf '%s\n' "$validated_container_app""#
+        var result = try runMacContainerHelper(
+            command: zipCommand,
+            arguments: [zipRoot.path]
+        )
+        XCTAssertEqual(result.status, 0, result.output)
+        XCTAssertEqual(result.output.trimmingCharacters(in: .whitespacesAndNewlines), zipApp.path)
+
+        try Data("unexpected".utf8).write(
+            to: zipRoot.appendingPathComponent("unexpected.txt")
+        )
+        result = try runMacContainerHelper(
+            command: zipCommand,
+            arguments: [zipRoot.path]
+        )
+        XCTAssertNotEqual(result.status, 0, result.output)
+
+        let symlinkRoot = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: symlinkRoot) }
+        try FileManager.default.createSymbolicLink(
+            atPath: symlinkRoot.appendingPathComponent("AgentLimitsForked.app").path,
+            withDestinationPath: "/Applications"
+        )
+        result = try runMacContainerHelper(
+            command: zipCommand,
+            arguments: [symlinkRoot.path]
+        )
+        XCTAssertNotEqual(result.status, 0, result.output)
+
+        let dmgRoot = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: dmgRoot) }
+        let dmgApp = dmgRoot.appendingPathComponent("AgentLimitsForked.app")
+        try FileManager.default.createDirectory(at: dmgApp, withIntermediateDirectories: false)
+        try FileManager.default.createSymbolicLink(
+            atPath: dmgRoot.appendingPathComponent("Applications").path,
+            withDestinationPath: "/Applications"
+        )
+        let dmgCommand = #"source "$1"; validate_dmg_container_root "$2" || exit $?; printf '%s\n' "$validated_container_app""#
+        result = try runMacContainerHelper(
+            command: dmgCommand,
+            arguments: [dmgRoot.path]
+        )
+        XCTAssertEqual(result.status, 0, result.output)
+        XCTAssertEqual(result.output.trimmingCharacters(in: .whitespacesAndNewlines), dmgApp.path)
+
+        try FileManager.default.removeItem(
+            at: dmgRoot.appendingPathComponent("Applications")
+        )
+        try FileManager.default.createSymbolicLink(
+            atPath: dmgRoot.appendingPathComponent("Applications").path,
+            withDestinationPath: "/tmp"
+        )
+        result = try runMacContainerHelper(
+            command: dmgCommand,
+            arguments: [dmgRoot.path]
+        )
+        XCTAssertNotEqual(result.status, 0, result.output)
+    }
+
+    func testExpandedProductPackageLayoutAndMetadataFailClosed() throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try createProductPackageFixture(at: root)
+        let command = #"source "$1"; validate_product_package_layout "$2" 1.1.6 16 || exit $?; printf '%s\n' "$validated_container_app""#
+
+        var result = try runMacContainerHelper(
+            command: command,
+            arguments: [root.path]
+        )
+        XCTAssertEqual(result.status, 0, result.output)
+        XCTAssertTrue(result.output.contains("Payload/AgentLimitsForked.app"))
+
+        let packageInfo = root
+            .appendingPathComponent("com.jimboha.agentlimits.macos.pkg/PackageInfo")
+        let validPackageInfo = try String(contentsOf: packageInfo, encoding: .utf8)
+        try Data(
+            validPackageInfo.replacingOccurrences(
+                of: "install-location=\"/Applications\"",
+                with: "install-location=\"/tmp\""
+            ).utf8
+        ).write(to: packageInfo)
+        result = try runMacContainerHelper(
+            command: command,
+            arguments: [root.path]
+        )
+        XCTAssertNotEqual(result.status, 0, result.output)
+
+        try Data(validPackageInfo.utf8).write(to: packageInfo)
+        try FileManager.default.createDirectory(
+            at: root.appendingPathComponent(
+                "com.jimboha.agentlimits.macos.pkg/Scripts"
+            ),
+            withIntermediateDirectories: false
+        )
+        result = try runMacContainerHelper(
+            command: command,
+            arguments: [root.path]
+        )
+        XCTAssertNotEqual(result.status, 0, result.output)
+    }
+
+    func testDMGAttachmentMetadataRequiresOneReadOnlyExpectedVolume() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let attach = directory.appendingPathComponent("attach.json")
+        let disk = directory.appendingPathComponent("disk.json")
+        let mount = "/private/tmp/AgentLimitsDMG"
+        let attachObject: [String: Any] = [
+            "system-entities": [
+                [
+                    "content-hint": "Apple_HFS",
+                    "mount-point": mount,
+                    "dev-entry": "/dev/disk4s1",
+                    "volume-kind": "hfs"
+                ],
+                [
+                    "content-hint": "GUID_partition_scheme",
+                    "dev-entry": "/dev/disk4"
+                ]
+            ]
+        ]
+        let validDiskObject: [String: Any] = [
+            "MountPoint": mount,
+            "DeviceNode": "/dev/disk4s1",
+            "FilesystemType": "hfs",
+            "FilesystemName": "HFS+",
+            "VolumeName": "AgentLimits Forked",
+            "WritableVolume": false,
+            "Writable": false,
+            "WritableMedia": false
+        ]
+        try JSONSerialization.data(withJSONObject: attachObject).write(to: attach)
+        try JSONSerialization.data(withJSONObject: validDiskObject).write(to: disk)
+        let command = #"source "$1"; validate_dmg_attachment_metadata "$2" "$3" "$4" || exit $?; printf '%s\n' "$validated_dmg_device""#
+
+        var result = try runMacContainerHelper(
+            command: command,
+            arguments: [attach.path, disk.path, mount]
+        )
+        XCTAssertEqual(result.status, 0, result.output)
+        XCTAssertEqual(result.output.trimmingCharacters(in: .whitespacesAndNewlines), "/dev/disk4s1")
+
+        var writableDiskObject = validDiskObject
+        writableDiskObject["WritableVolume"] = true
+        try JSONSerialization.data(withJSONObject: writableDiskObject).write(to: disk)
+        result = try runMacContainerHelper(
+            command: command,
+            arguments: [attach.path, disk.path, mount]
+        )
+        XCTAssertNotEqual(result.status, 0, result.output)
+
+        try JSONSerialization.data(withJSONObject: validDiskObject).write(to: disk)
+        result = try runMacContainerHelper(
+            command: command,
+            arguments: [attach.path, disk.path, "/private/tmp/OtherMount"]
+        )
+        XCTAssertNotEqual(result.status, 0, result.output)
+    }
+
+    func testFinalContainersReopenBeforeChecksums() throws {
+        let script = try packageScript()
+        let zipCreate = try offset(
+            of: #"ditto -c -k --sequesterRsrc --keepParent "$app" "$zip""#,
+            in: script
+        )
+        let zipExtract = try offset(of: #"ditto -x -k "$zip""#, in: script)
+        let pkgStaple = try offset(of: #"xcrun stapler staple "$pkg""#, in: script)
+        let pkgExpand = try offset(of: #"pkgutil --expand-full "$pkg""#, in: script)
+        let dmgStaple = try offset(of: #"xcrun stapler staple "$dmg""#, in: script)
+        let postStapleVerify = try offset(
+            of: #"hdiutil verify "$dmg""#,
+            in: script,
+            after: dmgStaple
+        )
+        let dmgAttach = try offset(of: "hdiutil attach", in: script)
+        let dmgDetach = try offset(
+            of: #"hdiutil detach "$dmg_attached_device" -quiet"#,
+            in: script,
+            after: dmgAttach
+        )
+        let checksums = try offset(of: "> SHA256SUMS", in: script)
+
+        XCTAssertLessThan(zipCreate, zipExtract)
+        XCTAssertLessThan(pkgStaple, pkgExpand)
+        XCTAssertLessThan(dmgStaple, postStapleVerify)
+        XCTAssertLessThan(postStapleVerify, dmgAttach)
+        XCTAssertLessThan(dmgAttach, dmgDetach)
+        XCTAssertLessThan(dmgDetach, checksums)
+        XCTAssertTrue(script.contains("source \"$script_dir/macos-container-validation.sh\""))
+        XCTAssertTrue(script.contains("Signed with a trusted timestamp"))
+        XCTAssertTrue(script.contains("verify_packaged_app \"$zip_app\""))
+        XCTAssertTrue(script.contains("verify_packaged_app \"$pkg_app\""))
+        XCTAssertTrue(script.contains("verify_packaged_app \"$mounted_app\""))
+        XCTAssertTrue(script.contains("-readonly"))
+        XCTAssertTrue(
+            script.contains(
+                "mktemp -d \"/private/tmp/AgentLimits-macos-package.XXXXXX\""
+            )
+        )
+    }
+
     private func packageScript() throws -> String {
         try releaseScript(named: "package-macos.sh")
     }
@@ -511,6 +717,44 @@ final class DistributionScriptTests: XCTestCase {
                 withDestinationPath: target
             )
         }
+    }
+
+    private func createProductPackageFixture(at root: URL) throws {
+        let component = root.appendingPathComponent(
+            "com.jimboha.agentlimits.macos.pkg"
+        )
+        let payload = component.appendingPathComponent("Payload")
+        try FileManager.default.createDirectory(
+            at: payload.appendingPathComponent("AgentLimitsForked.app"),
+            withIntermediateDirectories: true
+        )
+        try Data("bom".utf8).write(to: component.appendingPathComponent("Bom"))
+        let distribution = """
+        <?xml version="1.0" encoding="utf-8"?>
+        <installer-gui-script minSpecVersion="2">
+          <pkg-ref id="com.jimboha.agentlimits.macos">
+            <bundle-version>
+              <bundle CFBundleShortVersionString="1.1.6" CFBundleVersion="16" id="com.jimboha.agentlimits.macos" path="AgentLimitsForked.app"/>
+            </bundle-version>
+          </pkg-ref>
+          <product id="com.jimboha.agentlimits.macos" version="1.1.6"/>
+          <options customize="never" require-scripts="false" hostArchitectures="arm64,x86_64"/>
+          <choice id="com.jimboha.agentlimits.macos" customLocation="/Applications"/>
+          <pkg-ref id="com.jimboha.agentlimits.macos" version="1.1.6">#com.jimboha.agentlimits.macos.pkg</pkg-ref>
+        </installer-gui-script>
+        """
+        try Data(distribution.utf8).write(
+            to: root.appendingPathComponent("Distribution")
+        )
+        let packageInfo = """
+        <?xml version="1.0" encoding="utf-8"?>
+        <pkg-info relocatable="false" identifier="com.jimboha.agentlimits.macos" version="1.1.6" install-location="/Applications" auth="root" postinstall-action="none">
+          <bundle path="./AgentLimitsForked.app" id="com.jimboha.agentlimits.macos" CFBundleShortVersionString="1.1.6" CFBundleVersion="16"/>
+        </pkg-info>
+        """
+        try Data(packageInfo.utf8).write(
+            to: component.appendingPathComponent("PackageInfo")
+        )
     }
 
     private func setPermissions(_ permissions: Int, for url: URL) throws {
@@ -582,6 +826,32 @@ final class DistributionScriptTests: XCTestCase {
             command,
             "mac-code-signing-test",
             repositoryRoot.appendingPathComponent("Scripts/macos-code-signing.sh").path
+        ] + arguments
+        let output = Pipe()
+        process.standardOutput = output
+        process.standardError = output
+        try process.run()
+        process.waitUntilExit()
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        return (
+            process.terminationStatus,
+            String(decoding: data, as: UTF8.self)
+        )
+    }
+
+    private func runMacContainerHelper(
+        command: String,
+        arguments: [String]
+    ) throws -> (status: Int32, output: String) {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/bash")
+        process.arguments = [
+            "-c",
+            command,
+            "mac-container-test",
+            repositoryRoot.appendingPathComponent(
+                "Scripts/macos-container-validation.sh"
+            ).path
         ] + arguments
         let output = Pipe()
         process.standardOutput = output
