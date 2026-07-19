@@ -41,6 +41,10 @@ final class WakeUpCommandBuilderTests: XCTestCase {
 
         XCTAssertFalse(command.contains("Command:"))
         XCTAssertFalse(command.contains("echo \"--api-key"))
+        XCTAssertTrue(command.contains("$HOME/.agentlimits-forked"))
+        XCTAssertTrue(command.contains("[ -L \"$working_directory\" ]"))
+        XCTAssertTrue(command.contains("chmod 700 \"$working_directory\""))
+        XCTAssertTrue(command.contains("[ -O \"$working_directory\" ]"))
     }
 
     private func runLoggedCommand(

@@ -1,5 +1,10 @@
-// Shared config for code signing.
-// Put your local Apple Developer Team ID in DevelopmentTeam.local.xcconfig (gitignored).
-//  1. Create `Configurations/DevelopmentTeam.local.xcconfig`
+// Safe, committed defaults for fork-owned signing and runtime namespaces.
+// Keep DEVELOPMENT_TEAM empty in source control. To sign locally:
+//  1. Create `Configurations/DevelopmentTeam.local.xcconfig` (gitignored)
 //  2. Write `DEVELOPMENT_TEAM = <YOUR_TEAM_ID>` inside it
+CODE_SIGN_STYLE = Automatic
+DEVELOPMENT_TEAM =
+AGENTLIMITS_APP_GROUP_IDENTIFIER = group.com.jimboha.agentlimits.macos
+AGENTLIMITS_URL_SCHEME = agentlimits-forked
+
 #include? "DevelopmentTeam.local.xcconfig"

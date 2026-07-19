@@ -111,7 +111,7 @@ Pacemaker shows a time-based usage benchmark to help you stay on track.
 10. For a Copilot account, use the key button beside **Current Sessions** (or in **Manage…**) to save a fine-grained PAT or GitHub App user access token. Grant only repository **Agent tasks: Read** permission. The credential stays in this device’s non-synchronizing Keychain; the API is currently a GitHub public preview.
 11. Use **Clear Data** to remove login data, website storage, cached usage snapshots, and saved session credentials for all managed accounts if sign-in gets stuck or you want a full reset.
 
-Accounts migrated from older AgentLimits versions may temporarily share the legacy website session. The app warns before removing a migrated account because doing so signs out every migrated account that still shares that session; newly added isolated accounts are unaffected. Removing a Copilot account also deletes its account-scoped session credential from Keychain.
+Within this fork's namespace, accounts upgraded from a compatible legacy account schema may temporarily share one website session. The app warns before removing such an account because doing so signs out every account that still shares that session; newly added isolated accounts are unaffected. Removing a Copilot account also deletes its account-scoped session credential from Keychain.
 
 Current-session counts are fetched independently for each named Copilot account. A missing, rejected, or under-scoped credential is shown as unavailable—not zero—and failed refreshes label prior counts as last known instead of presenting them as current.
 
@@ -158,8 +158,9 @@ Current-session counts are fetched independently for each named Copilot account.
 - Runs scheduled commands:
   - `codex exec --skip-git-repo-check "hello"`
   - `claude -p "hello"`
-- LaunchAgent plist: `~/Library/LaunchAgents/com.dmng.agentlimit.wakeup-*.plist`
-- Logs: `/tmp/agentlimit-wakeup-*.log`
+- LaunchAgent plist: `~/Library/LaunchAgents/com.jimboha.agentlimits.macos.wakeup-*.plist`
+- Logs: `~/Library/Logs/AgentLimitsForked/agentlimits-forked-wakeup-*.log`
+- Working directory: `~/.agentlimits-forked/`
 - Additional CLI arguments are supported per provider.
 
 ## Claude Code Status Line Script
@@ -173,7 +174,7 @@ Current-session counts are fetched independently for each named Copilot account.
 ## Advanced: Storage (App Group)
 Snapshots are stored in the App Group container:
 ```
-~/Library/Group Containers/group.com.dmng.agentlimit/Library/Application Support/AgentLimit/
+~/Library/Group Containers/group.com.jimboha.agentlimits.macos/Library/Application Support/AgentLimitsForked/
 ├── accounts/<account-uuid>/
 │   ├── usage_snapshot*.json
 │   └── token_usage_*.json
@@ -184,6 +185,10 @@ Snapshots are stored in the App Group container:
 ├── token_usage_claude.json
 └── token_usage_copilot.json
 ```
+
+### Moving from the original app or an older fork build
+
+This fork installs as `AgentLimitsForked.app` and deliberately uses its own bundle, App Group, deep-link, Keychain service, LaunchAgent, log, and working-directory namespaces. It can coexist with the original app and never reads or migrates the original app's container. A fresh login is required for every provider account after switching; recreate app settings and Wake Up schedules too. Disable old Wake Up schedules in the app that created them; this fork does not modify another app's LaunchAgents.
 
 ## Notes / Troubleshooting
 - Internal APIs may change without notice.
@@ -200,4 +205,4 @@ Snapshots are stored in the App Group container:
 
 ## Automatic Updates
 
-Automatic updates are disabled in this fork until a fork-owned Sparkle appcast and EdDSA signing key are configured. Builds do not trust or install updates from the original project's update channel. Until fork signing is configured, use the fork's GitHub releases page.
+Automatic updates are hard-disabled in the current fork source until a fork-owned Sparkle appcast and EdDSA signing key are implemented and reviewed. Builds do not trust or install updates from the original project's update channel. Until that separate trust path exists, use the fork's GitHub releases page.

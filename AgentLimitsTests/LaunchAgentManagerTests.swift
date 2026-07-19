@@ -188,7 +188,11 @@ final class LaunchAgentManagerTests: XCTestCase {
             attributes[.posixPermissions] as? NSNumber
         ).intValue & 0o777
         XCTAssertEqual(permissions, 0o700)
-        XCTAssertTrue(logURL.path.hasPrefix(context.home.path + "/Library/Logs/AgentLimits/"))
+        XCTAssertTrue(
+            logURL.path.hasPrefix(
+                context.home.path + "/Library/Logs/AgentLimitsForked/"
+            )
+        )
 
         let plist = try XCTUnwrap(
             try PropertyListSerialization.propertyList(
@@ -198,6 +202,16 @@ final class LaunchAgentManagerTests: XCTestCase {
         )
         XCTAssertEqual(plist["StandardOutPath"] as? String, logURL.path)
         XCTAssertEqual(plist["StandardErrorPath"] as? String, logURL.path)
+        let workingDirectory = WakeUpWorkingDirectoryResolver.workingDirectory(
+            homeDirectory: context.home
+        )
+        let workingAttributes = try FileManager.default.attributesOfItem(
+            atPath: workingDirectory.path
+        )
+        let workingPermissions = try XCTUnwrap(
+            workingAttributes[.posixPermissions] as? NSNumber
+        ).intValue & 0o777
+        XCTAssertEqual(workingPermissions, 0o700)
         let programArguments = try XCTUnwrap(plist["ProgramArguments"] as? [String])
         XCTAssertEqual(
             Array(programArguments.prefix(3)),
@@ -219,12 +233,35 @@ final class LaunchAgentManagerTests: XCTestCase {
             withIntermediateDirectories: true
         )
         try FileManager.default.createSymbolicLink(
-            at: logsParent.appendingPathComponent("AgentLimits"),
+            at: logsParent.appendingPathComponent("AgentLimitsForked"),
             withDestinationURL: redirectedLogs
         )
 
         XCTAssertThrowsError(try context.manager.install(schedule: context.schedule)) { error in
             XCTAssertTrue(error.localizedDescription.contains("private, user-owned"))
+        }
+        XCTAssertFalse(context.manager.isPlistPresent(for: context.schedule))
+    }
+
+    func testInstallRejectsSymlinkedWorkingDirectory() throws {
+        let context = makeContext()
+        defer { context.cleanup() }
+        let redirectedDirectory = context.home.appendingPathComponent("redirected-work")
+        try FileManager.default.createDirectory(
+            at: redirectedDirectory,
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createDirectory(
+            at: context.home,
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createSymbolicLink(
+            at: context.home.appendingPathComponent(".agentlimits-forked"),
+            withDestinationURL: redirectedDirectory
+        )
+
+        XCTAssertThrowsError(try context.manager.install(schedule: context.schedule)) {
+            XCTAssertTrue($0.localizedDescription.contains("private, user-owned"))
         }
         XCTAssertFalse(context.manager.isPlistPresent(for: context.schedule))
     }

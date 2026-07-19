@@ -32,8 +32,10 @@ final class StatuslineScriptTests: XCTestCase {
         defer { try? fileManager.removeItem(at: temporaryHome) }
 
         let snapshotDirectory = temporaryHome
-            .appendingPathComponent("Library/Group Containers/group.com.dmng.agentlimit")
-            .appendingPathComponent("Library/Application Support/AgentLimit")
+            .appendingPathComponent(
+                "Library/Group Containers/group.com.jimboha.agentlimits.macos"
+            )
+            .appendingPathComponent("Library/Application Support/AgentLimitsForked")
         try fileManager.createDirectory(
             at: snapshotDirectory,
             withIntermediateDirectories: true

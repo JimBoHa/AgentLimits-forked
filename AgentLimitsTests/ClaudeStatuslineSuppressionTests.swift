@@ -11,8 +11,10 @@ final class ClaudeStatuslineSuppressionTests: XCTestCase {
 
         let homeDirectory = temporaryRoot.appendingPathComponent("home", isDirectory: true)
         let snapshotURL = homeDirectory
-            .appendingPathComponent("Library/Group Containers/group.com.dmng.agentlimit")
-            .appendingPathComponent("Library/Application Support/AgentLimit")
+            .appendingPathComponent(
+                "Library/Group Containers/group.com.jimboha.agentlimits.macos"
+            )
+            .appendingPathComponent("Library/Application Support/AgentLimitsForked")
             .appendingPathComponent("usage_snapshot_claude.json")
         try fileManager.createDirectory(
             at: snapshotURL.deletingLastPathComponent(),

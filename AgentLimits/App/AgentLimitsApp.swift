@@ -7,12 +7,12 @@ import AppKit
 
 // MARK: - Deep Link Handling
 
-/// Handles agentlimits:// URL scheme for widget tap actions
+/// Handles fork-owned widget tap URLs.
 private enum DeepLinkHandler {
     /// Handles widget tap action based on user settings
     @MainActor
     static func handleURL(_ url: URL) {
-        guard url.scheme == "agentlimits",
+        guard url.scheme == DeepLinkConfig.scheme,
               let components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
             return
         }

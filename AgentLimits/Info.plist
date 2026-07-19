@@ -2,14 +2,16 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>AgentLimitsAppGroupIdentifier</key>
+	<string>$(AGENTLIMITS_APP_GROUP_IDENTIFIER)</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
 			<key>CFBundleURLName</key>
-			<string>com.dmng.agentlimit.open-usage</string>
+			<string>com.jimboha.agentlimits.macos.open-usage</string>
 			<key>CFBundleURLSchemes</key>
 			<array>
-				<string>agentlimits</string>
+				<string>$(AGENTLIMITS_URL_SCHEME)</string>
 			</array>
 		</dict>
 	</array>
