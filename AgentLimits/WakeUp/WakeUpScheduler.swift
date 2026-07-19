@@ -622,12 +622,9 @@ final class LaunchAgentManager {
         // Compose LaunchAgent plist payload.
         let plist: [String: Any] = [
             "Label": schedule.launchAgentLabel,
-            "ProgramArguments": [
-                ShellPathResolver.resolveLoginShellPath(),
-                "-l",
-                "-c",
-                fullCommand
-            ],
+            "ProgramArguments": [GeneratedCommandShell.executablePath]
+                + GeneratedCommandShell.optionArguments
+                + [fullCommand],
             "StartCalendarInterval": calendarIntervals,
             "StandardOutPath": logURL(for: schedule).path,
             "StandardErrorPath": logURL(for: schedule).path,
@@ -718,7 +715,7 @@ final class CLIExecutor {
         timeout: TimeInterval = 30,
         fileManager: FileManager = .default,
         homeDirectory: URL? = nil,
-        shellPath: String = ShellPathResolver.resolveLoginShellPath()
+        shellPath: String = ShellExecutor.defaultShellPath
     ) {
         self.shellExecutor = ShellExecutor(timeout: timeout, shellPath: shellPath)
         self.fileManager = fileManager

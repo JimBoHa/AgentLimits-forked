@@ -5,6 +5,17 @@ import XCTest
 final class ShellExecutorTests: XCTestCase {
     private let shellPath = "/bin/zsh"
 
+    func testProductionWrapperInterpreterIsFixedZshWithoutStartupFiles() async throws {
+        XCTAssertEqual(ShellExecutor.defaultShellPath, "/bin/zsh")
+        XCTAssertEqual(GeneratedCommandShell.optionArguments, ["-f", "-c"])
+
+        let output = try await ShellExecutor(timeout: 1).executeString(
+            command: "[[ -n $ZSH_VERSION ]] && print -r -- fixed-zsh"
+        )
+
+        XCTAssertEqual(output, "fixed-zsh\n")
+    }
+
     func testDrainsLargeConcurrentStandardOutputAndError() async throws {
         let byteCount = 2_500_000
         let executor = makeExecutor(timeout: 5)

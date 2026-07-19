@@ -198,6 +198,11 @@ final class LaunchAgentManagerTests: XCTestCase {
         )
         XCTAssertEqual(plist["StandardOutPath"] as? String, logURL.path)
         XCTAssertEqual(plist["StandardErrorPath"] as? String, logURL.path)
+        let programArguments = try XCTUnwrap(plist["ProgramArguments"] as? [String])
+        XCTAssertEqual(
+            Array(programArguments.prefix(3)),
+            ["/bin/zsh", "-f", "-c"]
+        )
     }
 
     func testInstallRejectsSymlinkedLogDirectory() throws {
