@@ -23,9 +23,11 @@ final class AppSharedState: ObservableObject {
 
     private var isStarted = false
     private var cancellables: Set<AnyCancellable> = []
+    private var observedAccountIDs: Set<UUID> = []
 
     init() {
-        let pool = UsageWebViewPool()
+        let accountStore = ProviderAccountStore.shared
+        let pool = UsageWebViewPool(accountStore: accountStore)
         let tokenViewModel = TokenUsageViewModel()
         self.webViewPool = pool
         self.tokenUsageViewModel = tokenViewModel
@@ -33,8 +35,12 @@ final class AppSharedState: ObservableObject {
             webViewPool: pool,
             tokenUsageViewModel: tokenViewModel
         )
-        observePageReadyChanges()
-        observeCookieChanges()
+        for store in pool.webViewStores {
+            observeWebViewStore(store)
+        }
+        pool.onWebViewStoreCreated = { [weak self] store in
+            self?.observeWebViewStore(store)
+        }
         let storedMode = UsageDisplayMode.makeSelectableMode(
             from: UserDefaults.standard.string(forKey: UserDefaultsKeys.displayMode)
         )
@@ -77,28 +83,24 @@ final class AppSharedState: ObservableObject {
         )
     }
 
-    /// Sets up Combine subscriptions to observe page-ready state changes
-    private func observePageReadyChanges() {
-        for provider in UsageProvider.allCases {
-            let store = webViewPool.getWebViewStore(for: provider)
-            store.$isPageReady
-                .removeDuplicates()
-                .sink { [weak self] isReady in
-                    self?.viewModel.handlePageReadyChange(for: provider, isReady: isReady)
-                }
-                .store(in: &cancellables)
-        }
-    }
+    /// Observes every account store once. Events from a background sibling are
+    /// ignored unless that account is currently selected for its provider.
+    private func observeWebViewStore(_ store: WebViewStore) {
+        guard observedAccountIDs.insert(store.account.id).inserted else { return }
+        store.$isPageReady
+            .removeDuplicates()
+            .sink { [weak self] isReady in
+                self?.viewModel.handlePageReadyChange(
+                    for: store,
+                    isReady: isReady
+                )
+            }
+            .store(in: &cancellables)
 
-    /// Observes cookie changes to trigger login-based navigation
-    private func observeCookieChanges() {
-        for provider in UsageProvider.allCases {
-            let store = webViewPool.getWebViewStore(for: provider)
-            store.$cookieChangeToken
-                .sink { [weak self] _ in
-                    self?.viewModel.handleCookieChange(for: provider)
-                }
-                .store(in: &cancellables)
-        }
+        store.$cookieChangeToken
+            .sink { [weak self] _ in
+                self?.viewModel.handleCookieChange(for: store)
+            }
+            .store(in: &cancellables)
     }
 }

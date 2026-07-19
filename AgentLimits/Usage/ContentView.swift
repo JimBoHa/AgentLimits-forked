@@ -375,7 +375,7 @@ struct ContentView: View {
                             // Set up login check callback for auto-close.
                             store.onPopupNavigationFinished = { [weak viewModel] _ in
                                 guard let viewModel else { return false }
-                                return await viewModel.checkLoginStatus(for: store.provider)
+                                return await viewModel.checkLoginStatus(using: store)
                             }
                         } else {
                             // Close sheet when popup is dismissed programmatically.
@@ -554,7 +554,17 @@ private struct UsageWindowRow: View {
 }
 
 #Preview {
-    let pool = UsageWebViewPool()
+    let previewDefaults = UserDefaults(
+        suiteName: "AgentLimits.ContentViewPreview"
+    )!
+    let accountStore = ProviderAccountStore(
+        userDefaults: previewDefaults,
+        key: "preview_accounts"
+    )
+    let pool = UsageWebViewPool(
+        accountStore: accountStore,
+        websiteDataStoreProvider: { _ in .nonPersistent() }
+    )
     let viewModel = UsageViewModel(webViewPool: pool)
     return ContentView(viewModel: viewModel, webViewPool: pool)
 }

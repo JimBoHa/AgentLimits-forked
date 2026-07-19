@@ -12,7 +12,9 @@ import WebKit
 /// Tracks page-ready state and handles popup windows for OAuth.
 @MainActor
 final class WebViewStore: ObservableObject {
+    let account: ProviderAccount
     let webView: WKWebView
+    let websiteDataStore: WKWebsiteDataStore
     let usageURL: URL
     let provider: UsageProvider
     @Published var isPageReady = false
@@ -41,16 +43,22 @@ final class WebViewStore: ObservableObject {
         dataClearContinuation != nil
     }
 
-    init(initialProvider: UsageProvider = .chatgptCodex, loadImmediately: Bool = true) {
-        self.provider = initialProvider
+    init(
+        account: ProviderAccount,
+        websiteDataStore: WKWebsiteDataStore,
+        loadImmediately: Bool = true
+    ) {
+        self.account = account
+        self.provider = account.provider
+        self.websiteDataStore = websiteDataStore
         self.isSuspended = !loadImmediately
         let configuration = WKWebViewConfiguration()
-        configuration.websiteDataStore = .default()
+        configuration.websiteDataStore = websiteDataStore
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = true
         let cookieStore = configuration.websiteDataStore.httpCookieStore
         self.webView = WKWebView(frame: .zero, configuration: configuration)
-        self.usageURL = initialProvider.usageURL
-        self.targetHost = initialProvider.usageHost
+        self.usageURL = account.provider.usageURL
+        self.targetHost = account.provider.usageHost
         self.cookieStore = cookieStore
         let coordinator = WebViewCoordinator(store: self)
         self.coordinator = coordinator
@@ -234,6 +242,13 @@ final class WebViewStore: ObservableObject {
         guard !isDataClearInProgress, !isSuspended else { return false }
         guard isNavigationAllowed?() != false else { return false }
         return webView === self.webView || webView === popupWebView
+    }
+
+    /// OAuth popups must inherit the opener account's cookie boundary even if
+    /// WebKit supplies a configuration with a different default.
+    func configurePopup(_ configuration: WKWebViewConfiguration) {
+        configuration.websiteDataStore = websiteDataStore
+        configuration.preferences.javaScriptCanOpenWindowsAutomatically = true
     }
 
     func navigationDidFinish(in webView: WKWebView, navigation: WKNavigation?) {
@@ -425,7 +440,7 @@ extension WebViewCoordinator: WKUIDelegate {
         guard let store else { return nil }
         guard store.shouldCreatePopup(from: webView) else { return nil }
         guard navigationAction.targetFrame == nil else { return nil }
-        configuration.preferences.javaScriptCanOpenWindowsAutomatically = true
+        store.configurePopup(configuration)
         let popup = WKWebView(frame: .zero, configuration: configuration)
         popup.navigationDelegate = self
         popup.uiDelegate = self

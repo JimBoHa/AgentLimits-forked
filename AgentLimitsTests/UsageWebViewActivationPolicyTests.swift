@@ -1,3 +1,4 @@
+import Foundation
 import WebKit
 import XCTest
 @testable import AgentLimits
@@ -6,27 +7,64 @@ import XCTest
 final class UsageWebViewActivationPolicyTests: XCTestCase {
     func testForegroundProviderSurvivesBackgroundPolicyUpdateDuringClear() {
         var policy = UsageWebViewActivationPolicy()
-        policy.setBackgroundProviders([.chatgptCodex, .claudeCode])
-        policy.setForegroundProvider(.githubCopilot)
+        let codexID = UUID()
+        let claudeID = UUID()
+        let copilotID = UUID()
+        policy.setBackgroundAccounts([
+            .chatgptCodex: codexID,
+            .claudeCode: claudeID
+        ])
+        policy.setForegroundAccountID(copilotID, for: .githubCopilot)
 
-        policy.setBackgroundProviders([])
+        policy.setBackgroundAccounts([:])
 
-        XCTAssertEqual(policy.activeProviders, [.githubCopilot])
+        XCTAssertEqual(policy.activeAccountIDs, [copilotID])
     }
 
     func testClosingSettingsRestoresOnlyLatestBackgroundPolicy() {
         var policy = UsageWebViewActivationPolicy()
-        policy.setBackgroundProviders([.chatgptCodex])
-        policy.setForegroundProvider(.githubCopilot)
+        let codexID = UUID()
+        let claudeID = UUID()
+        let copilotID = UUID()
+        policy.setBackgroundAccounts([.chatgptCodex: codexID])
+        policy.setForegroundAccountID(copilotID, for: .githubCopilot)
 
-        policy.setBackgroundProviders([.claudeCode])
-        policy.clearForegroundProvider()
+        policy.setBackgroundAccounts([.claudeCode: claudeID])
+        policy.clearForegroundAccount()
 
-        XCTAssertEqual(policy.activeProviders, [.claudeCode])
+        XCTAssertEqual(policy.activeAccountIDs, [claudeID])
+    }
+
+    func testForegroundSelectionReplacesBackgroundSiblingForSameProvider() {
+        var policy = UsageWebViewActivationPolicy()
+        let personalID = UUID()
+        let workID = UUID()
+        policy.setBackgroundAccounts([.chatgptCodex: personalID])
+
+        policy.setForegroundAccountID(workID, for: .chatgptCodex)
+        policy.clearForegroundAccount()
+
+        XCTAssertEqual(policy.activeAccountIDs, [workID])
+    }
+
+    func testBackgroundUpdateCannotReactivateForegroundSibling() {
+        var policy = UsageWebViewActivationPolicy()
+        let personalID = UUID()
+        let workID = UUID()
+        policy.setForegroundAccountID(personalID, for: .chatgptCodex)
+
+        policy.setBackgroundAccounts([.chatgptCodex: workID])
+
+        XCTAssertEqual(policy.activeAccountIDs, [personalID])
+        policy.clearForegroundAccount()
+        XCTAssertEqual(policy.activeAccountIDs, [workID])
     }
 
     func testPoolBlocksResumeAndReloadUntilClearFinishes() throws {
-        let pool = UsageWebViewPool(providers: [.chatgptCodex, .claudeCode])
+        let pool = UsageWebViewPool(
+            providers: [.chatgptCodex, .claudeCode],
+            accountStore: makeAccountStore()
+        )
         let codexStore = pool.getWebViewStore(for: .chatgptCodex)
         let claudeStore = pool.getWebViewStore(for: .claudeCode)
         let clear = try XCTUnwrap(pool.beginDataClear())
@@ -39,7 +77,7 @@ final class UsageWebViewActivationPolicyTests: XCTestCase {
         pool.clearForegroundProvider()
         XCTAssertTrue(claudeStore.isSuspended)
 
-        XCTAssertTrue(pool.finishDataClear(clear))
+        XCTAssertTrue(pool.cancelDataClear(clear))
         XCTAssertTrue(codexStore.isSuspended)
         XCTAssertFalse(claudeStore.isSuspended)
 
@@ -51,6 +89,7 @@ final class UsageWebViewActivationPolicyTests: XCTestCase {
         let websiteDataClearer = SuspendingWebsiteDataClearer()
         let pool = UsageWebViewPool(
             providers: [.chatgptCodex],
+            accountStore: makeAccountStore(),
             websiteDataClearer: websiteDataClearer
         )
         let store = pool.getWebViewStore(for: .chatgptCodex)
@@ -95,6 +134,7 @@ final class UsageWebViewActivationPolicyTests: XCTestCase {
         let websiteDataClearer = SuspendingWebsiteDataClearer()
         let pool = UsageWebViewPool(
             providers: [.chatgptCodex],
+            accountStore: makeAccountStore(),
             websiteDataClearer: websiteDataClearer
         )
         let store = pool.getWebViewStore(for: .chatgptCodex)
@@ -136,6 +176,16 @@ final class UsageWebViewActivationPolicyTests: XCTestCase {
         }
         XCTFail("WebView did not finish loading \(expectedScheme)")
     }
+
+    private func makeAccountStore() -> ProviderAccountStore {
+        let defaults = UserDefaults(
+            suiteName: "UsageWebViewActivationPolicyTests-\(UUID().uuidString)"
+        )!
+        return ProviderAccountStore(
+            userDefaults: defaults,
+            key: "test_accounts"
+        )
+    }
 }
 
 @MainActor
@@ -144,7 +194,7 @@ private final class SuspendingWebsiteDataClearer: WebsiteDataClearing {
     private var startWaiters: [CheckedContinuation<Void, Never>] = []
     private var finishContinuation: CheckedContinuation<Void, Never>?
 
-    func clearAllWebsiteData() async throws {
+    func clearAllWebsiteData(in dataStore: WKWebsiteDataStore) async throws {
         hasStarted = true
         let waiters = startWaiters
         startWaiters.removeAll()
