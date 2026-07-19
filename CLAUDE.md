@@ -31,9 +31,9 @@ xcodebuild test -scheme AgentLimits -destination 'platform=macOS'
 3. `UsageViewModel` manages auto-refresh (configurable 1-10 minutes) and per-provider state
 4. `UsageSnapshotStore` persists usage snapshots as JSON under App Group container
    - A cached usage snapshot is also the login-history signal used to decide whether a provider WebView may stay active in the background.
-5. `CCUsageFetcher` runs CLI to fetch token usage:
-   - Codex: `npx -y ccusage@latest codex daily`
-   - Claude Code: `npx -y ccusage@latest claude daily`
+5. `CCUsageFetcher` runs a preinstalled CLI to fetch token usage:
+   - Codex: `ccusage codex daily`
+   - Claude Code: `ccusage claude daily`
 6. `CopilotBillingFetcher` fetches billing usage via WebView JS (triggered after Copilot entitlement fetch):
    - API: `https://github.com/settings/billing/usage_table?group=0&period=3&product=&query=`
 7. `TokenUsageViewModel` manages auto-refresh (configurable 1-10 minutes) and snapshot persistence
@@ -179,7 +179,7 @@ xcodebuild test -scheme AgentLimits -destination 'platform=macOS'
 - Usage color settings (donut + status colors) live in Notification settings
 
 #### Advanced Settings (CLI Paths / Scripts / Widget Tap / Menu Bar)
-- Full path overrides for `codex`, `claude`, `npx`
+- Full path overrides for `codex`, `claude`, `ccusage`
 - PATH resolution results shown in UI
 - Bundled status line script path shown with copy action
 - Widget tap action: open website (default) or refresh data
@@ -249,7 +249,7 @@ Monthly-only usage windows:
 | `ccusage_settings` | ccusage settings (JSON) |
 | `cli_path_codex` | Full path override for codex |
 | `cli_path_claude` | Full path override for claude |
-| `cli_path_npx` | Full path override for npx |
+| `cli_path_ccusage` | Full path override for ccusage |
 | `usage_color_donut` | Donut ring color (widget) |
 | `usage_color_donut_use_status` | Donut uses usage status colors |
 | `usage_color_green` | Usage normal color |

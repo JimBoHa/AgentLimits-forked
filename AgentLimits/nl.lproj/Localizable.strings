@@ -154,10 +154,10 @@
 "cliPaths.sectionTitle" = "CLI-opdrachtpaden";
 "cliPaths.codex" = "codex-pad";
 "cliPaths.claude" = "claude-pad";
-"cliPaths.npx" = "npx-pad";
+"cliPaths.ccusage" = "ccusage-pad";
 "cliPaths.codex.placeholder" = "bijv. /opt/homebrew/bin/codex";
 "cliPaths.claude.placeholder" = "bijv. /opt/homebrew/bin/claude";
-"cliPaths.npx.placeholder" = "bijv. /opt/homebrew/bin/npx";
+"cliPaths.ccusage.placeholder" = "bijv. /opt/homebrew/bin/ccusage";
 "cliPaths.note" = "Wijzigingen worden van kracht bij de volgende CLI-uitvoering.";
 "cliPaths.resolvedLabel" = "Opgelost:";
 "cliPaths.notFound" = "Niet gevonden";

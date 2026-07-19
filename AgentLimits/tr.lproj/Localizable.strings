@@ -154,10 +154,10 @@
 "cliPaths.sectionTitle" = "CLI Komut Yolları";
 "cliPaths.codex" = "codex yolu";
 "cliPaths.claude" = "claude yolu";
-"cliPaths.npx" = "npx yolu";
+"cliPaths.ccusage" = "ccusage yolu";
 "cliPaths.codex.placeholder" = "örn. /opt/homebrew/bin/codex";
 "cliPaths.claude.placeholder" = "örn. /opt/homebrew/bin/claude";
-"cliPaths.npx.placeholder" = "örn. /opt/homebrew/bin/npx";
+"cliPaths.ccusage.placeholder" = "örn. /opt/homebrew/bin/ccusage";
 "cliPaths.note" = "Değişiklikler bir sonraki CLI çalıştırmada geçerli olur.";
 "cliPaths.resolvedLabel" = "Çözümlendi:";
 "cliPaths.notFound" = "Bulunamadı";

@@ -38,7 +38,7 @@ enum SharedUserDefaultsKeys {
 enum CLICommandPathKeys {
     static let codex = "cli_path_codex"
     static let claude = "cli_path_claude"
-    static let npx = "cli_path_npx"
+    static let ccusage = "cli_path_ccusage"
 }
 
 /// Normalizes and validates CLI command path overrides.
@@ -65,7 +65,7 @@ enum CLICommandPathValidator {
 enum CLICommandKind: String, CaseIterable, Identifiable {
     case codex
     case claude
-    case npx
+    case ccusage
 
     var id: String { rawValue }
 }
@@ -96,8 +96,8 @@ enum CLICommandPathResolver {
             return CLICommandPathKeys.codex
         case .claude:
             return CLICommandPathKeys.claude
-        case .npx:
-            return CLICommandPathKeys.npx
+        case .ccusage:
+            return CLICommandPathKeys.ccusage
         }
     }
 }

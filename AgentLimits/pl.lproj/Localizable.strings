@@ -154,10 +154,10 @@
 "cliPaths.sectionTitle" = "Ścieżki poleceń CLI";
 "cliPaths.codex" = "ścieżka codex";
 "cliPaths.claude" = "ścieżka claude";
-"cliPaths.npx" = "ścieżka npx";
+"cliPaths.ccusage" = "ścieżka ccusage";
 "cliPaths.codex.placeholder" = "np. /opt/homebrew/bin/codex";
 "cliPaths.claude.placeholder" = "np. /opt/homebrew/bin/claude";
-"cliPaths.npx.placeholder" = "np. /opt/homebrew/bin/npx";
+"cliPaths.ccusage.placeholder" = "np. /opt/homebrew/bin/ccusage";
 "cliPaths.note" = "Zmiany zaczną obowiązywać przy następnym uruchomieniu CLI.";
 "cliPaths.resolvedLabel" = "Rozwiązano:";
 "cliPaths.notFound" = "Nie znaleziono";

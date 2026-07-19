@@ -154,10 +154,10 @@
 "cliPaths.sectionTitle" = "CLI 命令路径";
 "cliPaths.codex" = "codex 路径";
 "cliPaths.claude" = "claude 路径";
-"cliPaths.npx" = "npx 路径";
+"cliPaths.ccusage" = "ccusage 路径";
 "cliPaths.codex.placeholder" = "例如：/opt/homebrew/bin/codex";
 "cliPaths.claude.placeholder" = "例如：/opt/homebrew/bin/claude";
-"cliPaths.npx.placeholder" = "例如：/opt/homebrew/bin/npx";
+"cliPaths.ccusage.placeholder" = "例如：/opt/homebrew/bin/ccusage";
 "cliPaths.note" = "更改将在下次 CLI 执行时生效。";
 "cliPaths.resolvedLabel" = "已解析：";
 "cliPaths.notFound" = "未找到";

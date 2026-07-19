@@ -155,10 +155,10 @@
 "cliPaths.sectionTitle" = "CLI-Befehls-Pfade";
 "cliPaths.codex" = "codex-Pfad";
 "cliPaths.claude" = "claude-Pfad";
-"cliPaths.npx" = "npx-Pfad";
+"cliPaths.ccusage" = "ccusage-Pfad";
 "cliPaths.codex.placeholder" = "z. B. /opt/homebrew/bin/codex";
 "cliPaths.claude.placeholder" = "z. B. /opt/homebrew/bin/claude";
-"cliPaths.npx.placeholder" = "z. B. /opt/homebrew/bin/npx";
+"cliPaths.ccusage.placeholder" = "z. B. /opt/homebrew/bin/ccusage";
 "cliPaths.note" = "Änderungen werden beim nächsten CLI-Aufruf wirksam.";
 "cliPaths.resolvedLabel" = "Aufgelöst:";
 "cliPaths.notFound" = "Nicht gefunden";

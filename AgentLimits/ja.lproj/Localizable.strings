@@ -155,10 +155,10 @@
 "cliPaths.sectionTitle" = "CLI コマンドのフルパス";
 "cliPaths.codex" = "codex パス";
 "cliPaths.claude" = "claude パス";
-"cliPaths.npx" = "npx パス";
+"cliPaths.ccusage" = "ccusage パス";
 "cliPaths.codex.placeholder" = "例: /opt/homebrew/bin/codex";
 "cliPaths.claude.placeholder" = "例: /opt/homebrew/bin/claude";
-"cliPaths.npx.placeholder" = "例: /opt/homebrew/bin/npx";
+"cliPaths.ccusage.placeholder" = "例: /opt/homebrew/bin/ccusage";
 "cliPaths.note" = "変更内容は次回のCLI実行から反映されます。";
 "cliPaths.resolvedLabel" = "解決結果:";
 "cliPaths.notFound" = "見つかりません";

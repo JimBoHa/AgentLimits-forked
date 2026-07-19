@@ -154,10 +154,10 @@
 "cliPaths.sectionTitle" = "Chemins des commandes CLI";
 "cliPaths.codex" = "chemin codex";
 "cliPaths.claude" = "chemin claude";
-"cliPaths.npx" = "chemin npx";
+"cliPaths.ccusage" = "chemin ccusage";
 "cliPaths.codex.placeholder" = "ex. /opt/homebrew/bin/codex";
 "cliPaths.claude.placeholder" = "ex. /opt/homebrew/bin/claude";
-"cliPaths.npx.placeholder" = "ex. /opt/homebrew/bin/npx";
+"cliPaths.ccusage.placeholder" = "ex. /opt/homebrew/bin/ccusage";
 "cliPaths.note" = "Les changements prennent effet à la prochaine exécution CLI.";
 "cliPaths.resolvedLabel" = "Résolu :";
 "cliPaths.notFound" = "Introuvable";
