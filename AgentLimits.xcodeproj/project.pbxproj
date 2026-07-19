@@ -15,6 +15,10 @@
 		B20000000000000000000007 /* agentlimits.icon in Resources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000005 /* agentlimits.icon */; };
 		D30000000000000000000014 /* AgentLimitsWatch.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = D30000000000000000000001 /* AgentLimitsWatch.app */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		D30000000000000000000016 /* agentlimits.icon in Resources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000005 /* agentlimits.icon */; };
+		E40000000000000000000003 /* LICENSE in Resources */ = {isa = PBXBuildFile; fileRef = E40000000000000000000001 /* LICENSE */; };
+		E40000000000000000000004 /* THIRD_PARTY_NOTICES.md in Resources */ = {isa = PBXBuildFile; fileRef = E40000000000000000000002 /* THIRD_PARTY_NOTICES.md */; };
+		E40000000000000000000005 /* LICENSE in Resources */ = {isa = PBXBuildFile; fileRef = E40000000000000000000001 /* LICENSE */; };
+		E40000000000000000000006 /* LICENSE in Resources */ = {isa = PBXBuildFile; fileRef = E40000000000000000000001 /* LICENSE */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -109,6 +113,8 @@
 		D30000000000000000000001 /* AgentLimitsWatch.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = AgentLimitsWatch.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		D30000000000000000000002 /* AgentLimitsWatchTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AgentLimitsWatchTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		D30000000000000000000003 /* AgentLimitsWatchUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AgentLimitsWatchUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		E40000000000000000000001 /* LICENSE */ = {isa = PBXFileReference; lastKnownFileType = text; path = LICENSE; sourceTree = SOURCE_ROOT; };
+		E40000000000000000000002 /* THIRD_PARTY_NOTICES.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = THIRD_PARTY_NOTICES.md; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -285,6 +291,8 @@
 		42D45B812EF649FD00A51EA8 = {
 			isa = PBXGroup;
 			children = (
+				E40000000000000000000001 /* LICENSE */,
+				E40000000000000000000002 /* THIRD_PARTY_NOTICES.md */,
 				7A1B2C3D4E5F678901234568 /* Configurations */,
 				42D45B8C2EF649FE00A51EA8 /* AgentLimits */,
 				01349414347243A598E67AD9 /* AgentLimitsShared */,
@@ -659,6 +667,8 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				E40000000000000000000003 /* LICENSE in Resources */,
+				E40000000000000000000004 /* THIRD_PARTY_NOTICES.md in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -674,6 +684,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				B20000000000000000000007 /* agentlimits.icon in Resources */,
+				E40000000000000000000005 /* LICENSE in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -696,6 +707,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				D30000000000000000000016 /* agentlimits.icon in Resources */,
+				E40000000000000000000006 /* LICENSE in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

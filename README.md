@@ -11,6 +11,12 @@ AgentLimits is a macOS Sonoma+ menu bar app with Notification Center widgets, pl
 ## Download
 Fork releases: [JimBoHa/AgentLimits-forked releases](https://github.com/JimBoHa/AgentLimits-forked/releases)
 
+No signed 1.1.6 release is published yet. Unsigned preflight packages are not
+safe public installers. Maintainers should follow the [Apple distribution
+guide](Distribution/README.md) and complete the [release
+checklist](Distribution/RELEASE_CHECKLIST.md) before publishing. The dependent
+Watch app is embedded in the iOS IPA; there is no separate Watch installer.
+
 ## Quick Start (First-Time Setup)
 1. Run AgentLimits.
 2. Add widgets in Notification Center.
@@ -67,7 +73,7 @@ iOS archive rather than distributed as a separate installer.
 - Status colors in the menu bar are automatically darkened or lightened to match the current menu bar text color.
 - Pacemaker indicator: optionally shows `<used>%↑` when over pace
 - Toggle icon visibility per provider in **Usage** settings
-- **Hide menu bar icon**: completely hides the menu bar icon. While hidden, double-click the app icon in Finder (or open via Spotlight / `open -a AgentLimits`) while it is still running to temporarily show the icon and open Settings. Closing the Settings window hides the icon again.
+- **Hide menu bar icon**: completely hides the menu bar icon. While hidden, double-click the app icon in Finder (or open via Spotlight / `open -a AgentLimitsForked`) while it is still running to temporarily show the icon and open Settings. Closing the Settings window hides the icon again.
 - Provider display order (Codex / Claude Code / Copilot) is configurable in **Usage** settings (**Display Order**)
 
 ### Menu Dashboard
