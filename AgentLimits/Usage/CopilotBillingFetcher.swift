@@ -67,29 +67,53 @@ final class CopilotBillingFetcher {
     // MARK: - Snapshot Building
 
     /// Aggregates billing entries into today/thisWeek/thisMonth periods and daily entries.
-    private func buildSnapshot(from response: CopilotBillingResponse) -> TokenUsageSnapshot {
-        let calendar = Calendar.current
-        let now = Date()
+    func buildSnapshot(
+        from response: CopilotBillingResponse,
+        now: Date = Date(),
+        calendar: Calendar = .current
+    ) -> TokenUsageSnapshot {
+        let localCalendar = Self.localGregorianCalendar(matching: calendar)
+        let endOfCurrentMoment = now
+        let startOfToday = localCalendar.startOfDay(for: now)
+        let startOfWeek = SundayWeekStartResolver.resolve(
+            for: now,
+            calendar: localCalendar
+        )
+        let localMonthComponents = localCalendar.dateComponents([.year, .month], from: now)
+        let startOfLocalMonth = localCalendar.date(from: localMonthComponents) ?? startOfToday
+        let startOfBillingMonth = Self.startOfUTCBillingMonth(for: now)
 
-        // Filter to premium request entries only
-        let premiumEntries = response.usage.filter { $0.sku == "copilot_premium_request" }
+        // Invalid and future timestamps must not contribute to any current period.
+        let premiumEntries = response.usage.compactMap { entry -> DatedBillingEntry? in
+            guard entry.sku == "copilot_premium_request",
+                  let date = Self.parseUsageDate(entry.usageAt),
+                  date <= endOfCurrentMoment else {
+                return nil
+            }
+            return DatedBillingEntry(entry: entry, date: date)
+        }
 
-        // Group entries by local date
-        let groupedByDate = groupEntriesByLocalDate(premiumEntries, calendar: calendar)
+        let billingMonthEntries = premiumEntries.filter { $0.date >= startOfBillingMonth }
+        let localMonthEntries = premiumEntries.filter { $0.date >= startOfLocalMonth }
 
         // Calculate today's usage
-        let todayKey = Self.dateKeyFormatter.string(from: now)
-        let todayPeriod = aggregatePeriod(for: groupedByDate[todayKey] ?? [])
+        let todayPeriod = aggregatePeriod(
+            for: premiumEntries.filter { $0.date >= startOfToday }
+        )
 
         // Calculate this week's usage (Sunday start)
-        let weekStart = calculateWeekStart(from: now, calendar: calendar)
-        let thisWeekPeriod = aggregateWeekPeriod(groupedByDate: groupedByDate, weekStart: weekStart, calendar: calendar)
+        let thisWeekPeriod = aggregatePeriod(
+            for: premiumEntries.filter { $0.date >= startOfWeek }
+        )
 
-        // Calculate this month's usage (all entries)
-        let thisMonthPeriod = aggregatePeriod(for: premiumEntries)
+        // GitHub's premium-request billing month resets at 00:00 UTC.
+        let thisMonthPeriod = aggregatePeriod(for: billingMonthEntries)
 
-        // Build daily usage entries for heatmap
-        let dailyUsage = buildDailyUsage(from: groupedByDate)
+        // Build current-month daily entries for the heatmap.
+        let dailyUsage = buildDailyUsage(
+            from: localMonthEntries,
+            calendar: localCalendar
+        )
 
         return TokenUsageSnapshot(
             provider: .copilot,
@@ -101,64 +125,28 @@ final class CopilotBillingFetcher {
         )
     }
 
-    /// Groups billing entries by local date string (YYYY-MM-DD).
-    private func groupEntriesByLocalDate(
-        _ entries: [CopilotBillingEntry],
-        calendar: Calendar
-    ) -> [String: [CopilotBillingEntry]] {
-        var grouped: [String: [CopilotBillingEntry]] = [:]
-        for entry in entries {
-            guard let date = Self.iso8601Formatter.date(from: entry.usageAt) else { continue }
-            let key = Self.dateKeyFormatter.string(from: date)
-            grouped[key, default: []].append(entry)
-        }
-        return grouped
+    private struct DatedBillingEntry {
+        let entry: CopilotBillingEntry
+        let date: Date
     }
 
     /// Aggregates cost and quantity for a set of entries.
-    private func aggregatePeriod(for entries: [CopilotBillingEntry]) -> TokenUsagePeriod {
-        let totalCost = entries.reduce(0.0) { $0 + $1.grossAmount }
-        let totalRequests = entries.reduce(0.0) { $0 + $1.quantity }
-        return TokenUsagePeriod(costUSD: totalCost, totalTokens: Int(totalRequests))
-    }
-
-    /// Calculates start of the current week (Sunday).
-    private func calculateWeekStart(from date: Date, calendar: Calendar) -> Date {
-        var cal = calendar
-        cal.firstWeekday = 1 // Sunday
-        let components = cal.dateComponents([.yearForWeekOfYear, .weekOfYear], from: date)
-        return cal.date(from: components) ?? date
-    }
-
-    /// Aggregates entries from week start (Sunday) through the current date.
-    private func aggregateWeekPeriod(
-        groupedByDate: [String: [CopilotBillingEntry]],
-        weekStart: Date,
-        calendar: Calendar
-    ) -> TokenUsagePeriod {
-        var totalCost = 0.0
-        var totalRequests = 0.0
-        let now = Date()
-
-        var currentDate = weekStart
-        while currentDate <= now {
-            let key = Self.dateKeyFormatter.string(from: currentDate)
-            if let entries = groupedByDate[key] {
-                for entry in entries {
-                    totalCost += entry.grossAmount
-                    totalRequests += entry.quantity
-                }
-            }
-            guard let nextDate = calendar.date(byAdding: .day, value: 1, to: currentDate) else { break }
-            currentDate = nextDate
-        }
+    private func aggregatePeriod(for entries: [DatedBillingEntry]) -> TokenUsagePeriod {
+        let totalCost = entries.reduce(0.0) { $0 + $1.entry.grossAmount }
+        let totalRequests = entries.reduce(0.0) { $0 + $1.entry.quantity }
         return TokenUsagePeriod(costUSD: totalCost, totalTokens: Int(totalRequests))
     }
 
     /// Builds sorted daily usage entries from grouped data for heatmap.
-    private func buildDailyUsage(from groupedByDate: [String: [CopilotBillingEntry]]) -> [DailyUsageEntry] {
-        groupedByDate.map { (dateKey, entries) in
-            let totalRequests = entries.reduce(0.0) { $0 + $1.quantity }
+    private func buildDailyUsage(
+        from entries: [DatedBillingEntry],
+        calendar: Calendar
+    ) -> [DailyUsageEntry] {
+        let groupedByDate = Dictionary(grouping: entries) {
+            Self.localDateKey(for: $0.date, calendar: calendar)
+        }
+        return groupedByDate.map { dateKey, datedEntries in
+            let totalRequests = datedEntries.reduce(0.0) { $0 + $1.entry.quantity }
             return DailyUsageEntry(date: dateKey, totalTokens: Int(totalRequests))
         }
         .sorted { $0.date < $1.date }
@@ -177,20 +165,129 @@ final class CopilotBillingFetcher {
 
     // MARK: - Date Formatters
 
-    /// ISO8601 formatter for parsing `usageAt` timestamps
-    private static let iso8601Formatter: ISO8601DateFormatter = {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return formatter
-    }()
+    private static func parseUsageDate(_ value: String) -> Date? {
+        guard hasStrictRFC3339Shape(value),
+              hasValidGregorianDatePrefix(value) else {
+            return nil
+        }
+        return try? Date(value, strategy: .iso8601)
+    }
 
-    /// Date formatter for local date keys (YYYY-MM-DD)
-    private static let dateKeyFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd"
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        return formatter
-    }()
+    /// `Date.ISO8601FormatStyle` accepts normalized times and trailing bytes.
+    /// Enforce the complete GitHub timestamp grammar before parsing.
+    private static func hasStrictRFC3339Shape(_ value: String) -> Bool {
+        let bytes = Array(value.utf8)
+        guard bytes.count >= 20,
+              bytes[4] == 45,
+              bytes[7] == 45,
+              bytes[10] == 84,
+              bytes[13] == 58,
+              bytes[16] == 58,
+              let hour = twoDigitValue(bytes, at: 11),
+              let minute = twoDigitValue(bytes, at: 14),
+              let second = twoDigitValue(bytes, at: 17),
+              hour <= 23,
+              minute <= 59,
+              second <= 59 else {
+            return false
+        }
+
+        var timeZoneIndex = 19
+        if bytes[timeZoneIndex] == 46 {
+            timeZoneIndex += 1
+            let fractionStart = timeZoneIndex
+            while timeZoneIndex < bytes.count,
+                  isASCIIDigit(bytes[timeZoneIndex]) {
+                timeZoneIndex += 1
+            }
+            guard timeZoneIndex > fractionStart,
+                  timeZoneIndex < bytes.count else {
+                return false
+            }
+        }
+
+        if bytes[timeZoneIndex] == 90 {
+            return timeZoneIndex + 1 == bytes.count
+        }
+
+        guard bytes[timeZoneIndex] == 43 || bytes[timeZoneIndex] == 45,
+              timeZoneIndex + 6 == bytes.count,
+              bytes[timeZoneIndex + 3] == 58,
+              let offsetHour = twoDigitValue(bytes, at: timeZoneIndex + 1),
+              let offsetMinute = twoDigitValue(bytes, at: timeZoneIndex + 4) else {
+            return false
+        }
+        return offsetHour <= 23 && offsetMinute <= 59
+    }
+
+    private static func twoDigitValue(_ bytes: [UInt8], at index: Int) -> Int? {
+        guard index + 1 < bytes.count,
+              isASCIIDigit(bytes[index]),
+              isASCIIDigit(bytes[index + 1]) else {
+            return nil
+        }
+        return Int(bytes[index] - 48) * 10 + Int(bytes[index + 1] - 48)
+    }
+
+    private static func isASCIIDigit(_ byte: UInt8) -> Bool {
+        byte >= 48 && byte <= 57
+    }
+
+    /// Foundation's ISO parser normalizes dates such as February 30 to March 2.
+    /// Validate the calendar components first so malformed API rows stay excluded.
+    private static func hasValidGregorianDatePrefix(_ value: String) -> Bool {
+        let prefix = value.prefix(10)
+        guard prefix.count == 10 else { return false }
+        let components = prefix.split(separator: "-", omittingEmptySubsequences: false)
+        guard components.count == 3,
+              components[0].count == 4,
+              components[1].count == 2,
+              components[2].count == 2,
+              components.allSatisfy({ part in
+                  part.utf8.allSatisfy(isASCIIDigit)
+              }),
+              let year = Int(components[0]),
+              let month = Int(components[1]),
+              let day = Int(components[2]) else {
+            return false
+        }
+
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        guard let date = calendar.date(
+            from: DateComponents(year: year, month: month, day: day)
+        ) else {
+            return false
+        }
+        let resolved = calendar.dateComponents([.year, .month, .day], from: date)
+        return resolved.year == year && resolved.month == month && resolved.day == day
+    }
+
+    private static func localDateKey(for date: Date, calendar: Calendar) -> String {
+        let components = calendar.dateComponents([.year, .month, .day], from: date)
+        return String(
+            format: "%04d-%02d-%02d",
+            components.year ?? 0,
+            components.month ?? 0,
+            components.day ?? 0
+        )
+    }
+
+    private static func startOfUTCBillingMonth(for date: Date) -> Date {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.locale = Locale(identifier: "en_US_POSIX")
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        return calendar.date(
+            from: calendar.dateComponents([.year, .month], from: date)
+        ) ?? date
+    }
+
+    private static func localGregorianCalendar(matching source: Calendar) -> Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.locale = Locale(identifier: "en_US_POSIX")
+        calendar.timeZone = source.timeZone
+        return calendar
+    }
 
     // MARK: - JavaScript Scripts
 
