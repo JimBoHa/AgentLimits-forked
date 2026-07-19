@@ -4,6 +4,45 @@ import XCTest
 
 @MainActor
 final class ThresholdNotificationGenerationTests: XCTestCase {
+    func testMissingResetTimestampNeverSubmitsRepeatedAlerts() async {
+        let center = RecordingThresholdNotificationCenter()
+        let manager = makeManager(notificationCenter: center)
+        await manager.checkAuthorizationStatus()
+        let snapshot = makeSnapshot(resetAt: nil)
+
+        await manager.checkThresholdsIfNeeded(for: snapshot)
+        await manager.checkThresholdsIfNeeded(for: snapshot)
+
+        XCTAssertTrue(center.addedRequests.isEmpty)
+    }
+
+    func testKnownResetSubmitsEachLevelOnlyOnce() async {
+        let center = RecordingThresholdNotificationCenter()
+        let manager = makeManager(notificationCenter: center)
+        await manager.checkAuthorizationStatus()
+        let snapshot = makeSnapshot(resetAt: Date(timeIntervalSince1970: 9_000))
+
+        await manager.checkThresholdsIfNeeded(for: snapshot)
+        await manager.checkThresholdsIfNeeded(for: snapshot)
+
+        XCTAssertEqual(center.addedRequests.count, 2)
+    }
+
+    func testChangedResetAllowsAlertsForNewQuotaCycle() async {
+        let center = RecordingThresholdNotificationCenter()
+        let manager = makeManager(notificationCenter: center)
+        await manager.checkAuthorizationStatus()
+
+        await manager.checkThresholdsIfNeeded(
+            for: makeSnapshot(resetAt: Date(timeIntervalSince1970: 9_000))
+        )
+        await manager.checkThresholdsIfNeeded(
+            for: makeSnapshot(resetAt: Date(timeIntervalSince1970: 19_000))
+        )
+
+        XCTAssertEqual(center.addedRequests.count, 4)
+    }
+
     func testStaleCompletionRemovesOnlyItsUniqueSubmission() async throws {
         let defaults = UserDefaults(
             suiteName: "ThresholdNotificationGenerationTests-\(UUID().uuidString)"
@@ -70,6 +109,32 @@ final class ThresholdNotificationGenerationTests: XCTestCase {
         XCTAssertFalse(center.removedPendingIdentifiers.contains(newIdentifier))
         XCTAssertFalse(center.removedDeliveredIdentifiers.contains(newIdentifier))
     }
+
+    private func makeManager(
+        notificationCenter: any ThresholdNotificationCenterClient
+    ) -> ThresholdNotificationManager {
+        let defaults = UserDefaults(
+            suiteName: "ThresholdNotificationGenerationTests-\(UUID().uuidString)"
+        )!
+        return ThresholdNotificationManager(
+            store: ThresholdNotificationStore(userDefaults: defaults),
+            notificationCenter: notificationCenter
+        )
+    }
+
+    private func makeSnapshot(resetAt: Date?) -> UsageSnapshot {
+        UsageSnapshot(
+            provider: .chatgptCodex,
+            fetchedAt: Date(timeIntervalSince1970: 1_000),
+            primaryWindow: UsageWindow(
+                kind: .primary,
+                usedPercent: 95,
+                resetAt: resetAt,
+                limitWindowSeconds: UsageLimitDuration.fiveHours
+            ),
+            secondaryWindow: nil
+        )
+    }
 }
 
 @MainActor
@@ -79,6 +144,27 @@ private final class NotificationGenerationState {
     init(isCurrent: Bool) {
         self.isCurrent = isCurrent
     }
+}
+
+@MainActor
+private final class RecordingThresholdNotificationCenter: ThresholdNotificationCenterClient {
+    private(set) var addedRequests: [UNNotificationRequest] = []
+
+    func isAuthorized() async -> Bool {
+        true
+    }
+
+    func requestAuthorization(options: UNAuthorizationOptions) async throws -> Bool {
+        true
+    }
+
+    func add(_ request: UNNotificationRequest) async throws {
+        addedRequests.append(request)
+    }
+
+    func removePendingNotificationRequests(withIdentifiers identifiers: [String]) {}
+
+    func removeDeliveredNotifications(withIdentifiers identifiers: [String]) {}
 }
 
 @MainActor

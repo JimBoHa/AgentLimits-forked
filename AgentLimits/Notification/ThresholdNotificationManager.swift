@@ -225,6 +225,14 @@ final class ThresholdNotificationManager: ObservableObject {
         isCurrent: @MainActor () -> Bool
     ) async {
         guard isCurrent() else { return }
+        // A reset timestamp is the quota-cycle identity used for durable
+        // deduplication. Without one, every refresh would submit the same alert.
+        guard window.resetAt != nil else {
+            Logger.notification.debug(
+                "ThresholdNotificationManager: Skipping threshold without reset timestamp"
+            )
+            return
+        }
         // Skip if disabled
         guard levelSettings.isEnabled else { return }
 
