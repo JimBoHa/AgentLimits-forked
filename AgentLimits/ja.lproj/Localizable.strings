@@ -207,6 +207,7 @@
 "update.checkNow" = "今すぐ確認";
 "update.automaticChecks" = "自動でアップデートを確認する";
 "update.releasesPage" = "すべてのリリースを表示";
+"update.privacyPolicy" = "プライバシーポリシー";
 "update.neverChecked" = "未確認";
 "settings.providerOrder" = "表示順";
 

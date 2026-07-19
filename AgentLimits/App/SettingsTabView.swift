@@ -106,7 +106,7 @@ struct SettingsTabView: View {
                 usageViewModel: viewModel
             )
         case .update:
-            UpdateSettingsView(releasesURL: URL(string: "https://github.com/JimBoHa/AgentLimits-forked/releases")!)
+            UpdateSettingsView()
         case .advanced:
             CLICommandSettingsView()
         }
