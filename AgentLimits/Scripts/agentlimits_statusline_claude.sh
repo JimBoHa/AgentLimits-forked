@@ -310,7 +310,7 @@ calculate_pacemaker_percent() {
 
     # Convert reset_at to Unix timestamp
     local clean_date
-    clean_date=$(echo "$reset_at_iso" | sed 's/.[0-9]*Z$/Z/' | sed 's/Z$/+0000/')
+    clean_date=$(echo "$reset_at_iso" | sed 's/\.[0-9]*Z$/Z/' | sed 's/Z$/+0000/')
     local reset_ts
     reset_ts=$(date -j -f "%Y-%m-%dT%H:%M:%S%z" "$clean_date" +"%s" 2>/dev/null)
 
