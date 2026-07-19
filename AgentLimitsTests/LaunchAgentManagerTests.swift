@@ -54,15 +54,17 @@ final class LaunchAgentManagerTests: XCTestCase {
         XCTAssertFalse(context.manager.isPlistPresent(for: context.schedule))
     }
 
-    func testLoadedOrphanIsStoppedWhenReplacementFails() throws {
+    func testInstallRefusesLoadedServiceWithoutRecoverablePlist() throws {
         let context = makeContext(initiallyLoaded: true)
         defer { context.cleanup() }
-        context.launchCtl.bootstrapStatuses = [37]
 
-        XCTAssertThrowsError(try context.manager.install(schedule: context.schedule))
-        XCTAssertFalse(context.launchCtl.isLoaded)
+        XCTAssertThrowsError(try context.manager.install(schedule: context.schedule)) {
+            XCTAssertTrue($0.localizedDescription.contains("no recoverable plist"))
+        }
+        XCTAssertTrue(context.launchCtl.isLoaded)
         XCTAssertFalse(context.manager.isPlistPresent(for: context.schedule))
-        XCTAssertEqual(context.launchCtl.bootoutCallCount, 1)
+        XCTAssertEqual(context.launchCtl.bootoutCallCount, 0)
+        XCTAssertEqual(context.launchCtl.bootstrapCallCount, 0)
     }
 
     func testBootoutFailureKeepsPriorServiceAndPlist() throws {
@@ -469,7 +471,7 @@ final class LaunchAgentManagerTests: XCTestCase {
         XCTAssertFalse(context.manager.isPlistPresent(for: context.schedule))
     }
 
-    func testInstallStripsInheritedReadACLBeforeWritingPlist() throws {
+    func testInstallRejectsFileInheritingAllowACLBeforeCreatingTemp() throws {
         let context = makeContext()
         defer { context.cleanup() }
         let directory = context.home.appendingPathComponent("Library/LaunchAgents")
@@ -478,6 +480,27 @@ final class LaunchAgentManagerTests: XCTestCase {
             withIntermediateDirectories: true
         )
         try addACL("everyone allow read,file_inherit", to: directory)
+        XCTAssertTrue(try hasExtendedACLEntry(at: directory))
+
+        XCTAssertThrowsError(try context.manager.install(schedule: context.schedule)) {
+            XCTAssertTrue($0.localizedDescription.contains("LaunchAgent storage"))
+        }
+        XCTAssertTrue(
+            try FileManager.default.contentsOfDirectory(atPath: directory.path)
+                .isEmpty
+        )
+    }
+
+    func testInstallStripsInheritedDenyACLBeforeWritingPlist() throws {
+        let context = makeContext()
+        defer { context.cleanup() }
+        let directory = context.home.appendingPathComponent("Library/LaunchAgents")
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true
+        )
+        try addACL("everyone deny delete,file_inherit", to: directory)
+        defer { try? clearACL(at: directory) }
         XCTAssertTrue(try hasExtendedACLEntry(at: directory))
 
         try context.manager.install(schedule: context.schedule)
@@ -585,9 +608,17 @@ final class LaunchAgentManagerTests: XCTestCase {
     }
 
     private func addACL(_ entry: String, to url: URL) throws {
+        try runChmod(["+a", entry, url.path], path: url.path)
+    }
+
+    private func clearACL(at url: URL) throws {
+        try runChmod(["-N", url.path], path: url.path)
+    }
+
+    private func runChmod(_ arguments: [String], path: String) throws {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/chmod")
-        process.arguments = ["+a", entry, url.path]
+        process.arguments = arguments
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
         try process.run()
@@ -595,7 +626,7 @@ final class LaunchAgentManagerTests: XCTestCase {
         guard process.terminationStatus == 0 else {
             throw CocoaError(
                 .fileWriteUnknown,
-                userInfo: [NSFilePathErrorKey: url.path]
+                userInfo: [NSFilePathErrorKey: path]
             )
         }
     }
