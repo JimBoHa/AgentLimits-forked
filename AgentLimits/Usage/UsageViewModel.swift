@@ -418,7 +418,9 @@ final class UsageViewModel: ObservableObject {
             // Fetch Copilot billing data alongside usage limits
             if provider == .githubCopilot,
                let billingContext = operationGate.captureContext(),
-               let tokenUsageContext = tokenUsageViewModel.captureExternalSnapshotContext() {
+               let tokenUsageContext = tokenUsageViewModel.captureExternalSnapshotContext(
+                   for: .copilot
+               ) {
                 Task {
                     await fetchCopilotBilling(
                         using: webViewStore.webView,

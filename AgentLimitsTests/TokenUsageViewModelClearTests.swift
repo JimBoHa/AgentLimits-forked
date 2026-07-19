@@ -8,7 +8,9 @@ final class TokenUsageViewModelClearTests: XCTestCase {
         let visibilityStore = FakeSnapshotVisibilityStore()
         let viewModel = makeViewModel(store: store, visibilityStore: visibilityStore)
         let snapshot = makeSnapshot(fetchedAt: Date(timeIntervalSince1970: 1_000))
-        let context = try XCTUnwrap(viewModel.captureExternalSnapshotContext())
+        let context = try XCTUnwrap(
+            viewModel.captureExternalSnapshotContext(for: .copilot)
+        )
 
         try viewModel.saveExternallyFetchedSnapshot(snapshot, context: context)
         XCTAssertEqual(store.snapshots[.copilot]?.fetchedAt, snapshot.fetchedAt)
@@ -114,7 +116,9 @@ final class TokenUsageViewModelClearTests: XCTestCase {
         store.deletionError = TestStoreError.deleteFailed
         let visibilityStore = FakeSnapshotVisibilityStore()
         let viewModel = makeViewModel(store: store, visibilityStore: visibilityStore)
-        let staleContext = try XCTUnwrap(viewModel.captureExternalSnapshotContext())
+        let staleContext = try XCTUnwrap(
+            viewModel.captureExternalSnapshotContext(for: .copilot)
+        )
 
         XCTAssertThrowsError(try viewModel.clearSnapshot(for: .copilot))
 
@@ -132,7 +136,9 @@ final class TokenUsageViewModelClearTests: XCTestCase {
         )
 
         store.deletionError = nil
-        let freshContext = try XCTUnwrap(viewModel.captureExternalSnapshotContext())
+        let freshContext = try XCTUnwrap(
+            viewModel.captureExternalSnapshotContext(for: .copilot)
+        )
         let freshWriteSaved = try viewModel.saveExternallyFetchedSnapshot(
             freshSnapshot,
             context: freshContext
@@ -147,18 +153,108 @@ final class TokenUsageViewModelClearTests: XCTestCase {
         )
     }
 
+    func testDisabledProviderCannotCaptureExternalFetchContext() {
+        let viewModel = makeViewModel(
+            store: FakeTokenUsageSnapshotStore(),
+            visibilityStore: FakeSnapshotVisibilityStore(),
+            enabledProviders: []
+        )
+
+        XCTAssertNil(viewModel.captureExternalSnapshotContext(for: .copilot))
+    }
+
+    func testDisablingProviderRejectsExternalFetchCompletion() throws {
+        let store = FakeTokenUsageSnapshotStore()
+        let visibilityStore = FakeSnapshotVisibilityStore()
+        let viewModel = makeViewModel(store: store, visibilityStore: visibilityStore)
+        let initialStatus = viewModel.statusMessages[.copilot]
+        let context = try XCTUnwrap(
+            viewModel.captureExternalSnapshotContext(for: .copilot)
+        )
+        viewModel.updateSettings(.defaultSettings(for: .copilot))
+
+        let didSave = try viewModel.saveExternallyFetchedSnapshot(
+            makeSnapshot(fetchedAt: Date(timeIntervalSince1970: 7_000)),
+            context: context
+        )
+
+        XCTAssertFalse(didSave)
+        XCTAssertNil(store.snapshots[.copilot])
+        XCTAssertNil(viewModel.snapshots[.copilot])
+        XCTAssertEqual(viewModel.statusMessages[.copilot], initialStatus)
+        XCTAssertFalse(
+            visibilityStore.isSnapshotSuppressed(
+                fileName: TokenUsageProvider.copilot.snapshotFileName
+            )
+        )
+    }
+
+    func testDisableAndReenableStillRejectsPriorExternalContext() throws {
+        let store = FakeTokenUsageSnapshotStore()
+        let viewModel = makeViewModel(
+            store: store,
+            visibilityStore: FakeSnapshotVisibilityStore()
+        )
+        let context = try XCTUnwrap(
+            viewModel.captureExternalSnapshotContext(for: .copilot)
+        )
+        viewModel.updateSettings(.defaultSettings(for: .copilot))
+        viewModel.updateSettings(
+            CCUsageSettings(provider: .copilot, isEnabled: true, additionalArgs: "")
+        )
+
+        XCTAssertFalse(
+            try viewModel.saveExternallyFetchedSnapshot(
+                makeSnapshot(fetchedAt: Date(timeIntervalSince1970: 8_000)),
+                context: context
+            )
+        )
+        XCTAssertNil(store.snapshots[.copilot])
+    }
+
+    func testExternalContextCannotSaveAnotherProviderSnapshot() throws {
+        let store = FakeTokenUsageSnapshotStore()
+        let viewModel = makeViewModel(
+            store: store,
+            visibilityStore: FakeSnapshotVisibilityStore(),
+            enabledProviders: [.copilot, .codex]
+        )
+        let copilotContext = try XCTUnwrap(
+            viewModel.captureExternalSnapshotContext(for: .copilot)
+        )
+
+        XCTAssertFalse(
+            try viewModel.saveExternallyFetchedSnapshot(
+                makeSnapshot(
+                    provider: .codex,
+                    fetchedAt: Date(timeIntervalSince1970: 9_000)
+                ),
+                context: copilotContext
+            )
+        )
+        XCTAssertTrue(store.snapshots.isEmpty)
+        XCTAssertTrue(viewModel.snapshots.isEmpty)
+    }
+
     private func makeViewModel(
         store: FakeTokenUsageSnapshotStore,
         visibilityStore: FakeSnapshotVisibilityStore,
-        fetcher: (any CCUsageFetching)? = nil
+        fetcher: (any CCUsageFetching)? = nil,
+        enabledProviders: Set<TokenUsageProvider> = [.copilot]
     ) -> TokenUsageViewModel {
         let defaults = UserDefaults(suiteName: "TokenUsageViewModelClearTests-\(UUID().uuidString)")!
-        return TokenUsageViewModel(
+        let viewModel = TokenUsageViewModel(
             fetcher: fetcher,
             snapshotStore: store,
             settingsStore: CCUsageSettingsStore(userDefaults: defaults),
             snapshotVisibilityStore: visibilityStore
         )
+        for provider in enabledProviders {
+            viewModel.updateSettings(
+                CCUsageSettings(provider: provider, isEnabled: true, additionalArgs: "")
+            )
+        }
+        return viewModel
     }
 
     private func makeSnapshot(
