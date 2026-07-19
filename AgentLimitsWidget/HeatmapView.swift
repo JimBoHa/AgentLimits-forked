@@ -38,7 +38,7 @@ struct HeatmapView: View {
 
     var body: some View {
         let levels = HeatmapLevelResolver.calculateLevels(from: dailyUsage)
-        let grid = buildMonthGrid()
+        let grid = HeatmapMonthGridBuilder.build(for: currentDate)
 
         HStack(alignment: .top, spacing: 2) {
             // Weekday labels column
@@ -58,10 +58,10 @@ struct HeatmapView: View {
 
             // Heatmap grid
             HStack(spacing: cellSpacing) {
-                ForEach(0..<columns, id: \.self) { column in
+                ForEach(0..<grid.columnCount, id: \.self) { column in
                     VStack(spacing: cellSpacing) {
                         ForEach(0..<rows, id: \.self) { row in
-                            if let dateString = grid[row][safe: column] ?? nil {
+                            if let dateString = grid.cells[row][column] {
                                 let level = levels[dateString] ?? .none
                                 RoundedRectangle(cornerRadius: cornerRadius)
                                     .fill(level.color(for: renderingMode))
@@ -77,60 +77,6 @@ struct HeatmapView: View {
                 }
             }
         }
-    }
-
-    // MARK: - Grid Calculation
-
-    /// Number of columns needed for the month (5-6 weeks)
-    private var columns: Int {
-        let calendar = Calendar.current
-        let components = calendar.dateComponents([.year, .month], from: currentDate)
-        guard let startOfMonth = calendar.date(from: components),
-              let range = calendar.range(of: .day, in: .month, for: startOfMonth) else {
-            return 6
-        }
-        let firstWeekday = calendar.component(.weekday, from: startOfMonth)
-        let totalCells = (firstWeekday - 1) + range.count
-        return Int(ceil(Double(totalCells) / 7.0))
-    }
-
-    /// Builds the grid layout for the current month.
-    /// Returns [row][column] where row is weekday (0=Sun, 6=Sat).
-    private func buildMonthGrid() -> [[String?]] {
-        let calendar = Calendar.current
-        let components = calendar.dateComponents([.year, .month], from: currentDate)
-        guard let startOfMonth = calendar.date(from: components),
-              let range = calendar.range(of: .day, in: .month, for: startOfMonth) else {
-            return Array(repeating: Array(repeating: nil, count: columns), count: rows)
-        }
-
-        var grid: [[String?]] = Array(repeating: Array(repeating: nil, count: columns), count: rows)
-
-        for day in range {
-            guard let date = calendar.date(bySetting: .day, value: day, of: startOfMonth) else {
-                continue
-            }
-            let weekday = calendar.component(.weekday, from: date) - 1 // 0-indexed (Sun=0)
-            let weekOfMonth = calendar.component(.weekOfMonth, from: date) - 1
-            let dateString = String(
-                format: "%04d-%02d-%02d",
-                calendar.component(.year, from: date),
-                calendar.component(.month, from: date),
-                day
-            )
-            grid[weekday][weekOfMonth] = dateString
-        }
-
-        return grid
-    }
-}
-
-// MARK: - Array Extension
-
-extension Array {
-    /// Safe subscript that returns nil for out-of-bounds indices.
-    subscript(safe index: Int) -> Element? {
-        indices.contains(index) ? self[index] : nil
     }
 }
 
