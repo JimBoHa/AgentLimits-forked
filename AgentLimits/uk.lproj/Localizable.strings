@@ -209,3 +209,27 @@
 "update.neverChecked" = "Never";
 
 "settings.providerOrder" = "Порядок відображення";
+
+/* Облікові записи постачальників */
+"content.account" = "Обліковий запис";
+"accounts.title" = "Облікові записи";
+"accounts.add" = "Додати обліковий запис";
+"accounts.edit" = "Редагувати обліковий запис";
+"accounts.remove" = "Видалити обліковий запис";
+"accounts.manage" = "Керувати…";
+"accounts.selected" = "Вибрано";
+"accounts.autoRefresh" = "Автооновлення";
+"accounts.isolatedSession" = "Ізольований сеанс входу";
+"accounts.legacySession" = "Перенесений спільний сеанс входу";
+"accounts.lastRequired" = "Для кожного постачальника має залишатися принаймні один обліковий запис.";
+"accounts.newerVersionReadOnly" = "Дані облікових записів збережено новішою версією програми. Оновіть AgentLimits, щоб керувати цими обліковими записами.";
+"accounts.selectFormat" = "Вибрати %@";
+"accounts.removeTitle" = "Видалити обліковий запис?";
+"accounts.cancel" = "Скасувати";
+"accounts.removeMessage" = "Видалити %@? Кешовані дані про використання та ізольований сеанс входу буде видалено.";
+"accounts.removeLegacyMessage" = "Видалити %@? Цей перенесений обліковий запис використовує спільні застарілі дані WebKit; з усіх перенесених спільних сеансів входу буде виконано вихід. Ізольовані облікові записи не буде змінено.";
+"accounts.pendingCleanup" = "Обліковий запис видалено. WebKit повторить спробу видалити його ізольовані дані входу під час наступного запуску.";
+"accounts.ok" = "Гаразд";
+"accounts.label" = "Назва облікового запису";
+"accounts.save" = "Зберегти";
+"accounts.disabledFormat" = "%@ (Вимкнено)";

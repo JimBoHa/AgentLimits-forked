@@ -209,3 +209,27 @@
 "update.neverChecked" = "Never";
 
 "settings.providerOrder" = "Weergavevolgorde";
+
+/* Provideraccounts */
+"content.account" = "Account";
+"accounts.title" = "Accounts";
+"accounts.add" = "Account toevoegen";
+"accounts.edit" = "Account bewerken";
+"accounts.remove" = "Account verwijderen";
+"accounts.manage" = "Beheren…";
+"accounts.selected" = "Geselecteerd";
+"accounts.autoRefresh" = "Automatisch vernieuwen";
+"accounts.isolatedSession" = "Geïsoleerde aanmeldsessie";
+"accounts.legacySession" = "Gemigreerde gedeelde aanmeldsessie";
+"accounts.lastRequired" = "Elke provider moet ten minste één account behouden.";
+"accounts.newerVersionReadOnly" = "De accountgegevens zijn opgeslagen door een nieuwere appversie. Werk AgentLimits bij om deze accounts te beheren.";
+"accounts.selectFormat" = "Selecteer %@";
+"accounts.removeTitle" = "Account verwijderen?";
+"accounts.cancel" = "Annuleren";
+"accounts.removeMessage" = "%@ verwijderen? De gebruiksgegevens in de cache en de geïsoleerde aanmeldsessie worden verwijderd.";
+"accounts.removeLegacyMessage" = "%@ verwijderen? Dit gemigreerde account deelt verouderde WebKit-gegevens; alle gemigreerde gedeelde aanmeldsessies worden afgemeld. Geïsoleerde accounts blijven onaangetast.";
+"accounts.pendingCleanup" = "Het account is verwijderd. WebKit probeert bij de volgende start opnieuw de geïsoleerde aanmeldgegevens te verwijderen.";
+"accounts.ok" = "OK";
+"accounts.label" = "Accountnaam";
+"accounts.save" = "Opslaan";
+"accounts.disabledFormat" = "%@ (Uitgeschakeld)";

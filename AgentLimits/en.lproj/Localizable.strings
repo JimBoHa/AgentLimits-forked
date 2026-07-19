@@ -208,3 +208,27 @@
 "update.releasesPage" = "View All Releases";
 "update.neverChecked" = "Never";
 "settings.providerOrder" = "Display Order";
+
+/* Provider Accounts */
+"content.account" = "Account";
+"accounts.title" = "Accounts";
+"accounts.add" = "Add Account";
+"accounts.edit" = "Edit Account";
+"accounts.remove" = "Remove Account";
+"accounts.manage" = "Manage…";
+"accounts.selected" = "Selected";
+"accounts.autoRefresh" = "Auto-refresh";
+"accounts.isolatedSession" = "Isolated login session";
+"accounts.legacySession" = "Migrated shared login session";
+"accounts.lastRequired" = "Each provider must keep at least one account.";
+"accounts.newerVersionReadOnly" = "Account data was saved by a newer app version. Update AgentLimits to manage these accounts.";
+"accounts.selectFormat" = "Select %@";
+"accounts.removeTitle" = "Remove Account?";
+"accounts.cancel" = "Cancel";
+"accounts.removeMessage" = "Remove %@? Its cached usage and isolated login session will be deleted.";
+"accounts.removeLegacyMessage" = "Remove %@? This migrated account shares legacy WebKit data; all migrated shared login sessions will be signed out. Isolated accounts remain untouched.";
+"accounts.pendingCleanup" = "The account was removed. WebKit will retry deleting its isolated login data on the next launch.";
+"accounts.ok" = "OK";
+"accounts.label" = "Account name";
+"accounts.save" = "Save";
+"accounts.disabledFormat" = "%@ (Disabled)";

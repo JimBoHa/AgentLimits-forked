@@ -209,3 +209,27 @@
 "update.neverChecked" = "Never";
 
 "settings.providerOrder" = "显示顺序";
+
+/* 提供商账户 */
+"content.account" = "账户";
+"accounts.title" = "账户";
+"accounts.add" = "添加账户";
+"accounts.edit" = "编辑账户";
+"accounts.remove" = "删除账户";
+"accounts.manage" = "管理…";
+"accounts.selected" = "已选择";
+"accounts.autoRefresh" = "自动刷新";
+"accounts.isolatedSession" = "隔离的登录会话";
+"accounts.legacySession" = "迁移的共享登录会话";
+"accounts.lastRequired" = "每个提供商必须至少保留一个账户。";
+"accounts.newerVersionReadOnly" = "账户数据由较新版本的应用保存。请更新 AgentLimits 以管理这些账户。";
+"accounts.selectFormat" = "选择 %@";
+"accounts.removeTitle" = "删除账户？";
+"accounts.cancel" = "取消";
+"accounts.removeMessage" = "要删除 %@ 吗？其缓存的使用量数据和隔离的登录会话将被删除。";
+"accounts.removeLegacyMessage" = "要删除 %@ 吗？此迁移账户共享旧版 WebKit 数据；所有迁移的共享登录会话都将退出登录。隔离账户不受影响。";
+"accounts.pendingCleanup" = "账户已删除。WebKit 将在下次启动时重试删除其隔离的登录数据。";
+"accounts.ok" = "确定";
+"accounts.label" = "账户名称";
+"accounts.save" = "保存";
+"accounts.disabledFormat" = "%@（已停用）";

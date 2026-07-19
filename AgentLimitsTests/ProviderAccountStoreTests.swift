@@ -48,6 +48,97 @@ final class ProviderAccountStoreTests: XCTestCase {
         }
     }
 
+    func testAddAndSelectReconcilesAmbiguousRegistryWrite() throws {
+        try withStoreAndDefaults { initialStore, defaults in
+            _ = initialStore.loadAccounts()
+            var synchronizationCallCount = 0
+            let store = ProviderAccountStore(
+                userDefaults: defaults,
+                key: Self.accountKey,
+                synchronizeDefaults: { defaults in
+                    synchronizationCallCount += 1
+                    let result = defaults.synchronize()
+                    return synchronizationCallCount == 1 ? false : result
+                }
+            )
+            let accountID = UUID()
+
+            let account = try store.addAndSelectAccount(
+                id: accountID,
+                provider: .chatgptCodex,
+                label: "Work"
+            )
+
+            XCTAssertEqual(account.id, accountID)
+            XCTAssertEqual(
+                store.accounts(for: .chatgptCodex)
+                    .filter { $0.id == accountID }
+                    .count,
+                1
+            )
+            XCTAssertEqual(
+                store.selectedAccount(for: .chatgptCodex).id,
+                accountID
+            )
+            XCTAssertEqual(synchronizationCallCount, 2)
+        }
+    }
+
+    func testAddAndSelectRetryReusesCommittedIdentityAfterSelectionFailure() throws {
+        try withStoreAndDefaults { initialStore, defaults in
+            let prior = initialStore.primaryAccount(for: .chatgptCodex)
+            let selectedKey = selectedKey(for: .chatgptCodex)
+            var shouldDropSelectionWrite = true
+            let faultingStore = ProviderAccountStore(
+                userDefaults: defaults,
+                key: Self.accountKey,
+                synchronizeDefaults: { defaults in
+                    if shouldDropSelectionWrite,
+                       defaults.string(forKey: selectedKey) != prior.id.uuidString.lowercased() {
+                        shouldDropSelectionWrite = false
+                        defaults.set(
+                            prior.id.uuidString.lowercased(),
+                            forKey: selectedKey
+                        )
+                    }
+                    return defaults.synchronize()
+                }
+            )
+            let accountID = UUID()
+
+            XCTAssertThrowsError(
+                try faultingStore.addAndSelectAccount(
+                    id: accountID,
+                    provider: .chatgptCodex,
+                    label: "Work"
+                )
+            ) { error in
+                XCTAssertEqual(
+                    error as? ProviderAccountStoreError,
+                    .persistenceFailed
+                )
+            }
+            let account = try faultingStore.addAndSelectAccount(
+                id: accountID,
+                provider: .chatgptCodex,
+                label: "Final Work"
+            )
+
+            XCTAssertEqual(account.id, accountID)
+            XCTAssertEqual(account.label, "Final Work")
+            XCTAssertEqual(
+                faultingStore.accounts(for: .chatgptCodex)
+                    .filter { $0.id == accountID }
+                    .count,
+                1
+            )
+            XCTAssertEqual(
+                faultingStore.selectedAccount(for: .chatgptCodex).id,
+                accountID
+            )
+        }
+    }
+
     func testRemovalPreselectsQueuesAndPreservesInterveningChanges() throws {
         try withStoreAndDefaults { store, defaults in
             let primary = store.primaryAccount(for: .chatgptCodex)

@@ -209,3 +209,27 @@
 "update.neverChecked" = "Never";
 
 "settings.providerOrder" = "Anzeigereihenfolge";
+
+/* Anbieter-Konten */
+"content.account" = "Konto";
+"accounts.title" = "Konten";
+"accounts.add" = "Konto hinzufügen";
+"accounts.edit" = "Konto bearbeiten";
+"accounts.remove" = "Konto entfernen";
+"accounts.manage" = "Verwalten…";
+"accounts.selected" = "Ausgewählt";
+"accounts.autoRefresh" = "Automatische Aktualisierung";
+"accounts.isolatedSession" = "Isolierte Anmeldesitzung";
+"accounts.legacySession" = "Migrierte gemeinsame Anmeldesitzung";
+"accounts.lastRequired" = "Jeder Anbieter muss mindestens ein Konto behalten.";
+"accounts.newerVersionReadOnly" = "Die Kontodaten wurden von einer neueren App-Version gespeichert. Aktualisieren Sie AgentLimits, um diese Konten zu verwalten.";
+"accounts.selectFormat" = "%@ auswählen";
+"accounts.removeTitle" = "Konto entfernen?";
+"accounts.cancel" = "Abbrechen";
+"accounts.removeMessage" = "%@ entfernen? Die zwischengespeicherten Nutzungsdaten und die isolierte Anmeldesitzung werden gelöscht.";
+"accounts.removeLegacyMessage" = "%@ entfernen? Dieses migrierte Konto verwendet ältere WebKit-Daten gemeinsam; alle migrierten gemeinsamen Anmeldesitzungen werden abgemeldet. Isolierte Konten bleiben unberührt.";
+"accounts.pendingCleanup" = "Das Konto wurde entfernt. WebKit versucht beim nächsten Start erneut, seine isolierten Anmeldedaten zu löschen.";
+"accounts.ok" = "OK";
+"accounts.label" = "Kontoname";
+"accounts.save" = "Speichern";
+"accounts.disabledFormat" = "%@ (Deaktiviert)";
