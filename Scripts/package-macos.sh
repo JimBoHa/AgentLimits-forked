@@ -232,6 +232,19 @@ validate_developer_id_profile() {
 
 verify_developer_id_signature "$app" "macOS app"
 verify_developer_id_signature "$widget" "macOS widget"
+application_identity="$(codesign -dvvv "$app" 2>&1 \
+    | sed -n 's/^Authority=\(Developer ID Application:.*\)$/\1/p' \
+    | head -1)"
+if [[ -z "$application_identity" \
+    || ! "$application_identity" =~ ^Developer\ ID\ Application:\ .+\ \(${team_id}\)$ ]]; then
+    echo "Could not resolve the Team $team_id Developer ID Application identity" >&2
+    exit 1
+fi
+if ! security find-identity -v -p codesigning \
+        | grep -Fq "\"$application_identity\""; then
+    echo "Developer ID Application identity and private key are unavailable" >&2
+    exit 78
+fi
 validate_developer_id_profile \
     "$app/Contents/embedded.provisionprofile" \
     "com.jimboha.agentlimits.macos" \
@@ -399,12 +412,29 @@ hdiutil create \
     -format UDZO \
     -fs HFS+ \
     "$dmg"
+
+echo "Signing disk image..."
+codesign \
+    --sign "$application_identity" \
+    --timestamp \
+    --identifier com.jimboha.agentlimits.macos.dmg \
+    "$dmg"
+codesign --verify --strict --verbose=4 "$dmg"
+dmg_signature="$(codesign -dvvv "$dmg" 2>&1)"
+if ! printf '%s\n' "$dmg_signature" \
+        | grep -Fqx "Authority=$application_identity" \
+    || ! printf '%s\n' "$dmg_signature" \
+        | grep -Fqx 'Identifier=com.jimboha.agentlimits.macos.dmg'; then
+    echo "DMG has an unexpected Developer ID Application signature" >&2
+    exit 1
+fi
 hdiutil verify "$dmg" >/dev/null
 
 echo "Notarizing disk image..."
 submit_notary "$dmg" dmg
 xcrun stapler staple "$dmg"
 xcrun stapler validate "$dmg"
+codesign --verify --strict --verbose=4 "$dmg"
 
 codesign --verify --deep --strict --verbose=4 "$app"
 pkgutil --check-signature "$pkg"
