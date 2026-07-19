@@ -60,8 +60,15 @@ final class ProviderStateManager {
     }
 
     /// Initializes with cached snapshots from store
-    func loadCachedSnapshots(from store: UsageSnapshotStore) {
+    func loadCachedSnapshots(
+        from store: any UsageSnapshotStoring,
+        snapshotVisibilityStore: (any SnapshotVisibilityControlling)? = nil
+    ) {
+        let visibilityStore = snapshotVisibilityStore ?? SnapshotVisibilityStore.shared
         for provider in UsageProvider.allCases {
+            guard !visibilityStore.isSnapshotSuppressed(
+                fileName: provider.snapshotFileName
+            ) else { continue }
             if let cachedSnapshot = store.loadSnapshot(for: provider) {
                 // Keep stored used% intact and use snapshot display mode as-is.
                 states[provider] = .initial(snapshot: cachedSnapshot)

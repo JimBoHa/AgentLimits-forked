@@ -26,6 +26,7 @@ struct ContentView: View {
     @State private var orderedProviders: [UsageProvider] = ProviderOrderStore.loadProviderOrder()
     @State private var isShowingClearDataConfirm = false
     @State private var isClearingData = false
+    @State private var clearDataErrorMessage: String?
     @State private var isWebViewExpanded = false
     @State private var popupWebView: WKWebView?
     @State private var popupWebViewStore: WebViewStore?
@@ -127,18 +128,36 @@ struct ContentView: View {
         ) {
             Button("content.clearDataConfirmAction".localized(), role: .destructive) {
                 Task {
-                    // Clear login state, cached usage snapshots, and force re-login for the selected provider.
+                    // Keep fetches blocked until snapshots and WebKit login data are both gone.
                     isClearingData = true
-                    viewModel.clearCachedUsageSnapshots()
-                    await webViewPool.clearWebsiteData(reloadsWebViews: false)
-                    webViewPool.applyBackgroundPolicy(activeProviders: Set(viewModel.backgroundActiveProviders))
-                    webViewPool.resume(viewModel.selectedProvider)
-                    isClearingData = false
+                    defer { isClearingData = false }
+                    do {
+                        try await viewModel.clearData()
+                    } catch {
+                        clearDataErrorMessage = error.localizedDescription
+                    }
                 }
             }
             Button("content.clearDataCancel".localized(), role: .cancel) {}
         } message: {
             Text("content.clearDataConfirmMessage".localized())
+        }
+        .alert(
+            "content.clearData".localized(),
+            isPresented: Binding(
+                get: { clearDataErrorMessage != nil },
+                set: { isPresented in
+                    if !isPresented {
+                        clearDataErrorMessage = nil
+                    }
+                }
+            )
+        ) {
+            Button("content.clearDataCancel".localized(), role: .cancel) {
+                clearDataErrorMessage = nil
+            }
+        } message: {
+            Text(clearDataErrorMessage ?? "")
         }
         .sheet(
             isPresented: Binding(

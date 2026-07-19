@@ -870,6 +870,46 @@ protocol SnapshotData: Codable {
     var provider: Provider { get }
 }
 
+/// Shared visibility boundary for snapshots whose physical deletion failed.
+///
+/// Clear Data writes a durable suppression marker before deleting a file. App
+/// and widget readers therefore continue to treat the snapshot as absent until
+/// deletion succeeds or a new snapshot is intentionally saved.
+protocol SnapshotVisibilityControlling: Sendable {
+    func isSnapshotSuppressed(fileName: String) -> Bool
+    func setSnapshotSuppressed(_ isSuppressed: Bool, fileName: String)
+}
+
+/// Persists snapshot suppression markers in the App Group defaults shared by
+/// the app and widgets.
+final class SnapshotVisibilityStore: SnapshotVisibilityControlling, @unchecked Sendable {
+    static let shared = SnapshotVisibilityStore()
+
+    private let defaults: UserDefaults?
+    private let keyPrefix = "snapshot_suppressed."
+
+    init(defaults: UserDefaults? = AppGroupDefaults.shared) {
+        self.defaults = defaults
+    }
+
+    func isSnapshotSuppressed(fileName: String) -> Bool {
+        defaults?.bool(forKey: key(for: fileName)) ?? false
+    }
+
+    func setSnapshotSuppressed(_ isSuppressed: Bool, fileName: String) {
+        let key = key(for: fileName)
+        if isSuppressed {
+            defaults?.set(true, forKey: key)
+        } else {
+            defaults?.removeObject(forKey: key)
+        }
+    }
+
+    private func key(for fileName: String) -> String {
+        keyPrefix + fileName
+    }
+}
+
 // MARK: - Storage Errors
 
 /// Errors that can occur when accessing the snapshot store
@@ -939,6 +979,7 @@ struct AppGroupSnapshotStore<Provider: SnapshotFileNaming, Snapshot: SnapshotDat
     private let fileManager: FileManager
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
+    private let visibilityStore: any SnapshotVisibilityControlling
 
     /// Creates a new snapshot store with the specified configuration.
     /// - Parameters:
@@ -948,11 +989,13 @@ struct AppGroupSnapshotStore<Provider: SnapshotFileNaming, Snapshot: SnapshotDat
     init(
         fileManager: FileManager = .default,
         encoder: JSONEncoder = JSONEncoder(),
-        decoder: JSONDecoder = JSONDecoder()
+        decoder: JSONDecoder = JSONDecoder(),
+        visibilityStore: any SnapshotVisibilityControlling = SnapshotVisibilityStore.shared
     ) {
         self.fileManager = fileManager
         self.encoder = encoder
         self.decoder = decoder
+        self.visibilityStore = visibilityStore
         // Use consistent ISO8601 encoding/decoding across all snapshots.
         DateCodec.configureEncoder(self.encoder)
         DateCodec.configureDecoder(self.decoder)
@@ -968,8 +1011,11 @@ struct AppGroupSnapshotStore<Provider: SnapshotFileNaming, Snapshot: SnapshotDat
     /// - Parameter provider: The provider to load snapshot for
     /// - Returns: The loaded snapshot, or nil if not found or failed to load
     func loadSnapshot(for provider: Provider) -> Snapshot? {
+        guard !visibilityStore.isSnapshotSuppressed(fileName: provider.snapshotFileName) else {
+            return nil
+        }
         // Ignore errors for a non-throwing convenience path.
-        try? tryLoadSnapshot(for: provider)
+        return try? tryLoadSnapshot(for: provider)
     }
 
     /// Loads a snapshot for the specified provider from disk with detailed error information.
@@ -978,6 +1024,11 @@ struct AppGroupSnapshotStore<Provider: SnapshotFileNaming, Snapshot: SnapshotDat
     /// - Returns: The loaded snapshot
     /// - Throws: `UsageSnapshotStoreError` if loading fails
     func tryLoadSnapshot(for provider: Provider) throws -> Snapshot {
+        guard !visibilityStore.isSnapshotSuppressed(fileName: provider.snapshotFileName) else {
+            // Suppression intentionally gives callers the same semantics as a
+            // missing snapshot while preserving the failed file for retry.
+            throw CocoaError(.fileReadNoSuchFile)
+        }
         // Resolve the storage path in the App Group container.
         guard let url = snapshotFileURL(for: provider) else {
             throw UsageSnapshotStoreError.appGroupUnavailable
@@ -1011,6 +1062,7 @@ struct AppGroupSnapshotStore<Provider: SnapshotFileNaming, Snapshot: SnapshotDat
         try withSecurityScopedAccess(url) {
             try data.write(to: url, options: .atomic)
         }
+        visibilityStore.setSnapshotSuppressed(false, fileName: snapshot.provider.snapshotFileName)
     }
 
     /// Deletes the snapshot for the specified provider if it exists.
