@@ -12,11 +12,11 @@ final class UpdateSettingsLinksTests: XCTestCase {
         XCTAssertEqual(UpdateSettingsLinks.privacyPolicy.host, "github.com")
     }
 
-    func testPrivacyPolicyLabelExistsInEveryLocalization() throws {
-        let localizations = [
-            "de", "en", "es", "fr", "it", "ja", "ko", "nl", "pl",
-            "pt-BR", "tr", "uk", "zh-Hans", "zh-Hant"
-        ]
+    func testPrivacyPolicyLabelExistsInEveryBundledLocalization() throws {
+        let localizations = Bundle.main.localizations
+            .filter { $0 != "Base" }
+            .sorted()
+        XCTAssertFalse(localizations.isEmpty, "No localizations bundled")
 
         for localization in localizations {
             let path = try XCTUnwrap(

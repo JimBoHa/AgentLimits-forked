@@ -79,6 +79,7 @@ struct UpdateSettingsView: View {
                 Spacer()
                 Image(systemName: "arrow.up.right.square")
                     .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
             }
         }
     }
@@ -90,6 +91,7 @@ struct UpdateSettingsView: View {
                 Spacer()
                 Image(systemName: "arrow.up.right.square")
                     .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
             }
         }
         .accessibilityIdentifier("update.privacyPolicyLink")
