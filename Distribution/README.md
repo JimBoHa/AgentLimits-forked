@@ -111,8 +111,11 @@ DMG, and Developer ID Installer-signed PKG. It uses Xcode for Developer ID
 export, `codesign` for the disk image, `productbuild` for the installer,
 `notarytool` for notarization, and `stapler`/Gatekeeper assessment for final
 verification. Every downloaded Apple notarization log must match its accepted
-submission and contain no warnings or errors. The workflow never performs an
-unsafe recursive ad-hoc re-sign.
+submission and contain no warnings or errors. Before notarization, the workflow
+also verifies the exact pinned Sparkle code inventory, bundle metadata,
+symlinks, same-Team Developer ID trust, hardened runtime, secure timestamps,
+universal slices, and absence of `get-task-allow` independently in both
+architectures. The workflow never performs an unsafe recursive ad-hoc re-sign.
 
 ## Release records
 

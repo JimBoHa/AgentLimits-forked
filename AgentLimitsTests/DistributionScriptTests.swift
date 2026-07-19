@@ -213,6 +213,254 @@ final class DistributionScriptTests: XCTestCase {
         XCTAssertLessThan(staple, assess)
     }
 
+    func testDeveloperIDSignatureDetailValidationFailsClosed() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let detailsFile = directory.appendingPathComponent("codesign.txt")
+        let team = "ABCDE12345"
+        let identifier = "org.example.Component"
+        let authority = "Developer ID Application: Example Corp (\(team))"
+        let validDetails = """
+        Identifier=\(identifier)
+        CodeDirectory v=20500 size=100 flags=0x10000(runtime) hashes=1+1 location=embedded
+        Authority=\(authority)
+        Authority=Developer ID Certification Authority
+        Authority=Apple Root CA
+        Timestamp=Jul 18, 2026 at 1:00:00 PM
+        TeamIdentifier=\(team)
+        """
+        let command = #"source "$1"; details="$(cat "$2")"; validate_developer_id_signature_details "$details" "$3" "$4" "$5" component"#
+
+        try Data(validDetails.utf8).write(to: detailsFile)
+        let valid = try runMacCodeSigningHelper(
+            command: command,
+            arguments: [detailsFile.path, team, identifier, authority]
+        )
+        XCTAssertEqual(valid.status, 0, valid.output)
+
+        let invalidDetails = [
+            validDetails.replacingOccurrences(
+                of: "TeamIdentifier=\(team)",
+                with: "TeamIdentifier=ZYXWV98765"
+            ),
+            validDetails + "\nSignature=adhoc\n",
+            validDetails.replacingOccurrences(of: "(runtime)", with: "()"),
+            validDetails.replacingOccurrences(of: "Timestamp=", with: "Signed Time="),
+            validDetails.replacingOccurrences(
+                of: "Identifier=\(identifier)",
+                with: "Identifier=org.example.Unexpected"
+            )
+        ]
+
+        for (index, details) in invalidDetails.enumerated() {
+            try Data(details.utf8).write(to: detailsFile)
+            let result = try runMacCodeSigningHelper(
+                command: command,
+                arguments: [detailsFile.path, team, identifier, authority]
+            )
+            XCTAssertNotEqual(result.status, 0, "fixture \(index): \(result.output)")
+        }
+    }
+
+    func testEveryUniversalSignatureSliceMustPass() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let arm64 = directory.appendingPathComponent("arm64.txt")
+        let x86_64 = directory.appendingPathComponent("x86_64.txt")
+        let team = "ABCDE12345"
+        let identifier = "org.example.Component"
+        let authority = "Developer ID Application: Example Corp (\(team))"
+        let validDetails = """
+        Identifier=\(identifier)
+        CodeDirectory v=20500 size=100 flags=0x10000(runtime) hashes=1+1 location=embedded
+        Authority=\(authority)
+        Authority=Developer ID Certification Authority
+        Authority=Apple Root CA
+        Timestamp=Jul 18, 2026 at 1:00:00 PM
+        TeamIdentifier=\(team)
+        """
+        let command = #"source "$1"; arm="$(cat "$2")"; intel="$(cat "$3")"; validate_developer_id_signature_slices "$arm" "$intel" "$4" "$5" "$6" component"#
+
+        try Data(validDetails.utf8).write(to: arm64)
+        try Data(
+            validDetails.replacingOccurrences(of: "(runtime)", with: "()").utf8
+        ).write(to: x86_64)
+        let weakIntelSlice = try runMacCodeSigningHelper(
+            command: command,
+            arguments: [arm64.path, x86_64.path, team, identifier, authority]
+        )
+        XCTAssertNotEqual(weakIntelSlice.status, 0, weakIntelSlice.output)
+
+        try Data(validDetails.utf8).write(to: x86_64)
+        let bothValid = try runMacCodeSigningHelper(
+            command: command,
+            arguments: [arm64.path, x86_64.path, team, identifier, authority]
+        )
+        XCTAssertEqual(bothValid.status, 0, bothValid.output)
+    }
+
+    func testUniversalArchitectureValidationRejectsMissingOrExtraSlices() throws {
+        let command = #"source "$1"; validate_universal_binary_architectures "$2" component"#
+
+        for architectures in ["arm64 x86_64", "x86_64 arm64"] {
+            let result = try runMacCodeSigningHelper(
+                command: command,
+                arguments: [architectures]
+            )
+            XCTAssertEqual(result.status, 0, result.output)
+        }
+        for architectures in ["arm64", "x86_64", "arm64 x86_64 i386"] {
+            let result = try runMacCodeSigningHelper(
+                command: command,
+                arguments: [architectures]
+            )
+            XCTAssertNotEqual(result.status, 0, result.output)
+        }
+    }
+
+    func testSparkleAutoupdateIdentifiersArePinned() throws {
+        let command = #"source "$1"; validate_sparkle_autoupdate_identifier "$2""#
+        let accepted = [
+            "Autoupdate",
+            "Autoupdate-555549442401fd215d503466a26c3d081e5a8443"
+        ]
+
+        for identifier in accepted {
+            let result = try runMacCodeSigningHelper(
+                command: command,
+                arguments: [identifier]
+            )
+            XCTAssertEqual(result.status, 0, result.output)
+        }
+        for identifier in ["Autoupdate-other", "Unexpected"] {
+            let result = try runMacCodeSigningHelper(
+                command: command,
+                arguments: [identifier]
+            )
+            XCTAssertNotEqual(result.status, 0, result.output)
+        }
+    }
+
+    func testNestedEntitlementsRequireGetTaskAllowToBeAbsent() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let entitlements = directory.appendingPathComponent("entitlements.plist")
+        let command = #"source "$1"; validate_no_get_task_allow_entitlements "$2" component"#
+        let safe = try PropertyListSerialization.data(
+            fromPropertyList: ["com.apple.application-identifier": "example"],
+            format: .xml,
+            options: 0
+        )
+        try safe.write(to: entitlements)
+        let safeResult = try runMacCodeSigningHelper(
+            command: command,
+            arguments: [entitlements.path]
+        )
+        XCTAssertEqual(safeResult.status, 0, safeResult.output)
+
+        let unsafe = try PropertyListSerialization.data(
+            fromPropertyList: ["get-task-allow": false],
+            format: .xml,
+            options: 0
+        )
+        try unsafe.write(to: entitlements)
+        let unsafeResult = try runMacCodeSigningHelper(
+            command: command,
+            arguments: [entitlements.path]
+        )
+        XCTAssertNotEqual(unsafeResult.status, 0, unsafeResult.output)
+    }
+
+    func testSparkleSymlinkInventoryRejectsRedirectsAndExtras() throws {
+        let validDirectory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: validDirectory) }
+        try createSparkleSymlinkFixture(at: validDirectory)
+        let command = #"source "$1"; validate_sparkle_symlink_inventory "$2""#
+
+        let valid = try runMacCodeSigningHelper(
+            command: command,
+            arguments: [validDirectory.path]
+        )
+        XCTAssertEqual(valid.status, 0, valid.output)
+
+        try FileManager.default.createSymbolicLink(
+            atPath: validDirectory.appendingPathComponent("Unexpected").path,
+            withDestinationPath: "/tmp"
+        )
+        let extra = try runMacCodeSigningHelper(
+            command: command,
+            arguments: [validDirectory.path]
+        )
+        XCTAssertNotEqual(extra.status, 0, extra.output)
+
+        let redirectedDirectory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: redirectedDirectory) }
+        try createSparkleSymlinkFixture(
+            at: redirectedDirectory,
+            currentTarget: "../../outside"
+        )
+        let redirected = try runMacCodeSigningHelper(
+            command: command,
+            arguments: [redirectedDirectory.path]
+        )
+        XCTAssertNotEqual(redirected.status, 0, redirected.output)
+    }
+
+    func testSparkleCodePathClassifierRejectsUnexpectedCode() throws {
+        let command = #"source "$1"; is_expected_sparkle_code_path "$2""#
+        let accepted = [
+            "Versions/B/Sparkle",
+            "Versions/B/Autoupdate",
+            "Versions/B/Updater.app/Contents/MacOS/Updater",
+            "Versions/B/XPCServices/Downloader.xpc/Contents/MacOS/Downloader",
+            "Versions/B/XPCServices/Installer.xpc/Contents/MacOS/Installer"
+        ]
+
+        for path in accepted {
+            let result = try runMacCodeSigningHelper(
+                command: command,
+                arguments: [path]
+            )
+            XCTAssertEqual(result.status, 0, result.output)
+        }
+        for path in ["Versions/B/Unexpected", "Versions/B/Other.app/Contents/MacOS/Other"] {
+            let result = try runMacCodeSigningHelper(
+                command: command,
+                arguments: [path]
+            )
+            XCTAssertNotEqual(result.status, 0, result.output)
+        }
+    }
+
+    func testNestedSparkleVerificationRunsBeforeAppNotarization() throws {
+        let script = try packageScript()
+        let export = try offset(of: "xcodebuild -exportArchive", in: script)
+        let inventory = try offset(
+            of: "validate_sparkle_code_inventory || exit $?",
+            in: script
+        )
+        let component = try offset(
+            of: "verify_signed_sparkle_component \\\n    \"$sparkle\"",
+            in: script
+        )
+        let notarize = try offset(
+            of: #"submit_notary "$temporary_notary_zip" app"#,
+            in: script
+        )
+
+        XCTAssertLessThan(export, inventory)
+        XCTAssertLessThan(inventory, component)
+        XCTAssertLessThan(component, notarize)
+        XCTAssertTrue(script.contains("1.2.840.113635.100.6.2.6"))
+        XCTAssertTrue(script.contains("1.2.840.113635.100.6.1.13"))
+        XCTAssertTrue(script.contains("source \"$script_dir/macos-code-signing.sh\""))
+        XCTAssertTrue(script.contains("Sparkle changed; audit and update"))
+        XCTAssertTrue(script.contains("codesign -d -a arm64 -vvv"))
+        XCTAssertTrue(script.contains("codesign -d -a x86_64 -vvv"))
+        XCTAssertTrue(script.contains("codesign -d -a \"$signature_architecture\""))
+        XCTAssertTrue(script.contains("codesign --verify --all-architectures"))
+    }
+
     private func packageScript() throws -> String {
         try releaseScript(named: "package-macos.sh")
     }
@@ -238,6 +486,31 @@ final class DistributionScriptTests: XCTestCase {
             withIntermediateDirectories: false
         )
         return directory
+    }
+
+    private func createSparkleSymlinkFixture(
+        at directory: URL,
+        currentTarget: String = "B"
+    ) throws {
+        let versions = directory.appendingPathComponent("Versions")
+        try FileManager.default.createDirectory(
+            at: versions,
+            withIntermediateDirectories: true
+        )
+        let links = [
+            ("Versions/Current", currentTarget),
+            ("Autoupdate", "Versions/Current/Autoupdate"),
+            ("Resources", "Versions/Current/Resources"),
+            ("Sparkle", "Versions/Current/Sparkle"),
+            ("Updater.app", "Versions/Current/Updater.app"),
+            ("XPCServices", "Versions/Current/XPCServices")
+        ]
+        for (relativePath, target) in links {
+            try FileManager.default.createSymbolicLink(
+                atPath: directory.appendingPathComponent(relativePath).path,
+                withDestinationPath: target
+            )
+        }
     }
 
     private func setPermissions(_ permissions: Int, for url: URL) throws {
@@ -286,6 +559,30 @@ final class DistributionScriptTests: XCTestCase {
             log.path,
             jobID
         ]
+        let output = Pipe()
+        process.standardOutput = output
+        process.standardError = output
+        try process.run()
+        process.waitUntilExit()
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        return (
+            process.terminationStatus,
+            String(decoding: data, as: UTF8.self)
+        )
+    }
+
+    private func runMacCodeSigningHelper(
+        command: String,
+        arguments: [String]
+    ) throws -> (status: Int32, output: String) {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/bash")
+        process.arguments = [
+            "-c",
+            command,
+            "mac-code-signing-test",
+            repositoryRoot.appendingPathComponent("Scripts/macos-code-signing.sh").path
+        ] + arguments
         let output = Pipe()
         process.standardOutput = output
         process.standardError = output

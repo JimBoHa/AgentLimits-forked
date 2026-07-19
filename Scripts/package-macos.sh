@@ -28,6 +28,8 @@ validated_development_team_config_hash=""
 source "$script_dir/signing-config.sh"
 # shellcheck disable=SC1091
 source "$script_dir/notary-log.sh"
+# shellcheck disable=SC1091
+source "$script_dir/macos-code-signing.sh"
 
 if [[ ! -x "$developer_dir/usr/bin/xcodebuild" ]]; then
     echo "Xcode not found at $developer_dir" >&2
@@ -183,31 +185,39 @@ done
 plutil -lint "$app/Contents/Resources/PrivacyInfo.xcprivacy" >/dev/null
 plutil -lint "$widget/Contents/Resources/PrivacyInfo.xcprivacy" >/dev/null
 
-codesign --verify --deep --strict --verbose=4 "$app"
-codesign --verify --strict --verbose=4 "$widget"
+codesign --verify --all-architectures --deep --strict --verbose=4 "$app"
+codesign --verify --all-architectures --strict --verbose=4 "$widget"
 
 verify_developer_id_signature() {
     local bundle="$1"
     local label="$2"
-    local details
-    local signed_team
+    local expected_identifier="$3"
+    local expected_authority="${4:-}"
+    local arm64_details
+    local requirement
+    local x86_64_details
 
-    details="$(codesign -dvvv "$bundle" 2>&1)"
-    signed_team="$(printf '%s\n' "$details" \
-        | sed -n 's/^TeamIdentifier=//p' | head -1)"
-    if [[ "$signed_team" != "$team_id" ]]; then
-        echo "$label signature has unexpected Team: $signed_team" >&2
+    requirement="=anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and certificate leaf[subject.OU] = \"$team_id\""
+    if [[ -n "$expected_identifier" ]]; then
+        requirement="$requirement and identifier \"$expected_identifier\""
+    fi
+
+    codesign --verify --all-architectures --strict --verbose=4 \
+        -R "$requirement" "$bundle"
+    if ! arm64_details="$(codesign -d -a arm64 -vvv "$bundle" 2>&1)" \
+        || ! x86_64_details="$(codesign -d -a x86_64 -vvv \
+            "$bundle" 2>&1)"; then
+        echo "$label does not contain two readable signature slices" >&2
         exit 1
     fi
-    if ! printf '%s\n' "$details" \
-        | grep -q '^Authority=Developer ID Application:'; then
-        echo "$label is not signed by Developer ID Application" >&2
-        exit 1
-    fi
-    if ! printf '%s\n' "$details" | grep -q '^CodeDirectory .*runtime'; then
-        echo "$label signature lacks hardened runtime" >&2
-        exit 1
-    fi
+    validate_developer_id_signature_slices \
+        "$arm64_details" \
+        "$x86_64_details" \
+        "$team_id" \
+        "$expected_identifier" \
+        "$expected_authority" \
+        "$label" \
+        || exit $?
 }
 
 validate_developer_id_profile() {
@@ -252,8 +262,6 @@ validate_developer_id_profile() {
     fi
 }
 
-verify_developer_id_signature "$app" "macOS app"
-verify_developer_id_signature "$widget" "macOS widget"
 application_identity="$(codesign -dvvv "$app" 2>&1 \
     | sed -n 's/^Authority=\(Developer ID Application:.*\)$/\1/p' \
     | head -1)"
@@ -262,11 +270,21 @@ if [[ -z "$application_identity" \
     echo "Could not resolve the Team $team_id Developer ID Application identity" >&2
     exit 1
 fi
+verify_developer_id_signature \
+    "$app" \
+    "macOS app" \
+    "com.jimboha.agentlimits.macos" \
+    "$application_identity"
 if ! security find-identity -v -p codesigning \
         | grep -Fq "\"$application_identity\""; then
     echo "Developer ID Application identity and private key are unavailable" >&2
     exit 78
 fi
+verify_developer_id_signature \
+    "$widget" \
+    "macOS widget" \
+    "com.jimboha.agentlimits.macos.widget" \
+    "$application_identity"
 validate_developer_id_profile \
     "$app/Contents/embedded.provisionprofile" \
     "com.jimboha.agentlimits.macos" \
@@ -275,6 +293,211 @@ validate_developer_id_profile \
     "$widget/Contents/embedded.provisionprofile" \
     "com.jimboha.agentlimits.macos.widget" \
     widget
+
+sparkle="$app/Contents/Frameworks/Sparkle.framework"
+sparkle_version_root="$sparkle/Versions/B"
+sparkle_lock="$build_root/AgentLimits.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved"
+sparkle_pin_count="$(jq \
+    '[.pins[] | select(.identity == "sparkle")] | length' \
+    "$sparkle_lock")"
+if [[ "$sparkle_pin_count" != "1" ]]; then
+    echo "Package.resolved must contain exactly one Sparkle pin" >&2
+    exit 1
+fi
+sparkle_version="$(jq -er \
+    '.pins[] | select(.identity == "sparkle") | .state.version' \
+    "$sparkle_lock")"
+sparkle_revision="$(jq -er \
+    '.pins[] | select(.identity == "sparkle") | .state.revision' \
+    "$sparkle_lock")"
+if [[ "$sparkle_version" != "2.9.4" \
+    || "$sparkle_revision" \
+        != "b6496a74a087257ef5e6da1c5b29a447a60f5bd7" ]]; then
+    echo "Sparkle changed; audit and update the signed-code inventory first" >&2
+    exit 1
+fi
+
+validate_sparkle_code_inventory() {
+    local candidate
+    local candidate_architectures
+    local mode
+    local relative
+    local expected
+
+    if [[ -L "$sparkle" || ! -d "$sparkle_version_root" \
+        || -L "$sparkle_version_root" ]]; then
+        echo "Sparkle framework has an unsafe version root" >&2
+        return 1
+    fi
+    validate_sparkle_symlink_inventory "$sparkle" || return $?
+
+    for expected in \
+        Versions/B/Sparkle \
+        Versions/B/Autoupdate \
+        Versions/B/Updater.app/Contents/MacOS/Updater \
+        Versions/B/XPCServices/Downloader.xpc/Contents/MacOS/Downloader \
+        Versions/B/XPCServices/Installer.xpc/Contents/MacOS/Installer; do
+        if [[ -L "$sparkle/$expected" || ! -f "$sparkle/$expected" \
+            || ! -x "$sparkle/$expected" ]]; then
+            echo "Sparkle code is missing or unsafe: $expected" >&2
+            return 1
+        fi
+    done
+
+    while IFS= read -r -d '' candidate; do
+        relative="${candidate#"$sparkle"/}"
+        mode="$(stat -f '%Lp' "$candidate")"
+        candidate_architectures=""
+        if candidate_architectures="$(lipo -archs "$candidate" \
+                2>/dev/null)"; then
+            :
+        fi
+        if [[ -n "$candidate_architectures" ]] \
+            || (( (8#$mode & 8#111) != 0 )); then
+            if ! is_expected_sparkle_code_path "$relative"; then
+                echo "Sparkle contains unexpected code: $relative" >&2
+                return 1
+            fi
+        fi
+    done < <(find "$sparkle" -type f -print0)
+
+    while IFS= read -r -d '' candidate; do
+        relative="${candidate#"$sparkle"/}"
+        if ! is_expected_sparkle_bundle_path "$relative"; then
+            echo "Sparkle contains unexpected nested bundle: $relative" >&2
+            return 1
+        fi
+    done < <(find "$sparkle_version_root" -type d \
+        \( -name '*.app' -o -name '*.xpc' -o -name '*.framework' \) \
+        -print0)
+}
+
+verify_sparkle_bundle_metadata() {
+    local plist="$1"
+    local expected_identifier="$2"
+    local expected_executable="$3"
+    local expected_build="$4"
+    local label="$5"
+
+    if [[ -L "$plist" || ! -f "$plist" ]]; then
+        echo "$label has no regular Info.plist" >&2
+        exit 1
+    fi
+    plutil -lint "$plist" >/dev/null
+    if [[ "$(plutil -extract CFBundleIdentifier raw "$plist")" \
+            != "$expected_identifier" \
+        || "$(plutil -extract CFBundleExecutable raw "$plist")" \
+            != "$expected_executable" \
+        || "$(plutil -extract CFBundleShortVersionString raw "$plist")" \
+            != "$sparkle_version" \
+        || "$(plutil -extract CFBundleVersion raw "$plist")" \
+            != "$expected_build" ]]; then
+        echo "$label metadata does not match the audited Sparkle pin" >&2
+        exit 1
+    fi
+}
+
+verify_signed_sparkle_component() {
+    local component="$1"
+    local binary="$2"
+    local expected_identifier="$3"
+    local label="$4"
+    local index="$5"
+    local architectures
+    local details
+    local entitlements
+    local signature_architecture
+    local signed_identifier
+
+    verify_developer_id_signature \
+        "$component" \
+        "$label" \
+        "$expected_identifier" \
+        "$application_identity"
+    architectures="$(lipo -archs "$binary")"
+    validate_universal_binary_architectures \
+        "$architectures" "$label" || exit $?
+    for signature_architecture in arm64 x86_64; do
+        entitlements="$work_dir/sparkle-$index-$signature_architecture-entitlements.plist"
+        codesign -d -a "$signature_architecture" \
+            --entitlements "$entitlements" --xml \
+            "$component" 2>/dev/null
+        validate_no_get_task_allow_entitlements \
+            "$entitlements" "$label ($signature_architecture)" || exit $?
+
+        if [[ -z "$expected_identifier" ]]; then
+            details="$(codesign -d -a "$signature_architecture" -vvv \
+                "$component" 2>&1)"
+            signed_identifier="$(printf '%s\n' "$details" \
+                | sed -n 's/^Identifier=//p' | head -1)"
+            validate_sparkle_autoupdate_identifier "$signed_identifier" \
+                || exit $?
+        fi
+    done
+}
+
+validate_sparkle_code_inventory || exit $?
+sparkle_build="$(plutil -extract CFBundleVersion raw \
+    "$sparkle_version_root/Resources/Info.plist")"
+if [[ ! "$sparkle_build" =~ ^[0-9]+$ ]]; then
+    echo "Sparkle framework has an invalid build number" >&2
+    exit 1
+fi
+verify_sparkle_bundle_metadata \
+    "$sparkle_version_root/Resources/Info.plist" \
+    "org.sparkle-project.Sparkle" \
+    "Sparkle" \
+    "$sparkle_build" \
+    "Sparkle framework"
+verify_sparkle_bundle_metadata \
+    "$sparkle_version_root/Updater.app/Contents/Info.plist" \
+    "org.sparkle-project.Sparkle.Updater" \
+    "Updater" \
+    "$sparkle_build" \
+    "Sparkle Updater"
+verify_sparkle_bundle_metadata \
+    "$sparkle_version_root/XPCServices/Downloader.xpc/Contents/Info.plist" \
+    "org.sparkle-project.DownloaderService" \
+    "Downloader" \
+    "$sparkle_build" \
+    "Sparkle Downloader"
+verify_sparkle_bundle_metadata \
+    "$sparkle_version_root/XPCServices/Installer.xpc/Contents/Info.plist" \
+    "org.sparkle-project.InstallerLauncher" \
+    "Installer" \
+    "$sparkle_build" \
+    "Sparkle Installer"
+
+verify_signed_sparkle_component \
+    "$sparkle" \
+    "$sparkle_version_root/Sparkle" \
+    "org.sparkle-project.Sparkle" \
+    "Sparkle framework" \
+    framework
+verify_signed_sparkle_component \
+    "$sparkle_version_root/Autoupdate" \
+    "$sparkle_version_root/Autoupdate" \
+    "" \
+    "Sparkle Autoupdate" \
+    autoupdate
+verify_signed_sparkle_component \
+    "$sparkle_version_root/Updater.app" \
+    "$sparkle_version_root/Updater.app/Contents/MacOS/Updater" \
+    "org.sparkle-project.Sparkle.Updater" \
+    "Sparkle Updater" \
+    updater
+verify_signed_sparkle_component \
+    "$sparkle_version_root/XPCServices/Downloader.xpc" \
+    "$sparkle_version_root/XPCServices/Downloader.xpc/Contents/MacOS/Downloader" \
+    "org.sparkle-project.DownloaderService" \
+    "Sparkle Downloader" \
+    downloader
+verify_signed_sparkle_component \
+    "$sparkle_version_root/XPCServices/Installer.xpc" \
+    "$sparkle_version_root/XPCServices/Installer.xpc/Contents/MacOS/Installer" \
+    "org.sparkle-project.InstallerLauncher" \
+    "Sparkle Installer" \
+    installer
 
 app_info="$app/Contents/Info.plist"
 version="$(plutil -extract CFBundleShortVersionString raw "$app_info")"
@@ -294,69 +517,65 @@ if [[ "$(plutil -extract CFBundleIdentifier raw "$app_info")" \
     exit 1
 fi
 
-if [[ " $architectures " != *" arm64 "* \
-    || " $architectures " != *" x86_64 "* ]]; then
-    echo "Developer ID app is not universal: $architectures" >&2
-    exit 1
-fi
-if [[ " $widget_architectures " != *" arm64 "* \
-    || " $widget_architectures " != *" x86_64 "* ]]; then
-    echo "Developer ID widget is not universal: $widget_architectures" >&2
-    exit 1
-fi
+validate_universal_binary_architectures \
+    "$architectures" "Developer ID app" || exit $?
+validate_universal_binary_architectures \
+    "$widget_architectures" "Developer ID widget" || exit $?
 
-entitlements="$work_dir/app-entitlements.plist"
-codesign -d --entitlements "$entitlements" --xml "$app" 2>/dev/null
-plutil -lint "$entitlements" >/dev/null
-if [[ "$(plutil -extract 'com\.apple\.application-identifier' raw \
-        "$entitlements" 2>/dev/null || true)" \
-        != "$team_id.com.jimboha.agentlimits.macos" \
-    || "$(plutil -extract 'com\.apple\.developer\.team-identifier' raw \
-        "$entitlements" 2>/dev/null || true)" != "$team_id" ]]; then
-    echo "Developer ID app has unexpected identifier entitlements" >&2
-    exit 1
-fi
-if [[ "$(plutil -extract get-task-allow raw "$entitlements" 2>/dev/null \
-        || true)" == "true" ]]; then
-    echo "Developer ID app contains get-task-allow" >&2
-    exit 1
-fi
+for signature_architecture in arm64 x86_64; do
+    entitlements="$work_dir/app-$signature_architecture-entitlements.plist"
+    codesign -d -a "$signature_architecture" \
+        --entitlements "$entitlements" --xml "$app" 2>/dev/null
+    validate_no_get_task_allow_entitlements \
+        "$entitlements" "Developer ID app ($signature_architecture)" \
+        || exit $?
+    if [[ "$(plutil -extract 'com\.apple\.application-identifier' raw \
+            "$entitlements" 2>/dev/null || true)" \
+            != "$team_id.com.jimboha.agentlimits.macos" \
+        || "$(plutil -extract 'com\.apple\.developer\.team-identifier' raw \
+            "$entitlements" 2>/dev/null || true)" != "$team_id" ]]; then
+        echo "Developer ID app ($signature_architecture) has unexpected identifier entitlements" >&2
+        exit 1
+    fi
+    if [[ "$(plutil -extract 'com\.apple\.security\.application-groups' raw \
+            "$entitlements" 2>/dev/null || true)" != "1" \
+        || "$(plutil -extract \
+            'com\.apple\.security\.application-groups.0' raw \
+            "$entitlements" 2>/dev/null || true)" \
+            != "group.com.jimboha.agentlimits.macos" ]]; then
+        echo "Developer ID app ($signature_architecture) is missing the fork App Group entitlement" >&2
+        exit 1
+    fi
 
-if [[ "$(plutil -extract 'com\.apple\.security\.application-groups' raw \
-        "$entitlements" 2>/dev/null || true)" != "1" \
-    || "$(plutil -extract \
-        'com\.apple\.security\.application-groups.0' raw \
-        "$entitlements" 2>/dev/null || true)" \
-        != "group.com.jimboha.agentlimits.macos" ]]; then
-    echo "Developer ID app is missing the fork App Group entitlement" >&2
-    exit 1
-fi
-
-widget_entitlements="$work_dir/widget-entitlements.plist"
-codesign -d --entitlements "$widget_entitlements" --xml "$widget" 2>/dev/null
-plutil -lint "$widget_entitlements" >/dev/null
-if [[ "$(plutil -extract 'com\.apple\.application-identifier' raw \
-        "$widget_entitlements" 2>/dev/null || true)" \
-        != "$team_id.com.jimboha.agentlimits.macos.widget" \
-    || "$(plutil -extract 'com\.apple\.developer\.team-identifier' raw \
-        "$widget_entitlements" 2>/dev/null || true)" != "$team_id" ]]; then
-    echo "Widget has unexpected identifier entitlements" >&2
-    exit 1
-fi
-if [[ "$(plutil -extract 'com\.apple\.security\.app-sandbox' raw \
-        "$widget_entitlements" 2>/dev/null || true)" != "true" ]]; then
-    echo "Widget distribution signature lacks App Sandbox" >&2
-    exit 1
-fi
-if [[ "$(plutil -extract 'com\.apple\.security\.application-groups' raw \
-        "$widget_entitlements" 2>/dev/null || true)" != "1" \
-    || "$(plutil -extract \
-        'com\.apple\.security\.application-groups.0' raw \
-        "$widget_entitlements" 2>/dev/null || true)" \
-        != "group.com.jimboha.agentlimits.macos" ]]; then
-    echo "Widget distribution signature lacks the fork App Group" >&2
-    exit 1
-fi
+    widget_entitlements="$work_dir/widget-$signature_architecture-entitlements.plist"
+    codesign -d -a "$signature_architecture" \
+        --entitlements "$widget_entitlements" --xml "$widget" 2>/dev/null
+    validate_no_get_task_allow_entitlements \
+        "$widget_entitlements" "Widget ($signature_architecture)" \
+        || exit $?
+    if [[ "$(plutil -extract 'com\.apple\.application-identifier' raw \
+            "$widget_entitlements" 2>/dev/null || true)" \
+            != "$team_id.com.jimboha.agentlimits.macos.widget" \
+        || "$(plutil -extract 'com\.apple\.developer\.team-identifier' raw \
+            "$widget_entitlements" 2>/dev/null || true)" != "$team_id" ]]; then
+        echo "Widget ($signature_architecture) has unexpected identifier entitlements" >&2
+        exit 1
+    fi
+    if [[ "$(plutil -extract 'com\.apple\.security\.app-sandbox' raw \
+            "$widget_entitlements" 2>/dev/null || true)" != "true" ]]; then
+        echo "Widget ($signature_architecture) signature lacks App Sandbox" >&2
+        exit 1
+    fi
+    if [[ "$(plutil -extract 'com\.apple\.security\.application-groups' raw \
+            "$widget_entitlements" 2>/dev/null || true)" != "1" \
+        || "$(plutil -extract \
+            'com\.apple\.security\.application-groups.0' raw \
+            "$widget_entitlements" 2>/dev/null || true)" \
+            != "group.com.jimboha.agentlimits.macos" ]]; then
+        echo "Widget ($signature_architecture) signature lacks the fork App Group" >&2
+        exit 1
+    fi
+done
 
 submit_notary() {
     local artifact="$1"
@@ -459,7 +678,7 @@ xcrun stapler staple "$dmg"
 xcrun stapler validate "$dmg"
 codesign --verify --strict --verbose=4 "$dmg"
 
-codesign --verify --deep --strict --verbose=4 "$app"
+codesign --verify --all-architectures --deep --strict --verbose=4 "$app"
 pkgutil --check-signature "$pkg"
 spctl --assess --type execute --verbose=4 "$app"
 spctl --assess --type install --verbose=4 "$pkg"
@@ -486,7 +705,9 @@ Build source: clean git archive with generated Team-only config
 Xcode: $(xcodebuild -version | tr '\n' ' ')
 macOS architectures: $architectures
 macOS widget architectures: $widget_architectures
+Sparkle: $sparkle_version ($sparkle_revision), build $sparkle_build
 Developer ID verification: passed
+Nested Sparkle Developer ID verification: passed
 Notarization and stapling: passed for app, PKG, and DMG
 EOF
 

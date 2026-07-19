@@ -21,6 +21,8 @@
   signing config and building from a clean Git snapshot.
 - Made signed macOS releases fail closed on malformed, mismatched, or nonempty
   Apple notarization issue logs.
+- Made signed macOS releases verify the exact pinned Sparkle nested-code
+  inventory, provenance, runtime, timestamps, slices, and entitlements.
 
 Original AgentLimits was created by Nihondo and remains credited under the MIT
 license: https://github.com/Nihondo/AgentLimits
