@@ -93,25 +93,6 @@ final class CCUsageFetcher {
     private let shellExecutor: ShellExecutor
     private let settingsStore: CCUsageSettingsStore
 
-    // MARK: - Date Formatters
-    // Cached formatters to avoid repeated allocations during parsing operations.
-
-    /// Formatter for ISO date strings (YYYY-MM-DD), used by Claude/ccusage responses
-    private let isoFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd"
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        return formatter
-    }()
-
-    /// Output formatter for ISO date strings (YYYY-MM-DD), used for today's date comparison
-    private let outputFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd"
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        return formatter
-    }()
-
     /// Creates a new fetcher with the specified configuration.
     /// - Parameters:
     ///   - timeout: Maximum time to wait for CLI completion (default: 60 seconds)
@@ -190,10 +171,13 @@ final class CCUsageFetcher {
     func parseResponse(
         jsonData: Data,
         provider: TokenUsageProvider,
-        now: Date = Date()
+        now: Date = Date(),
+        calendar sourceCalendar: Calendar = .current
     ) throws -> TokenUsageSnapshot {
-        let calendar = Calendar.current
-        let todayString = outputFormatter.string(from: now)
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = sourceCalendar.timeZone
+        let isoFormatter = Self.makeISODateFormatter(calendar: calendar)
+        let todayString = isoFormatter.string(from: now)
 
         // Calculate a Sunday boundary without locale-dependent week numbering.
         let startOfWeek = SundayWeekStartResolver.resolve(for: now, calendar: calendar)
@@ -207,7 +191,8 @@ final class CCUsageFetcher {
                 todayString: todayString,
                 startOfWeek: startOfWeek,
                 now: now,
-                calendar: calendar
+                calendar: calendar,
+                isoFormatter: isoFormatter
             )
         case .codex:
             return try parseCodexResponse(
@@ -216,12 +201,23 @@ final class CCUsageFetcher {
                 todayString: todayString,
                 startOfWeek: startOfWeek,
                 now: now,
-                calendar: calendar
+                calendar: calendar,
+                isoFormatter: isoFormatter
             )
         case .copilot:
             // Copilot billing is fetched via WebView, not CLI.
             throw CCUsageFetcherError.parseError("Copilot billing does not use CLI fetching")
         }
+    }
+
+    private static func makeISODateFormatter(calendar: Calendar) -> DateFormatter {
+        let formatter = DateFormatter()
+        formatter.calendar = calendar
+        formatter.timeZone = calendar.timeZone
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd"
+        formatter.isLenient = false
+        return formatter
     }
 
     /// Internal daily entry for parsing and aggregation.
@@ -311,7 +307,8 @@ final class CCUsageFetcher {
         todayString: String,
         startOfWeek: Date,
         now: Date,
-        calendar: Calendar
+        calendar: Calendar,
+        isoFormatter: DateFormatter
     ) throws -> TokenUsageSnapshot {
         // Decode ccusage response and normalize fields.
         let response = try decodeResponse(CCUsageClaudeResponse.self, jsonData: jsonData)
@@ -343,7 +340,8 @@ final class CCUsageFetcher {
         todayString: String,
         startOfWeek: Date,
         now: Date,
-        calendar: Calendar
+        calendar: Calendar,
+        isoFormatter: DateFormatter
     ) throws -> TokenUsageSnapshot {
         let response = try decodeResponse(CCUsageCodexResponse.self, jsonData: jsonData)
         let dailyEntries = response.daily.map { entry in

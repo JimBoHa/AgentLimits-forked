@@ -222,13 +222,6 @@ extension AppGroupSnapshotStore where Provider == TokenUsageProvider, Snapshot =
 
 /// Resolves the current month's start date string for ccusage CLI commands.
 enum MonthStartDateResolver {
-    private static let formatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyyMMdd"
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        return formatter
-    }()
-
     /// Calculates the first day of the current month in YYYYMMDD format.
     /// - Parameters:
     ///   - now: The date to base the calculation on (default: current date)
@@ -238,13 +231,15 @@ enum MonthStartDateResolver {
         now: Date = Date(),
         calendar: Calendar = .current
     ) -> String {
-        // Extract year/month and rebuild the first day of the month.
-        let components = calendar.dateComponents([.year, .month], from: now)
-        guard let startOfMonth = calendar.date(from: components) else {
-            // Fallback to the provided date when calendar calculation fails.
-            return formatter.string(from: now)
+        // ccusage date arguments are Gregorian even when the user's preferred
+        // calendar is Islamic, Hebrew, or another non-Gregorian calendar.
+        var gregorian = Calendar(identifier: .gregorian)
+        gregorian.timeZone = calendar.timeZone
+        let components = gregorian.dateComponents([.year, .month], from: now)
+        guard let year = components.year, let month = components.month else {
+            return ""
         }
-        return formatter.string(from: startOfMonth)
+        return String(format: "%04d%02d01", year, month)
     }
 }
 
