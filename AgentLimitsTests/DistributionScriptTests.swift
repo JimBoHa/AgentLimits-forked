@@ -100,6 +100,68 @@ final class DistributionScriptTests: XCTestCase {
         )
     }
 
+    func testAcceptedNotaryLogsWithNullOrEmptyIssuesPass() throws {
+        for issues in ["null", "[]"] {
+            let directory = try temporaryDirectory()
+            defer { try? FileManager.default.removeItem(at: directory) }
+            let log = directory.appendingPathComponent("accepted.json")
+            let json = #"{"jobId":"job-123","status":"Accepted","statusCode":0,"issues":ISSUES}"#
+                .replacingOccurrences(of: "ISSUES", with: issues)
+            try Data(json.utf8).write(to: log)
+
+            let result = try runNotaryLogValidator(log: log, jobID: "job-123")
+            XCTAssertEqual(result.status, 0, result.output)
+        }
+    }
+
+    func testNotaryWarningsFailRelease() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let log = directory.appendingPathComponent("warning.json")
+        let json = #"{"jobId":"job-123","status":"Accepted","statusCode":0,"issues":[{"severity":"warning","path":"AgentLimits.app","message":"Fix this warning"}]}"#
+        try Data(json.utf8).write(to: log)
+
+        let result = try runNotaryLogValidator(log: log, jobID: "job-123")
+
+        XCTAssertEqual(result.status, 1, result.output)
+        XCTAssertTrue(result.output.contains("Fix this warning"), result.output)
+    }
+
+    func testMalformedMismatchedAndRejectedNotaryLogsFail() throws {
+        let fixtures = [
+            #"{"jobId":"other-job","status":"Accepted","statusCode":0,"issues":null}"#,
+            #"{"jobId":"job-123","status":"Rejected","statusCode":4000,"issues":null}"#,
+            #"{"jobId":"job-123","status":"Accepted","statusCode":0}"#,
+            "{"
+        ]
+
+        for (index, json) in fixtures.enumerated() {
+            let directory = try temporaryDirectory()
+            defer { try? FileManager.default.removeItem(at: directory) }
+            let log = directory.appendingPathComponent("invalid-\(index).json")
+            try Data(json.utf8).write(to: log)
+
+            let result = try runNotaryLogValidator(log: log, jobID: "job-123")
+            XCTAssertEqual(result.status, 1, result.output)
+        }
+    }
+
+    func testMacPackageValidatesAcceptedNotaryLogBeforeStapling() throws {
+        let script = try packageScript()
+        let accepted = try offset(
+            of: #"if [[ $submit_exit -ne 0 || "$status" != "Accepted" ]]"#,
+            in: script
+        )
+        let validate = try offset(
+            of: #"validate_accepted_notary_log "$log" "$submission_id""#,
+            in: script
+        )
+        let staple = try offset(of: #"xcrun stapler staple "$app""#, in: script)
+
+        XCTAssertLessThan(accepted, validate)
+        XCTAssertLessThan(validate, staple)
+    }
+
     func testMacPackageRequiresUsableDeveloperIDApplicationIdentity() throws {
         let script = try packageScript()
 
@@ -194,6 +256,32 @@ final class DistributionScriptTests: XCTestCase {
             "signing-config-test",
             repositoryRoot.appendingPathComponent("Scripts/signing-config.sh").path,
             config.path
+        ]
+        let output = Pipe()
+        process.standardOutput = output
+        process.standardError = output
+        try process.run()
+        process.waitUntilExit()
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        return (
+            process.terminationStatus,
+            String(decoding: data, as: UTF8.self)
+        )
+    }
+
+    private func runNotaryLogValidator(
+        log: URL,
+        jobID: String
+    ) throws -> (status: Int32, output: String) {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/bash")
+        process.arguments = [
+            "-c",
+            #"source "$1"; validate_accepted_notary_log "$2" "$3"; exit $?"#,
+            "notary-log-test",
+            repositoryRoot.appendingPathComponent("Scripts/notary-log.sh").path,
+            log.path,
+            jobID
         ]
         let output = Pipe()
         process.standardOutput = output

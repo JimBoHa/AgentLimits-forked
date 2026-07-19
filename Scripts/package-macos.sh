@@ -26,6 +26,8 @@ validated_development_team=""
 validated_development_team_config_hash=""
 # shellcheck disable=SC1091
 source "$script_dir/signing-config.sh"
+# shellcheck disable=SC1091
+source "$script_dir/notary-log.sh"
 
 if [[ ! -x "$developer_dir/usr/bin/xcodebuild" ]]; then
     echo "Xcode not found at $developer_dir" >&2
@@ -387,6 +389,7 @@ submit_notary() {
         echo "Apple did not accept $label notarization; inspect $log" >&2
         exit 1
     fi
+    validate_accepted_notary_log "$log" "$submission_id" || exit $?
 }
 
 base_name="AgentLimitsForked-$version-$build-macOS"
