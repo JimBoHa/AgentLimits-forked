@@ -47,6 +47,14 @@ struct UnsafeLaunchAgentStorage: LocalizedError {
     }
 }
 
+struct MissingLoadedLaunchAgentConfiguration: LocalizedError {
+    let path: String
+
+    var errorDescription: String? {
+        "The loaded LaunchAgent has no recoverable plist at: \(path)"
+    }
+}
+
 /// Performs every LaunchAgent plist mutation relative to validated directory
 /// descriptors. This prevents path substitution and never publishes a plist
 /// before its contents and owner-only permissions are final.
@@ -420,6 +428,16 @@ enum SecureLaunchAgentPlistStore {
             guard tag == ACL_EXTENDED_ALLOW else {
                 return
             }
+            // A file-inheriting allow ACE creates a disclosure window: a
+            // second account can open the empty temp file before its inherited
+            // ACL is cleared, retain that descriptor, then read later writes.
+            if try aclFlag(
+                ACL_ENTRY_FILE_INHERIT,
+                isSetOn: entry,
+                path: path
+            ) {
+                throw UnsafeLaunchAgentStorage(path: path)
+            }
             var permissions: acl_permset_mask_t = 0
             guard acl_get_permset_mask_np(entry, &permissions) == 0 else {
                 throw posixError(
@@ -431,6 +449,25 @@ enum SecureLaunchAgentPlistStore {
                 throw UnsafeLaunchAgentStorage(path: path)
             }
         }
+    }
+
+    private static func aclFlag(
+        _ flag: acl_flag_t,
+        isSetOn entry: acl_entry_t,
+        path: String
+    ) throws -> Bool {
+        var flagSet: acl_flagset_t?
+        guard acl_get_flagset_np(
+            UnsafeMutableRawPointer(entry),
+            &flagSet
+        ) == 0, let flagSet else {
+            throw posixError(operation: "read ACL flags", path: path)
+        }
+        let result = acl_get_flag_np(flagSet, flag)
+        guard result >= 0 else {
+            throw posixError(operation: "read ACL flag", path: path)
+        }
+        return result == 1
     }
 
     private static func ensureNoExtendedACLEntries(
@@ -893,6 +930,14 @@ final class LaunchAgentManager {
             )
         } catch {
             throw WakeUpError.launchAgentWriteFailed(error)
+        }
+        if wasServiceLoaded, previousPlistData == nil {
+            // A failed replacement cannot restore a loaded job whose original
+            // configuration is already missing. Refuse before publishing or
+            // stopping anything so the existing process state stays intact.
+            throw WakeUpError.launchAgentWriteFailed(
+                MissingLoadedLaunchAgentConfiguration(path: url.path)
+            )
         }
 
         // Generate and stage the new plist before stopping a working service.
