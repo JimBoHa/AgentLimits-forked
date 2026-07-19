@@ -169,9 +169,12 @@ final class CCUsageFetcher {
     }
 
     /// Parses the JSON response and builds a snapshot
-    private func parseResponse(jsonData: Data, provider: TokenUsageProvider) throws -> TokenUsageSnapshot {
+    func parseResponse(
+        jsonData: Data,
+        provider: TokenUsageProvider,
+        now: Date = Date()
+    ) throws -> TokenUsageSnapshot {
         let calendar = Calendar.current
-        let now = Date()
         let todayString = outputFormatter.string(from: now)
 
         // Calculate a Sunday boundary without locale-dependent week numbering.
@@ -184,14 +187,18 @@ final class CCUsageFetcher {
                 jsonData: jsonData,
                 provider: provider,
                 todayString: todayString,
-                startOfWeek: startOfWeek
+                startOfWeek: startOfWeek,
+                now: now,
+                calendar: calendar
             )
         case .codex:
             return try parseCodexResponse(
                 jsonData: jsonData,
                 provider: provider,
                 todayString: todayString,
-                startOfWeek: startOfWeek
+                startOfWeek: startOfWeek,
+                now: now,
+                calendar: calendar
             )
         case .copilot:
             // Copilot billing is fetched via WebView, not CLI.
@@ -203,11 +210,6 @@ final class CCUsageFetcher {
     /// Distinct from shared `DailyUsageEntry` which uses ISO8601 dates only.
     private struct InternalDailyEntry {
         let date: String
-        let totalTokens: Int
-        let costUSD: Double
-    }
-
-    private struct UsageTotals {
         let totalTokens: Int
         let costUSD: Double
     }
@@ -225,37 +227,49 @@ final class CCUsageFetcher {
     private func buildSnapshot(
         provider: TokenUsageProvider,
         dailyEntries: [InternalDailyEntry],
-        totals: UsageTotals,
         startOfWeek: Date,
+        now: Date,
+        calendar: Calendar,
         isTodayEntry: (InternalDailyEntry) -> Bool,
         parseDate: (InternalDailyEntry) -> Date?,
         normalizeToISO: (InternalDailyEntry) -> String
     ) -> TokenUsageSnapshot {
-        // Build "today" usage from the daily entries.
-        let todayEntry = dailyEntries.first(where: isTodayEntry)
+        let endOfToday = calendar.date(
+            byAdding: .day,
+            value: 1,
+            to: calendar.startOfDay(for: now)
+        ) ?? now
+        let datedEntries = dailyEntries.compactMap { entry -> (InternalDailyEntry, Date)? in
+            guard let date = parseDate(entry), date < endOfToday else { return nil }
+            return (entry, date)
+        }
+
+        // Build "today" usage from valid, non-future daily entries.
+        let todayEntry = datedEntries
+            .map(\.0)
+            .first(where: isTodayEntry)
         let today = TokenUsagePeriod(
             costUSD: todayEntry?.costUSD ?? 0,
             totalTokens: todayEntry?.totalTokens ?? 0
         )
 
         // Aggregate week totals from the start-of-week date.
-        let weekEntries = dailyEntries.filter { entry in
-            guard let date = parseDate(entry) else { return false }
-            return date >= startOfWeek
-        }
+        let weekEntries = datedEntries.filter { $0.1 >= startOfWeek }.map(\.0)
         let thisWeek = TokenUsagePeriod(
             costUSD: weekEntries.reduce(0) { $0 + $1.costUSD },
             totalTokens: weekEntries.reduce(0) { $0 + $1.totalTokens }
         )
 
-        // Use CLI totals for month aggregation.
+        let monthComponents = calendar.dateComponents([.year, .month], from: now)
+        let startOfMonth = calendar.date(from: monthComponents) ?? startOfWeek
+        let monthEntries = datedEntries.filter { $0.1 >= startOfMonth }.map(\.0)
         let thisMonth = TokenUsagePeriod(
-            costUSD: totals.costUSD,
-            totalTokens: totals.totalTokens
+            costUSD: monthEntries.reduce(0) { $0 + $1.costUSD },
+            totalTokens: monthEntries.reduce(0) { $0 + $1.totalTokens }
         )
 
         // Build daily usage entries with normalized ISO8601 dates for heatmap.
-        let dailyUsage = dailyEntries.map { entry in
+        let dailyUsage = datedEntries.map { entry, _ in
             DailyUsageEntry(
                 date: normalizeToISO(entry),
                 totalTokens: entry.totalTokens
@@ -264,7 +278,7 @@ final class CCUsageFetcher {
 
         return TokenUsageSnapshot(
             provider: provider,
-            fetchedAt: Date(),
+            fetchedAt: now,
             today: today,
             thisWeek: thisWeek,
             thisMonth: thisMonth,
@@ -277,7 +291,9 @@ final class CCUsageFetcher {
         jsonData: Data,
         provider: TokenUsageProvider,
         todayString: String,
-        startOfWeek: Date
+        startOfWeek: Date,
+        now: Date,
+        calendar: Calendar
     ) throws -> TokenUsageSnapshot {
         // Decode ccusage response and normalize fields.
         let response = try decodeResponse(CCUsageClaudeResponse.self, jsonData: jsonData)
@@ -288,17 +304,14 @@ final class CCUsageFetcher {
                 costUSD: entry.totalCost
             )
         }
-        let totals = UsageTotals(
-            totalTokens: response.totals.totalTokens,
-            costUSD: response.totals.totalCost
-        )
         // Build standardized snapshot from normalized entries.
         // Claude dates are already in ISO8601 format, so return as-is.
         return buildSnapshot(
             provider: provider,
             dailyEntries: dailyEntries,
-            totals: totals,
             startOfWeek: startOfWeek,
+            now: now,
+            calendar: calendar,
             isTodayEntry: { $0.date == todayString },
             parseDate: { isoFormatter.date(from: $0.date) },
             normalizeToISO: { $0.date }
@@ -310,7 +323,9 @@ final class CCUsageFetcher {
         jsonData: Data,
         provider: TokenUsageProvider,
         todayString: String,
-        startOfWeek: Date
+        startOfWeek: Date,
+        now: Date,
+        calendar: Calendar
     ) throws -> TokenUsageSnapshot {
         let response = try decodeResponse(CCUsageCodexResponse.self, jsonData: jsonData)
         let dailyEntries = response.daily.map { entry in
@@ -320,15 +335,12 @@ final class CCUsageFetcher {
                 costUSD: entry.costUSD
             )
         }
-        let totals = UsageTotals(
-            totalTokens: response.totals.totalTokens,
-            costUSD: response.totals.costUSD
-        )
         return buildSnapshot(
             provider: provider,
             dailyEntries: dailyEntries,
-            totals: totals,
             startOfWeek: startOfWeek,
+            now: now,
+            calendar: calendar,
             isTodayEntry: { $0.date == todayString },
             parseDate: { isoFormatter.date(from: $0.date) },
             normalizeToISO: { $0.date }
