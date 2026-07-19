@@ -180,7 +180,10 @@ final class CopilotUsageFetcher {
                 // Look for GitHub's logged_in cookie on github.com domain.
                 let isValid = cookies.contains { cookie in
                     guard cookie.name == "logged_in" else { return false }
-                    guard cookie.domain.hasSuffix("github.com") else { return false }
+                    guard CookieDomainMatcher.matches(
+                        cookie.domain,
+                        expectedDomain: "github.com"
+                    ) else { return false }
                     guard cookie.value == "yes" else { return false }
                     if let expiresDate = cookie.expiresDate {
                         return expiresDate > now
