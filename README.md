@@ -1,3 +1,5 @@
+> Fork notice: Originally created by [Nihondo](https://github.com/Nihondo) at [Nihondo/AgentLimits](https://github.com/Nihondo/AgentLimits). This fork preserves full credit to the original author and project.
+
 # AgentLimits
 
 **In Development**
