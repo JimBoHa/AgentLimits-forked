@@ -1,0 +1,378 @@
+import SwiftUI
+
+/// Account management sheet for the selected usage provider. Mutations flow
+/// through UsageViewModel so snapshots, widgets, and live WebViews stay bound
+/// to the same immutable account UUID.
+struct ProviderAccountsSettingsView: View {
+    @Environment(\.dismiss) private var dismiss
+
+    @ObservedObject var viewModel: UsageViewModel
+    let removalManager: ProviderAccountRemovalManager
+
+    @State private var selectedProvider: UsageProvider
+    @State private var editorConfiguration: AccountEditorConfiguration?
+    @State private var removalCandidate: ProviderAccount?
+    @State private var pendingRemovalAccountID: UUID?
+    @State private var alertMessage: String?
+
+    init(
+        viewModel: UsageViewModel,
+        removalManager: ProviderAccountRemovalManager,
+        initialProvider: UsageProvider
+    ) {
+        self.viewModel = viewModel
+        self.removalManager = removalManager
+        self._selectedProvider = State(initialValue: initialProvider)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: DesignTokens.Spacing.medium) {
+            HStack {
+                Text("accounts.title".localized())
+                    .font(.title2.bold())
+                Spacer()
+                Button {
+                    editorConfiguration = AccountEditorConfiguration(
+                        provider: selectedProvider,
+                        account: nil
+                    )
+                } label: {
+                    Label("accounts.add".localized(), systemImage: "plus")
+                }
+                .settingsButtonStyle(.primary)
+                .disabled(isBusy || !viewModel.webSessionsCanBeManaged)
+
+                Button("content.popupClose".localized()) {
+                    dismiss()
+                }
+                .keyboardShortcut(.cancelAction)
+                .disabled(isBusy)
+            }
+
+            Picker("content.provider".localized(), selection: $selectedProvider) {
+                ForEach(UsageProvider.allCases) { provider in
+                    Text(provider.displayName).tag(provider)
+                }
+            }
+            .pickerStyle(.segmented)
+
+            List {
+                ForEach(accounts) { account in
+                    accountRow(account)
+                }
+            }
+            .listStyle(.bordered(alternatesRowBackgrounds: true))
+
+            if !viewModel.webSessionsCanBeManaged {
+                Text("accounts.newerVersionReadOnly".localized())
+                    .font(.footnote)
+                    .foregroundStyle(.orange)
+            } else if accounts.count == 1 {
+                Text("accounts.lastRequired".localized())
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(DesignTokens.Spacing.large)
+        .frame(minWidth: 620, minHeight: 430)
+        .interactiveDismissDisabled(isBusy)
+        .sheet(item: $editorConfiguration) { configuration in
+            ProviderAccountEditorView(configuration: configuration) {
+                label, isEnabled in
+                if let account = configuration.account {
+                    _ = try viewModel.updateAccount(
+                        id: account.id,
+                        label: label,
+                        isEnabled: isEnabled
+                    )
+                } else {
+                    _ = try viewModel.addAndSelectAccount(
+                        id: configuration.id,
+                        provider: configuration.provider,
+                        label: label
+                    )
+                }
+            }
+        }
+        .confirmationDialog(
+            "accounts.removeTitle".localized(),
+            isPresented: Binding(
+                get: { removalCandidate != nil },
+                set: { isPresented in
+                    if !isPresented { removalCandidate = nil }
+                }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("accounts.remove".localized(), role: .destructive) {
+                guard let account = removalCandidate else { return }
+                removalCandidate = nil
+                startRemoval(account)
+            }
+            Button("accounts.cancel".localized(), role: .cancel) {
+                removalCandidate = nil
+            }
+        } message: {
+            if let removalCandidate {
+                Text(removalMessage(for: removalCandidate))
+            }
+        }
+        .alert(
+            "accounts.title".localized(),
+            isPresented: Binding(
+                get: { alertMessage != nil },
+                set: { isPresented in
+                    if !isPresented { alertMessage = nil }
+                }
+            )
+        ) {
+            Button("accounts.ok".localized(), role: .cancel) {
+                alertMessage = nil
+            }
+        } message: {
+            Text(alertMessage ?? "")
+        }
+    }
+
+    private var accounts: [ProviderAccount] {
+        viewModel.accounts(for: selectedProvider)
+    }
+
+    private var isBusy: Bool {
+        pendingRemovalAccountID != nil
+    }
+
+    @ViewBuilder
+    private func accountRow(_ account: ProviderAccount) -> some View {
+        HStack(spacing: DesignTokens.Spacing.medium) {
+            Button {
+                do {
+                    _ = try viewModel.selectAccount(id: account.id)
+                } catch {
+                    alertMessage = error.localizedDescription
+                }
+            } label: {
+                Image(
+                    systemName: isSelected(account)
+                        ? "checkmark.circle.fill"
+                        : "circle"
+                )
+                .font(.title3)
+            }
+            .buttonStyle(.plain)
+            .disabled(isBusy || !viewModel.webSessionsCanBeManaged)
+            .accessibilityLabel(
+                Text("accounts.selectFormat".localized(account.label))
+            )
+
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    Text(account.label)
+                        .fontWeight(isSelected(account) ? .semibold : .regular)
+                    if isSelected(account) {
+                        Text("accounts.selected".localized())
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                Text(sessionDescription(for: account))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+
+            if pendingRemovalAccountID == account.id {
+                ProgressView()
+                    .controlSize(.small)
+            }
+
+            Toggle(
+                "accounts.autoRefresh".localized(),
+                isOn: Binding(
+                    get: { account.isEnabled },
+                    set: { isEnabled in
+                        do {
+                            _ = try viewModel.updateAccount(
+                                id: account.id,
+                                label: account.label,
+                                isEnabled: isEnabled
+                            )
+                        } catch {
+                            alertMessage = error.localizedDescription
+                        }
+                    }
+                )
+            )
+            .toggleStyle(.checkbox)
+            .disabled(isBusy || !viewModel.webSessionsCanBeManaged)
+
+            Button {
+                editorConfiguration = AccountEditorConfiguration(
+                    provider: account.provider,
+                    account: account
+                )
+            } label: {
+                Image(systemName: "pencil")
+            }
+            .disabled(isBusy || !viewModel.webSessionsCanBeManaged)
+            .help("accounts.edit".localized())
+
+            Button(role: .destructive) {
+                removalCandidate = account
+            } label: {
+                Image(systemName: "trash")
+            }
+            .disabled(
+                isBusy
+                    || accounts.count <= 1
+                    || !viewModel.webSessionsCanBeManaged
+            )
+            .help(
+                accounts.count <= 1
+                    ? "accounts.lastRequired".localized()
+                    : "accounts.remove".localized()
+            )
+        }
+        .padding(.vertical, 4)
+    }
+
+    private func isSelected(_ account: ProviderAccount) -> Bool {
+        viewModel.selectedAccount(for: account.provider).id == account.id
+    }
+
+    private func sessionDescription(for account: ProviderAccount) -> String {
+        switch account.webKitStorage {
+        case .isolated:
+            return "accounts.isolatedSession".localized()
+        case .legacyDefault:
+            return "accounts.legacySession".localized()
+        }
+    }
+
+    private func removalMessage(for account: ProviderAccount) -> String {
+        switch account.webKitStorage {
+        case .isolated:
+            return "accounts.removeMessage".localized(account.label)
+        case .legacyDefault:
+            return "accounts.removeLegacyMessage".localized(account.label)
+        }
+    }
+
+    private func startRemoval(_ account: ProviderAccount) {
+        guard pendingRemovalAccountID == nil else { return }
+        pendingRemovalAccountID = account.id
+        Task { await remove(account) }
+    }
+
+    private func remove(_ account: ProviderAccount) async {
+        defer {
+            pendingRemovalAccountID = nil
+            // prepareRemoval may change selection before later cleanup fails.
+            viewModel.reloadAccounts()
+        }
+        do {
+            let outcome = try await removalManager.removeAccount(id: account.id)
+            if outcome == .removedWithPendingCleanup {
+                alertMessage = "accounts.pendingCleanup".localized()
+            }
+        } catch {
+            alertMessage = error.localizedDescription
+        }
+    }
+}
+
+private struct AccountEditorConfiguration: Identifiable {
+    let id = UUID()
+    let provider: UsageProvider
+    let account: ProviderAccount?
+}
+
+private struct ProviderAccountEditorView: View {
+    @Environment(\.dismiss) private var dismiss
+
+    let configuration: AccountEditorConfiguration
+    let onSave: (String, Bool) throws -> Void
+
+    @State private var label: String
+    @State private var isEnabled: Bool
+    @State private var errorMessage: String?
+
+    init(
+        configuration: AccountEditorConfiguration,
+        onSave: @escaping (String, Bool) throws -> Void
+    ) {
+        self.configuration = configuration
+        self.onSave = onSave
+        self._label = State(initialValue: configuration.account?.label ?? "")
+        self._isEnabled = State(
+            initialValue: configuration.account?.isEnabled ?? true
+        )
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: DesignTokens.Spacing.medium) {
+            Text(
+                configuration.account == nil
+                    ? "accounts.add".localized()
+                    : "accounts.edit".localized()
+            )
+            .font(.title2.bold())
+
+            Form {
+                LabeledContent("content.provider".localized()) {
+                    Text(configuration.provider.displayName)
+                }
+                TextField("accounts.label".localized(), text: $label)
+                    .textFieldStyle(.roundedBorder)
+                if configuration.account != nil {
+                    Toggle(
+                        "accounts.autoRefresh".localized(),
+                        isOn: $isEnabled
+                    )
+                }
+            }
+            .formStyle(.grouped)
+
+            HStack {
+                Spacer()
+                Button("accounts.cancel".localized()) {
+                    dismiss()
+                }
+                .keyboardShortcut(.cancelAction)
+                Button("accounts.save".localized()) {
+                    do {
+                        try onSave(label, isEnabled)
+                        dismiss()
+                    } catch {
+                        errorMessage = error.localizedDescription
+                    }
+                }
+                .keyboardShortcut(.defaultAction)
+                .settingsButtonStyle(.primary)
+                .disabled(
+                    label.trimmingCharacters(
+                        in: .whitespacesAndNewlines
+                    ).isEmpty
+                )
+            }
+        }
+        .padding(DesignTokens.Spacing.large)
+        .frame(width: 430)
+        .alert(
+            "accounts.title".localized(),
+            isPresented: Binding(
+                get: { errorMessage != nil },
+                set: { isPresented in
+                    if !isPresented { errorMessage = nil }
+                }
+            )
+        ) {
+            Button("accounts.ok".localized(), role: .cancel) {
+                errorMessage = nil
+            }
+        } message: {
+            Text(errorMessage ?? "")
+        }
+    }
+}

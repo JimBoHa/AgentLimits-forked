@@ -259,15 +259,20 @@ struct ProviderAccountStore {
     nonisolated private static let webKitStorageVersion = 2
     private let userDefaults: UserDefaults
     private let key: String
+    private let synchronizeDefaults: (UserDefaults) -> Bool
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
 
     init(
         userDefaults: UserDefaults? = nil,
-        key: String = "provider_accounts_v1"
+        key: String = "provider_accounts_v1",
+        synchronizeDefaults: @escaping (UserDefaults) -> Bool = {
+            $0.synchronize()
+        }
     ) {
         self.userDefaults = userDefaults ?? AppGroupDefaults.shared ?? .standard
         self.key = key
+        self.synchronizeDefaults = synchronizeDefaults
     }
 
     /// Persistent web sessions are safe only when this app understands the
@@ -411,6 +416,85 @@ struct ProviderAccountStore {
         } while blockedIDs.contains(account.id)
         accounts.append(account)
         try persist(sanitize(accounts))
+        return account
+    }
+
+    /// Adds and selects one stable creation UUID. If UserDefaults reports an
+    /// ambiguous registry write, the exact UUID is reconciled before selection;
+    /// retrying with that UUID can therefore never create a duplicate account.
+    @MainActor
+    @discardableResult
+    func addAndSelectAccount(
+        id: UUID = UUID(),
+        provider: UsageProvider,
+        label: String,
+        cliDataRoot: String? = nil
+    ) throws -> ProviderAccount {
+        try requireSupportedMutationVersion()
+        let candidate = ProviderAccount(
+            id: id,
+            provider: provider,
+            label: label,
+            cliDataRoot: cliDataRoot
+        )
+        guard candidate.id == id,
+              !pendingWebKitDataStoreDeletionIDs.contains(id) else {
+            throw ProviderAccountStoreError.persistenceFailed
+        }
+
+        let account: ProviderAccount
+        if let existing = self.account(id: id) {
+            guard existing.provider == provider,
+                  existing.webKitStorage == .isolated else {
+                throw ProviderAccountStoreError.persistenceFailed
+            }
+            let requested = existing.updating(
+                label: candidate.label,
+                isEnabled: candidate.isEnabled,
+                cliDataRoot: candidate.cliDataRoot
+            )
+            if requested != existing {
+                do {
+                    try updateAccount(requested)
+                    account = requested
+                } catch {
+                    guard self.account(id: id) == requested else {
+                        throw error
+                    }
+                    account = requested
+                }
+            } else {
+                account = existing
+            }
+        } else {
+            var accounts = loadAccounts()
+            accounts.append(candidate)
+            do {
+                try persist(sanitize(accounts))
+                account = candidate
+            } catch {
+                // set() may have updated the domain even when synchronize()
+                // reports failure. Accept only the exact requested identity.
+                guard let reconciled = self.account(id: id),
+                      reconciled.provider == provider,
+                      reconciled.webKitStorage == .isolated else {
+                    throw error
+                }
+                account = reconciled
+            }
+        }
+
+        let selectedID = account.id.uuidString.lowercased()
+        userDefaults.set(
+            selectedID,
+            forKey: selectedAccountKey(for: provider)
+        )
+        _ = synchronizeDefaults(userDefaults)
+        guard userDefaults.string(
+            forKey: selectedAccountKey(for: provider)
+        ) == selectedID else {
+            throw ProviderAccountStoreError.persistenceFailed
+        }
         return account
     }
 
@@ -785,7 +869,7 @@ struct ProviderAccountStore {
         // Account removal relies on this blob as its crash journal. Do not let
         // the caller release or delete WebKit credentials until cfprefsd has
         // acknowledged the complete registry+tombstone transaction.
-        guard userDefaults.synchronize(),
+        guard synchronizeDefaults(userDefaults),
               userDefaults.data(forKey: key) == data else {
             throw ProviderAccountStoreError.persistenceFailed
         }

@@ -209,3 +209,27 @@
 "update.neverChecked" = "Never";
 
 "settings.providerOrder" = "Orden de visualización";
+
+/* Cuentas de proveedores */
+"content.account" = "Cuenta";
+"accounts.title" = "Cuentas";
+"accounts.add" = "Añadir cuenta";
+"accounts.edit" = "Editar cuenta";
+"accounts.remove" = "Eliminar cuenta";
+"accounts.manage" = "Gestionar…";
+"accounts.selected" = "Seleccionada";
+"accounts.autoRefresh" = "Actualización automática";
+"accounts.isolatedSession" = "Sesión de inicio aislada";
+"accounts.legacySession" = "Sesión de inicio compartida migrada";
+"accounts.lastRequired" = "Cada proveedor debe conservar al menos una cuenta.";
+"accounts.newerVersionReadOnly" = "Los datos de las cuentas se guardaron con una versión más reciente de la app. Actualiza AgentLimits para administrar estas cuentas.";
+"accounts.selectFormat" = "Seleccionar %@";
+"accounts.removeTitle" = "¿Eliminar cuenta?";
+"accounts.cancel" = "Cancelar";
+"accounts.removeMessage" = "¿Eliminar %@? Se eliminarán sus datos de uso en caché y su sesión de inicio aislada.";
+"accounts.removeLegacyMessage" = "¿Eliminar %@? Esta cuenta migrada comparte datos heredados de WebKit; se cerrarán todas las sesiones de inicio compartidas migradas. Las cuentas aisladas no se verán afectadas.";
+"accounts.pendingCleanup" = "La cuenta se eliminó. WebKit volverá a intentar eliminar sus datos de inicio aislados la próxima vez que se abra la app.";
+"accounts.ok" = "OK";
+"accounts.label" = "Nombre de la cuenta";
+"accounts.save" = "Guardar";
+"accounts.disabledFormat" = "%@ (Desactivada)";

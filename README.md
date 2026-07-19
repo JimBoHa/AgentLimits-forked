@@ -15,7 +15,7 @@ Fork releases: [JimBoHa/AgentLimits-forked releases](https://github.com/JimBoHa/
 1. Run AgentLimits.
 2. Add widgets in Notification Center.
 3. Open **AgentLimits Settings...** from the menu bar.
-4. In **Usage**, choose Codex, Claude Code, or Copilot, set refresh interval (1–10 minutes), open the bottom login panel (`▲`), then sign in.
+4. In **Usage**, choose Codex, Claude Code, or Copilot, choose or add an account, set refresh interval (1–10 minutes), open the bottom login panel (`▲`), then sign in.
 5. Use the menu bar **Display Mode** to switch Used/Remaining, and **Refresh Now** for manual updates.
 
 ## What It Tracks
@@ -29,6 +29,7 @@ Fork releases: [JimBoHa/AgentLimits-forked releases](https://github.com/JimBoHa/
   - Claude Code: `ccusage claude daily`
 - **Premium request usage (Copilot):** daily premium request count and cost via WebView.
   - API: `https://github.com/settings/billing/usage_table` (fetched automatically with Copilot usage)
+- **Multiple web accounts:** Each provider can have named personal, work, or other accounts with separate login sessions and usage snapshots.
 
 ## Menu Bar Display
 - Two-line layout per provider in the icon area
@@ -99,13 +100,16 @@ Pacemaker shows a time-based usage benchmark to help you stay on track.
 ### Usage
 1. Open **Usage**.
 2. Select Codex, Claude Code, or Copilot.
-3. Choose refresh interval (1–10 minutes).
-4. Toggle **Show in menu bar** to show the usage percentage in the icon area.
-5. Toggle **Show dashboard in menu** to show/hide the provider's row in the menu dashboard.
-6. Drag rows in **Display Order** to change the order of providers in the menu bar icon and dashboard.
-7. Click the bottom login bar (`▲`) to expand the embedded WebView panel.
-8. Sign in via the embedded WebView (chatgpt.com / claude.ai / github.com).
-9. Use **Clear Data** to remove login data, website storage, and cached usage snapshots if sign-in gets stuck or you want to reset login history.
+3. Choose an account, or click **Manage…** to add, rename, enable, disable, or remove named accounts.
+4. Choose refresh interval (1–10 minutes).
+5. Toggle **Show in menu bar** to show the selected account's usage percentage in the icon area.
+6. Toggle **Show dashboard in menu** to show/hide the provider's row in the menu dashboard.
+7. Drag rows in **Display Order** to change the order of providers in the menu bar icon and dashboard.
+8. Click the bottom login bar (`▲`) to expand the selected account's embedded WebView panel.
+9. Sign in via the embedded WebView (chatgpt.com / claude.ai / github.com). Each newly added account has isolated website storage and cached usage snapshots.
+10. Use **Clear Data** to remove the selected account's login data, website storage, and cached usage snapshots if sign-in gets stuck or you want to reset login history.
+
+Accounts migrated from older AgentLimits versions may temporarily share the legacy website session. The app warns before removing a migrated account because doing so signs out every migrated account that still shares that session; newly added isolated accounts are unaffected.
 
 ### ccusage
 1. Open **ccusage**.

@@ -209,3 +209,27 @@
 "update.neverChecked" = "Never";
 
 "settings.providerOrder" = "Görüntüleme sırası";
+
+/* Sağlayıcı hesapları */
+"content.account" = "Hesap";
+"accounts.title" = "Hesaplar";
+"accounts.add" = "Hesap Ekle";
+"accounts.edit" = "Hesabı Düzenle";
+"accounts.remove" = "Hesabı Sil";
+"accounts.manage" = "Yönet…";
+"accounts.selected" = "Seçili";
+"accounts.autoRefresh" = "Otomatik yenileme";
+"accounts.isolatedSession" = "Yalıtılmış giriş oturumu";
+"accounts.legacySession" = "Taşınmış paylaşılan giriş oturumu";
+"accounts.lastRequired" = "Her sağlayıcıda en az bir hesap kalmalıdır.";
+"accounts.newerVersionReadOnly" = "Hesap verileri uygulamanın daha yeni bir sürümü tarafından kaydedildi. Bu hesapları yönetmek için AgentLimits'i güncelleyin.";
+"accounts.selectFormat" = "%@ hesabını seç";
+"accounts.removeTitle" = "Hesap silinsin mi?";
+"accounts.cancel" = "İptal";
+"accounts.removeMessage" = "%@ silinsin mi? Önbelleğe alınmış kullanım verileri ve yalıtılmış giriş oturumu silinecek.";
+"accounts.removeLegacyMessage" = "%@ silinsin mi? Bu taşınmış hesap eski WebKit verilerini paylaşır; taşınmış tüm paylaşılan giriş oturumları kapatılacak. Yalıtılmış hesaplar etkilenmeyecek.";
+"accounts.pendingCleanup" = "Hesap kaldırıldı. WebKit, yalıtılmış giriş verilerini bir sonraki başlatmada silmeyi yeniden deneyecek.";
+"accounts.ok" = "Tamam";
+"accounts.label" = "Hesap adı";
+"accounts.save" = "Kaydet";
+"accounts.disabledFormat" = "%@ (Devre dışı)";

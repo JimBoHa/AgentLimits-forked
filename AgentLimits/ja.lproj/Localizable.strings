@@ -208,3 +208,27 @@
 "update.releasesPage" = "すべてのリリースを表示";
 "update.neverChecked" = "未確認";
 "settings.providerOrder" = "表示順";
+
+/* プロバイダーアカウント */
+"content.account" = "アカウント";
+"accounts.title" = "アカウント";
+"accounts.add" = "アカウントを追加";
+"accounts.edit" = "アカウントを編集";
+"accounts.remove" = "アカウントを削除";
+"accounts.manage" = "管理…";
+"accounts.selected" = "選択中";
+"accounts.autoRefresh" = "自動更新";
+"accounts.isolatedSession" = "分離されたログインセッション";
+"accounts.legacySession" = "移行された共有ログインセッション";
+"accounts.lastRequired" = "各プロバイダーに少なくとも1つのアカウントを残す必要があります。";
+"accounts.newerVersionReadOnly" = "アカウントデータは新しいバージョンのアプリで保存されています。これらのアカウントを管理するにはAgentLimitsをアップデートしてください。";
+"accounts.selectFormat" = "%@を選択";
+"accounts.removeTitle" = "アカウントを削除しますか？";
+"accounts.cancel" = "キャンセル";
+"accounts.removeMessage" = "%@を削除しますか？キャッシュされた使用量データと分離されたログインセッションが削除されます。";
+"accounts.removeLegacyMessage" = "%@を削除しますか？この移行済みアカウントは従来のWebKitデータを共有しているため、移行されたすべての共有ログインセッションからサインアウトします。分離されたアカウントには影響しません。";
+"accounts.pendingCleanup" = "アカウントを削除しました。分離されたログインデータの削除は、次回起動時にWebKitが再試行します。";
+"accounts.ok" = "OK";
+"accounts.label" = "アカウント名";
+"accounts.save" = "保存";
+"accounts.disabledFormat" = "%@（無効）";

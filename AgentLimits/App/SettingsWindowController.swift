@@ -67,7 +67,8 @@ final class SettingsWindowController: NSWindowController {
         let rootView = SettingsTabView(
             viewModel: appState.viewModel,
             webViewPool: appState.webViewPool,
-            tokenUsageViewModel: appState.tokenUsageViewModel
+            tokenUsageViewModel: appState.tokenUsageViewModel,
+            accountRemovalManager: appState.accountRemovalManager
         )
         let hostingController = NSHostingController(rootView: rootView)
         let window = NSWindow(contentViewController: hostingController)

@@ -282,6 +282,118 @@ final class UsageViewModelAccountIsolationTests: XCTestCase {
         XCTAssertEqual(events[1].selectedAccountID, fixture.work.id)
     }
 
+    func testAccountFacadeAddsSelectsAndCreatesIsolatedSession() throws {
+        let fixture = try makeFixture()
+        let personalStore = fixture.pool.getWebViewStore(
+            for: fixture.personal
+        )
+
+        let added = try fixture.viewModel.addAndSelectAccount(
+            provider: .chatgptCodex,
+            label: "Consulting"
+        )
+        let addedStore = fixture.pool.getWebViewStore(for: added)
+
+        XCTAssertEqual(added.label, "Consulting")
+        XCTAssertEqual(added.webKitStorage, .isolated)
+        XCTAssertEqual(
+            fixture.viewModel.selectedAccount(for: .chatgptCodex).id,
+            added.id
+        )
+        XCTAssertEqual(
+            Set(fixture.viewModel.accounts(for: .chatgptCodex).map(\.id)),
+            Set([fixture.personal.id, fixture.work.id, added.id])
+        )
+        XCTAssertNotEqual(
+            ObjectIdentifier(personalStore.websiteDataStore),
+            ObjectIdentifier(addedStore.websiteDataStore)
+        )
+        XCTAssertTrue(fixture.pool.isActive(addedStore))
+    }
+
+    func testAccountFacadeUpdatesOnlyMutableMetadata() throws {
+        let fixture = try makeFixture()
+        try fixture.accountStore.updateAccount(
+            fixture.work.updating(
+                label: fixture.work.label,
+                isEnabled: fixture.work.isEnabled,
+                cliDataRoot: "/profiles/work"
+            )
+        )
+        fixture.viewModel.reloadAccounts()
+
+        let updated = try fixture.viewModel.updateAccount(
+            id: fixture.work.id,
+            label: "  Client Work  ",
+            isEnabled: false
+        )
+
+        XCTAssertEqual(updated.id, fixture.work.id)
+        XCTAssertEqual(updated.provider, fixture.work.provider)
+        XCTAssertEqual(updated.label, "Client Work")
+        XCTAssertFalse(updated.isEnabled)
+        XCTAssertEqual(updated.cliDataRoot, "/profiles/work")
+        XCTAssertEqual(updated.createdAt, fixture.work.createdAt)
+        XCTAssertEqual(updated.webKitStorage, fixture.work.webKitStorage)
+        XCTAssertEqual(
+            fixture.viewModel.accounts(for: .claudeCode).map(\.provider),
+            [.claudeCode]
+        )
+    }
+
+    func testNonCurrentProviderSelectionPublishesCatalogRevision() throws {
+        let fixture = try makeFixture()
+        let secondaryClaude = try fixture.accountStore.addAccount(
+            provider: .claudeCode,
+            label: "Work Claude"
+        )
+        fixture.viewModel.reloadAccounts()
+        let priorRevision = fixture.viewModel.accountCatalogRevision
+        XCTAssertEqual(fixture.viewModel.selectedProvider, .chatgptCodex)
+
+        try fixture.viewModel.selectAccount(id: secondaryClaude.id)
+
+        XCTAssertGreaterThan(
+            fixture.viewModel.accountCatalogRevision,
+            priorRevision
+        )
+        XCTAssertEqual(
+            fixture.viewModel.selectedAccount(for: .claudeCode).id,
+            secondaryClaude.id
+        )
+        XCTAssertEqual(fixture.viewModel.selectedProvider, .chatgptCodex)
+    }
+
+    func testAddAndSelectFailsBeforeCreatingWhenProjectionCannotHide() throws {
+        let fixture = try makeFixture()
+        let originalAccountIDs = Set(fixture.accountStore.loadAccounts().map(\.id))
+        fixture.repository.rejectNextNilProjection = true
+
+        XCTAssertThrowsError(
+            try fixture.viewModel.addAndSelectAccount(
+                id: UUID(uuidString: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")!,
+                provider: .chatgptCodex,
+                label: "Consulting"
+            )
+        )
+
+        XCTAssertEqual(
+            Set(fixture.accountStore.loadAccounts().map(\.id)),
+            originalAccountIDs
+        )
+        let added = try fixture.viewModel.addAndSelectAccount(
+            id: UUID(uuidString: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")!,
+            provider: .chatgptCodex,
+            label: "Consulting"
+        )
+        XCTAssertEqual(
+            fixture.accountStore.accounts(for: .chatgptCodex)
+                .filter { $0.label == "Consulting" }
+                .map(\.id),
+            [added.id]
+        )
+    }
+
     private func makeFixture(
         initialSnapshots: ((ProviderAccount, ProviderAccount) -> [UUID: UsageSnapshot])? = nil
     ) throws -> IsolationFixture {
@@ -372,6 +484,7 @@ private final class IsolationSnapshotRepository:
     private(set) var deletionAttempts: [UUID] = []
     private var suppressedAccountIDs: Set<UUID> = []
     var onPublish: ((ProviderAccount, UsageSnapshot?) -> Void)?
+    var rejectNextNilProjection = false
 
     init(snapshots: [UUID: UsageSnapshot] = [:]) {
         self.snapshots = snapshots
@@ -417,6 +530,10 @@ private final class IsolationSnapshotRepository:
         _ snapshot: UsageSnapshot?,
         for account: ProviderAccount
     ) throws {
+        if snapshot == nil, rejectNextNilProjection {
+            rejectNextNilProjection = false
+            throw AccountUsageSnapshotRepositoryError.providerMismatch
+        }
         onPublish?(account, snapshot)
         if let snapshot {
             guard snapshot.provider == account.provider else {

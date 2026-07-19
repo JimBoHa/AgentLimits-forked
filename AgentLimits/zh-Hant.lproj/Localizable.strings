@@ -209,3 +209,27 @@
 "update.neverChecked" = "Never";
 
 "settings.providerOrder" = "顯示順序";
+
+/* 提供者帳號 */
+"content.account" = "帳號";
+"accounts.title" = "帳號";
+"accounts.add" = "新增帳號";
+"accounts.edit" = "編輯帳號";
+"accounts.remove" = "刪除帳號";
+"accounts.manage" = "管理…";
+"accounts.selected" = "已選取";
+"accounts.autoRefresh" = "自動重新整理";
+"accounts.isolatedSession" = "隔離的登入工作階段";
+"accounts.legacySession" = "已移轉的共用登入工作階段";
+"accounts.lastRequired" = "每個提供者必須至少保留一個帳號。";
+"accounts.newerVersionReadOnly" = "帳號資料是由較新版本的 App 儲存。請更新 AgentLimits 以管理這些帳號。";
+"accounts.selectFormat" = "選取 %@";
+"accounts.removeTitle" = "刪除帳號？";
+"accounts.cancel" = "取消";
+"accounts.removeMessage" = "要刪除 %@ 嗎？其快取的用量資料和隔離的登入工作階段將被刪除。";
+"accounts.removeLegacyMessage" = "要刪除 %@ 嗎？此移轉的帳號共用舊版 WebKit 資料；所有已移轉的共用登入工作階段都會登出。隔離帳號不受影響。";
+"accounts.pendingCleanup" = "帳號已刪除。WebKit 將在下次啟動時重試刪除其隔離的登入資料。";
+"accounts.ok" = "確定";
+"accounts.label" = "帳號名稱";
+"accounts.save" = "儲存";
+"accounts.disabledFormat" = "%@（已停用）";

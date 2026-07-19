@@ -12,6 +12,7 @@ import WidgetKit
 struct ContentView: View {
     @ObservedObject private var viewModel: UsageViewModel
     @ObservedObject private var webViewPool: UsageWebViewPool
+    private let accountRemovalManager: ProviderAccountRemovalManager
     @AppStorage(UserDefaultsKeys.displayMode) private var displayMode: UsageDisplayMode = .used
     @AppStorage(
         AppGroupConfig.usageRefreshIntervalMinutesKey,
@@ -30,10 +31,17 @@ struct ContentView: View {
     @State private var isWebViewExpanded = false
     @State private var popupWebView: WKWebView?
     @State private var popupWebViewStore: WebViewStore?
+    @State private var isShowingAccountManager = false
+    @State private var accountErrorMessage: String?
 
-    init(viewModel: UsageViewModel, webViewPool: UsageWebViewPool) {
+    init(
+        viewModel: UsageViewModel,
+        webViewPool: UsageWebViewPool,
+        accountRemovalManager: ProviderAccountRemovalManager
+    ) {
         self.viewModel = viewModel
         self._webViewPool = ObservedObject(wrappedValue: webViewPool)
+        self.accountRemovalManager = accountRemovalManager
     }
 
     var body: some View {
@@ -44,6 +52,9 @@ struct ContentView: View {
                         SettingsFormSection {
                             LabeledContent("content.provider".localized()) {
                                 providerPicker
+                            }
+                            LabeledContent("content.account".localized()) {
+                                accountPicker
                             }
                             LabeledContent("refreshInterval.label".localized()) {
                                 RefreshIntervalPickerRow(showsLabel: false, refreshIntervalMinutes: $refreshIntervalMinutes)
@@ -111,7 +122,11 @@ struct ContentView: View {
             WidgetCenter.shared.reloadAllTimelines()
         }
         .onChange(of: viewModel.selectedProvider) { _, newProvider in
-            webViewPool.resume(newProvider)
+            webViewPool.resume(viewModel.selectedAccount(for: newProvider))
+        }
+        .onChange(of: selectedAccount.id) { _, _ in
+            closePopupWebView()
+            webViewPool.resume(selectedAccount)
         }
         .onChange(of: isWebViewExpanded) { _, isExpanded in
             if isExpanded {
@@ -159,6 +174,28 @@ struct ContentView: View {
         } message: {
             Text(clearDataErrorMessage ?? "")
         }
+        .alert(
+            "accounts.title".localized(),
+            isPresented: Binding(
+                get: { accountErrorMessage != nil },
+                set: { isPresented in
+                    if !isPresented { accountErrorMessage = nil }
+                }
+            )
+        ) {
+            Button("accounts.ok".localized(), role: .cancel) {
+                accountErrorMessage = nil
+            }
+        } message: {
+            Text(accountErrorMessage ?? "")
+        }
+        .sheet(isPresented: $isShowingAccountManager) {
+            ProviderAccountsSettingsView(
+                viewModel: viewModel,
+                removalManager: accountRemovalManager,
+                initialProvider: viewModel.selectedProvider
+            )
+        }
         .sheet(
             isPresented: Binding(
                 get: { popupWebView != nil },
@@ -205,6 +242,47 @@ struct ContentView: View {
         .frame(maxWidth: 260)
         .labelsHidden()
         .accessibilityLabel(Text("content.provider".localized()))
+    }
+
+    private var selectedAccount: ProviderAccount {
+        viewModel.selectedAccount(for: viewModel.selectedProvider)
+    }
+
+    private var accountPicker: some View {
+        HStack(spacing: DesignTokens.Spacing.small) {
+            Picker(
+                "",
+                selection: Binding(
+                    get: { selectedAccount.id },
+                    set: { accountID in
+                        do {
+                            _ = try viewModel.selectAccount(id: accountID)
+                        } catch {
+                            accountErrorMessage = error.localizedDescription
+                        }
+                    }
+                )
+            ) {
+                ForEach(viewModel.accounts(for: viewModel.selectedProvider)) {
+                    account in
+                    Text(
+                        account.isEnabled
+                            ? account.label
+                            : "accounts.disabledFormat".localized(account.label)
+                    )
+                    .tag(account.id)
+                }
+            }
+            .pickerStyle(.menu)
+            .frame(maxWidth: 190)
+            .labelsHidden()
+            .accessibilityLabel(Text("content.account".localized()))
+
+            Button("accounts.manage".localized()) {
+                isShowingAccountManager = true
+            }
+            .settingsButtonStyle(.secondary)
+        }
     }
 
     private var controlView: some View {
@@ -353,6 +431,12 @@ struct ContentView: View {
                 Text(viewModel.selectedProvider.displayName)
                     .font(.footnote)
                     .foregroundStyle(.secondary)
+                Text("—")
+                    .font(.footnote)
+                    .foregroundStyle(.tertiary)
+                Text(selectedAccount.label)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
             }
             .padding(.horizontal, DesignTokens.Spacing.medium)
             .padding(.vertical, DesignTokens.Spacing.small)
@@ -370,37 +454,33 @@ struct ContentView: View {
     }
 
     private var loginWebViewSection: some View {
-        ZStack {
-            ForEach(UsageProvider.allCases) { provider in
-                let store = webViewPool.getWebViewStore(for: provider)
-                WebViewRepresentable(store: store)
-                    .id(store.account.id)
-                    .onReceive(store.$popupWebView) { [weak store] popup in
-                        guard let store else { return }
-                        if let popup {
-                            popupWebView = popup
-                            popupWebViewStore = store
-                            // Set up login check callback for auto-close.
-                            store.onPopupNavigationFinished = {
-                                [weak viewModel, weak store] _ in
-                                guard let viewModel, let store else { return false }
-                                return await viewModel.checkLoginStatus(using: store)
-                            }
-                        } else {
-                            // Close sheet when popup is dismissed programmatically.
-                            if popupWebViewStore === store {
-                                popupWebView = nil
-                                popupWebViewStore = nil
-                            }
-                        }
+        let store = webViewPool.getWebViewStore(for: selectedAccount)
+        return WebViewRepresentable(store: store)
+            .id(store.account.id)
+            .onReceive(store.$popupWebView) { [weak store] popup in
+                guard let store else { return }
+                if let popup {
+                    popupWebView = popup
+                    popupWebViewStore = store
+                    store.onPopupNavigationFinished = {
+                        [weak viewModel, weak store] _ in
+                        guard let viewModel, let store else { return false }
+                        return await viewModel.checkLoginStatus(using: store)
                     }
-                .opacity(viewModel.selectedProvider == provider ? 1 : 0)
-                .allowsHitTesting(viewModel.selectedProvider == provider)
+                } else if popupWebViewStore === store {
+                    popupWebView = nil
+                    popupWebViewStore = nil
+                }
             }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .layoutPriority(1)
-        .cornerRadius(DesignTokens.CornerRadius.medium)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .layoutPriority(1)
+            .cornerRadius(DesignTokens.CornerRadius.medium)
+    }
+
+    private func closePopupWebView() {
+        popupWebViewStore?.closePopupWebView()
+        popupWebViewStore = nil
+        popupWebView = nil
     }
 
 }
@@ -575,5 +655,13 @@ private struct UsageWindowRow: View {
         websiteDataStoreProvider: { _ in .nonPersistent() }
     )
     let viewModel = UsageViewModel(webViewPool: pool)
-    return ContentView(viewModel: viewModel, webViewPool: pool)
+    let removalManager = ProviderAccountRemovalManager(
+        accountStore: accountStore,
+        webViewPool: pool
+    )
+    return ContentView(
+        viewModel: viewModel,
+        webViewPool: pool,
+        accountRemovalManager: removalManager
+    )
 }

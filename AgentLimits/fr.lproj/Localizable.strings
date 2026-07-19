@@ -209,3 +209,27 @@
 "update.neverChecked" = "Never";
 
 "settings.providerOrder" = "Ordre d'affichage";
+
+/* Comptes des fournisseurs */
+"content.account" = "Compte";
+"accounts.title" = "Comptes";
+"accounts.add" = "Ajouter un compte";
+"accounts.edit" = "Modifier le compte";
+"accounts.remove" = "Supprimer le compte";
+"accounts.manage" = "Gérer…";
+"accounts.selected" = "Sélectionné";
+"accounts.autoRefresh" = "Actualisation automatique";
+"accounts.isolatedSession" = "Session de connexion isolée";
+"accounts.legacySession" = "Session de connexion partagée migrée";
+"accounts.lastRequired" = "Chaque fournisseur doit conserver au moins un compte.";
+"accounts.newerVersionReadOnly" = "Les données des comptes ont été enregistrées par une version plus récente de l’app. Mettez AgentLimits à jour pour gérer ces comptes.";
+"accounts.selectFormat" = "Sélectionner %@";
+"accounts.removeTitle" = "Supprimer le compte ?";
+"accounts.cancel" = "Annuler";
+"accounts.removeMessage" = "Supprimer %@ ? Ses données d’utilisation en cache et sa session de connexion isolée seront supprimées.";
+"accounts.removeLegacyMessage" = "Supprimer %@ ? Ce compte migré partage des données WebKit héritées ; toutes les sessions de connexion partagées migrées seront déconnectées. Les comptes isolés ne seront pas affectés.";
+"accounts.pendingCleanup" = "Le compte a été supprimé. WebKit tentera à nouveau de supprimer ses données de connexion isolées au prochain lancement.";
+"accounts.ok" = "OK";
+"accounts.label" = "Nom du compte";
+"accounts.save" = "Enregistrer";
+"accounts.disabledFormat" = "%@ (Désactivé)";

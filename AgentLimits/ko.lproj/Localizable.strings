@@ -209,3 +209,27 @@
 "update.neverChecked" = "Never";
 
 "settings.providerOrder" = "표시 순서";
+
+/* 공급자 계정 */
+"content.account" = "계정";
+"accounts.title" = "계정";
+"accounts.add" = "계정 추가";
+"accounts.edit" = "계정 편집";
+"accounts.remove" = "계정 삭제";
+"accounts.manage" = "관리…";
+"accounts.selected" = "선택됨";
+"accounts.autoRefresh" = "자동 새로 고침";
+"accounts.isolatedSession" = "격리된 로그인 세션";
+"accounts.legacySession" = "마이그레이션된 공유 로그인 세션";
+"accounts.lastRequired" = "각 공급자에는 계정이 하나 이상 있어야 합니다.";
+"accounts.newerVersionReadOnly" = "계정 데이터가 더 최신 버전의 앱에서 저장되었습니다. 이 계정들을 관리하려면 AgentLimits를 업데이트하세요.";
+"accounts.selectFormat" = "%@ 선택";
+"accounts.removeTitle" = "계정을 삭제할까요?";
+"accounts.cancel" = "취소";
+"accounts.removeMessage" = "%@을(를) 삭제할까요? 캐시된 사용량과 격리된 로그인 세션이 삭제됩니다.";
+"accounts.removeLegacyMessage" = "%@을(를) 삭제할까요? 이 마이그레이션된 계정은 기존 WebKit 데이터를 공유하므로 마이그레이션된 모든 공유 로그인 세션에서 로그아웃됩니다. 격리된 계정에는 영향을 주지 않습니다.";
+"accounts.pendingCleanup" = "계정이 삭제되었습니다. 다음 실행 시 WebKit이 격리된 로그인 데이터 삭제를 다시 시도합니다.";
+"accounts.ok" = "확인";
+"accounts.label" = "계정 이름";
+"accounts.save" = "저장";
+"accounts.disabledFormat" = "%@ (비활성화됨)";

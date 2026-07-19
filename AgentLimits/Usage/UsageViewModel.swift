@@ -112,6 +112,7 @@ final class UsageViewModel: ObservableObject {
             updateSelectedProviderState()
         }
     }
+    @Published private(set) var accountCatalogRevision: UInt64 = 0
 
     private let accountStore: ProviderAccountStore
     private let snapshotRepository: any AccountUsageSnapshotRepository
@@ -219,6 +220,18 @@ final class UsageViewModel: ObservableObject {
         stateManager.backgroundActiveAccounts
     }
 
+    var accounts: [ProviderAccount] {
+        stateManager.accounts
+    }
+
+    var webSessionsCanBeManaged: Bool {
+        accountStore.supportsPersistentWebSessions
+    }
+
+    func accounts(for provider: UsageProvider) -> [ProviderAccount] {
+        stateManager.accounts.filter { $0.provider == provider }
+    }
+
     /// Compatibility for provider-only callers. Runtime activation uses the
     /// exact accounts above and never collapses same-provider siblings.
     var backgroundActiveProviders: [UsageProvider] {
@@ -266,13 +279,69 @@ final class UsageViewModel: ObservableObject {
             throw error
         }
         synchronizeAccountCatalog()
-        publishSelectedProjection(for: account.provider)
-        WidgetCenter.shared.reloadTimelines(ofKind: account.provider.widgetKind)
-        if account.provider == selectedProvider {
-            updateSelectedProviderState()
-            webViewPool.resume(account)
-        }
+        completeAccountSelection(account)
         return account
+    }
+
+    /// Creates an isolated account and selects it immediately so the login UI
+    /// never opens the prior account while presenting the new profile.
+    @discardableResult
+    func addAndSelectAccount(
+        id: UUID = UUID(),
+        provider: UsageProvider,
+        label: String
+    ) throws -> ProviderAccount {
+        let priorAccount = selectedAccount(for: provider)
+        // Fail before account creation if the old compatibility projection
+        // cannot be hidden. Retrying Save can therefore never create a duplicate.
+        try snapshotRepository.publishSelectedSnapshot(
+            nil,
+            for: priorAccount
+        )
+        do {
+            let account = try accountStore.addAndSelectAccount(
+                id: id,
+                provider: provider,
+                label: label
+            )
+            synchronizeAccountCatalog()
+            completeAccountSelection(account)
+            return account
+        } catch {
+            try? snapshotRepository.publishSelectedSnapshot(
+                stateManager.getState(for: priorAccount.id).snapshot,
+                for: priorAccount
+            )
+            // An unacknowledged registry write may still contain the exact
+            // stable creation UUID. Surface it instead of hiding committed data.
+            reloadAccounts()
+            throw error
+        }
+    }
+
+    /// Updates user-editable metadata without allowing the UI to replace an
+    /// account's provider, UUID, creation time, or WebKit storage boundary.
+    @discardableResult
+    func updateAccount(
+        id: UUID,
+        label: String,
+        isEnabled: Bool
+    ) throws -> ProviderAccount {
+        guard let current = accountStore.account(id: id) else {
+            throw ProviderAccountStoreError.accountNotFound
+        }
+        try accountStore.updateAccount(
+            current.updating(
+                label: label,
+                isEnabled: isEnabled,
+                cliDataRoot: current.cliDataRoot
+            )
+        )
+        reloadAccounts()
+        guard let updated = stateManager.account(id: id) else {
+            throw ProviderAccountStoreError.accountNotFound
+        }
+        return updated
     }
 
     /// Refreshes account metadata and loads state only for newly added IDs.
@@ -297,6 +366,7 @@ final class UsageViewModel: ObservableObject {
             publishSelectedProjection(for: provider)
             WidgetCenter.shared.reloadTimelines(ofKind: provider.widgetKind)
         }
+        accountCatalogRevision &+= 1
         updateSelectedProviderState()
     }
 
@@ -982,7 +1052,7 @@ final class UsageViewModel: ObservableObject {
         )
     }
 
-    private func selectedAccount(
+    func selectedAccount(
         for provider: UsageProvider
     ) -> ProviderAccount {
         accountStore.selectedAccount(for: provider)
@@ -1023,6 +1093,16 @@ final class UsageViewModel: ObservableObject {
             Logger.usage.error(
                 "Could not update selected account projection: \(String(describing: error))"
             )
+        }
+    }
+
+    private func completeAccountSelection(_ account: ProviderAccount) {
+        publishSelectedProjection(for: account.provider)
+        accountCatalogRevision &+= 1
+        WidgetCenter.shared.reloadTimelines(ofKind: account.provider.widgetKind)
+        if account.provider == selectedProvider {
+            updateSelectedProviderState()
+            webViewPool.resume(account)
         }
     }
 
