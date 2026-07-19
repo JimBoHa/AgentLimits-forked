@@ -264,6 +264,29 @@ final class AccountScopedSnapshotStoreTests: XCTestCase {
         }
     }
 
+    func testMissingLegacySnapshotDoesNotCreateEmptyAccountNamespace() throws {
+        try withTemporaryContainer { containerURL in
+            let accountID = try XCTUnwrap(
+                UUID(uuidString: "91000000-0000-0000-0000-000000000019")
+            )
+            let store = makeStore(
+                accountID: accountID,
+                migratesLegacySnapshot: true,
+                containerURL: containerURL
+            )
+
+            XCTAssertNil(store.loadSnapshot(for: .chatgptCodex))
+
+            let accountDirectory = containerURL
+                .appendingPathComponent(AppGroupConfig.snapshotDirectory)
+                .appendingPathComponent("accounts")
+                .appendingPathComponent(accountID.uuidString.lowercased())
+            XCTAssertFalse(
+                FileManager.default.fileExists(atPath: accountDirectory.path)
+            )
+        }
+    }
+
     func testLegacyMigrationRejectsSnapshotForDifferentProvider() throws {
         try withTemporaryContainer { containerURL in
             let accountID = try XCTUnwrap(
