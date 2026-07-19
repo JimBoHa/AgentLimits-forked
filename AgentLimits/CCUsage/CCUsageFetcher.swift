@@ -4,6 +4,23 @@
 
 import Foundation
 
+// MARK: - Calendar Boundaries
+
+enum SundayWeekStartResolver {
+    static func resolve(
+        for date: Date,
+        calendar: Calendar = .current
+    ) -> Date {
+        let startOfDay = calendar.startOfDay(for: date)
+        let daysSinceSunday = calendar.component(.weekday, from: startOfDay) - 1
+        return calendar.date(
+            byAdding: .day,
+            value: -daysSinceSunday,
+            to: startOfDay
+        ) ?? startOfDay
+    }
+}
+
 // MARK: - CLI Response Models
 
 /// ccusage daily -j output format (Claude)
@@ -157,10 +174,8 @@ final class CCUsageFetcher {
         let now = Date()
         let todayString = outputFormatter.string(from: now)
 
-        // Calculate start of week (Sunday)
-        var startOfWeekComponents = calendar.dateComponents([.yearForWeekOfYear, .weekOfYear], from: now)
-        startOfWeekComponents.weekday = 1  // Sunday
-        let startOfWeek = calendar.date(from: startOfWeekComponents) ?? now
+        // Calculate a Sunday boundary without locale-dependent week numbering.
+        let startOfWeek = SundayWeekStartResolver.resolve(for: now, calendar: calendar)
 
         // Route to provider-specific parsing while sharing summary logic.
         switch provider {
