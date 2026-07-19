@@ -50,6 +50,7 @@ final class TokenUsageViewModel: ObservableObject {
         fileprivate let value: UsageOperationGate.Context
         fileprivate let provider: TokenUsageProvider
         fileprivate let settingsRevision: UInt64
+        fileprivate let requestIdentifier: UInt64
     }
 
     struct DataClearToken: Equatable {
@@ -79,6 +80,8 @@ final class TokenUsageViewModel: ObservableObject {
     private var suppressedSnapshots: Set<TokenUsageProvider> = []
     private var operationGate = UsageOperationGate()
     private var settingsRevisions: [TokenUsageProvider: UInt64] = [:]
+    private var latestExternalRequestIdentifiers: [TokenUsageProvider: UInt64] = [:]
+    private var nextExternalRequestIdentifier: UInt64 = 0
 
     // MARK: - Initialization
 
@@ -189,10 +192,14 @@ final class TokenUsageViewModel: ObservableObject {
               let value = operationGate.captureContext() else {
             return nil
         }
+        nextExternalRequestIdentifier &+= 1
+        let requestIdentifier = nextExternalRequestIdentifier
+        latestExternalRequestIdentifiers[provider] = requestIdentifier
         return ExternalSnapshotContext(
             value: value,
             provider: provider,
-            settingsRevision: settingsRevisions[provider, default: 0]
+            settingsRevision: settingsRevisions[provider, default: 0],
+            requestIdentifier: requestIdentifier
         )
     }
 
@@ -206,6 +213,7 @@ final class TokenUsageViewModel: ObservableObject {
         guard context.provider == snapshot.provider,
               settings[snapshot.provider]?.isEnabled == true,
               settingsRevisions[snapshot.provider, default: 0] == context.settingsRevision,
+              latestExternalRequestIdentifiers[snapshot.provider] == context.requestIdentifier,
               operationGate.isCurrent(operationContext) else {
             return false
         }

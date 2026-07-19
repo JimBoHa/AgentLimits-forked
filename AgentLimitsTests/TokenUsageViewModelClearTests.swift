@@ -236,6 +236,77 @@ final class TokenUsageViewModelClearTests: XCTestCase {
         XCTAssertTrue(viewModel.snapshots.isEmpty)
     }
 
+    func testNewestExternalContextWinsWhenCompletionsArriveOutOfOrder() throws {
+        let store = FakeTokenUsageSnapshotStore()
+        let viewModel = makeViewModel(
+            store: store,
+            visibilityStore: FakeSnapshotVisibilityStore()
+        )
+        let olderContext = try XCTUnwrap(
+            viewModel.captureExternalSnapshotContext(for: .copilot)
+        )
+        let newerContext = try XCTUnwrap(
+            viewModel.captureExternalSnapshotContext(for: .copilot)
+        )
+        let olderSnapshot = makeSnapshot(
+            fetchedAt: Date(timeIntervalSince1970: 10_000)
+        )
+        let newerSnapshot = makeSnapshot(
+            fetchedAt: Date(timeIntervalSince1970: 11_000)
+        )
+
+        XCTAssertTrue(
+            try viewModel.saveExternallyFetchedSnapshot(
+                newerSnapshot,
+                context: newerContext
+            )
+        )
+        XCTAssertFalse(
+            try viewModel.saveExternallyFetchedSnapshot(
+                olderSnapshot,
+                context: olderContext
+            )
+        )
+
+        XCTAssertEqual(store.snapshots[.copilot]?.fetchedAt, newerSnapshot.fetchedAt)
+        XCTAssertEqual(viewModel.snapshots[.copilot]?.fetchedAt, newerSnapshot.fetchedAt)
+    }
+
+    func testOlderExternalContextStaysRejectedWhenNewestSaveFails() throws {
+        let store = FakeTokenUsageSnapshotStore()
+        let viewModel = makeViewModel(
+            store: store,
+            visibilityStore: FakeSnapshotVisibilityStore()
+        )
+        let olderContext = try XCTUnwrap(
+            viewModel.captureExternalSnapshotContext(for: .copilot)
+        )
+        let newerContext = try XCTUnwrap(
+            viewModel.captureExternalSnapshotContext(for: .copilot)
+        )
+        store.saveError = TestStoreError.saveFailed
+
+        XCTAssertThrowsError(
+            try viewModel.saveExternallyFetchedSnapshot(
+                makeSnapshot(fetchedAt: Date(timeIntervalSince1970: 12_000)),
+                context: newerContext
+            )
+        )
+        store.saveError = nil
+        XCTAssertFalse(
+            try viewModel.saveExternallyFetchedSnapshot(
+                makeSnapshot(fetchedAt: Date(timeIntervalSince1970: 13_000)),
+                context: olderContext
+            )
+        )
+        XCTAssertTrue(store.snapshots.isEmpty)
+        XCTAssertTrue(viewModel.snapshots.isEmpty)
+        XCTAssertEqual(
+            viewModel.statusMessages[.copilot],
+            TestStoreError.saveFailed.localizedDescription
+        )
+    }
+
     private func makeViewModel(
         store: FakeTokenUsageSnapshotStore,
         visibilityStore: FakeSnapshotVisibilityStore,
@@ -311,6 +382,7 @@ private final class ControlledCCUsageFetcher: CCUsageFetching {
 private final class FakeTokenUsageSnapshotStore: TokenUsageSnapshotStoring {
     var snapshots: [TokenUsageProvider: TokenUsageSnapshot]
     var deletionError: Error?
+    var saveError: Error?
 
     init(snapshots: [TokenUsageProvider: TokenUsageSnapshot] = [:]) {
         self.snapshots = snapshots
@@ -321,6 +393,9 @@ private final class FakeTokenUsageSnapshotStore: TokenUsageSnapshotStoring {
     }
 
     func saveSnapshot(_ snapshot: TokenUsageSnapshot) throws {
+        if let saveError {
+            throw saveError
+        }
         snapshots[snapshot.provider] = snapshot
     }
 
@@ -334,9 +409,15 @@ private final class FakeTokenUsageSnapshotStore: TokenUsageSnapshotStoring {
 
 private enum TestStoreError: LocalizedError {
     case deleteFailed
+    case saveFailed
 
     var errorDescription: String? {
-        "Test deletion failed"
+        switch self {
+        case .deleteFailed:
+            return "Test deletion failed"
+        case .saveFailed:
+            return "Test save failed"
+        }
     }
 }
 
