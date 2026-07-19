@@ -1013,22 +1013,33 @@ struct AppGroupSnapshotStore<Provider: SnapshotFileNaming, Snapshot: SnapshotDat
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
     private let visibilityStore: any SnapshotVisibilityControlling
+    private let accountID: UUID?
+    private let migratesLegacySnapshot: Bool
+    private let containerURLOverride: URL?
 
     /// Creates a new snapshot store with the specified configuration.
     /// - Parameters:
     ///   - fileManager: File manager for disk operations (default: .default)
     ///   - encoder: JSON encoder for serialization (default: new encoder with date configuration)
     ///   - decoder: JSON decoder for deserialization (default: new decoder with date configuration)
+    ///   - accountID: Stable account UUID for isolated persistence. Nil keeps the legacy path.
+    ///   - migratesLegacySnapshot: Copies a missing legacy snapshot into this account once.
     init(
         fileManager: FileManager = .default,
         encoder: JSONEncoder = JSONEncoder(),
         decoder: JSONDecoder = JSONDecoder(),
-        visibilityStore: any SnapshotVisibilityControlling = SnapshotVisibilityStore.shared
+        visibilityStore: any SnapshotVisibilityControlling = SnapshotVisibilityStore.shared,
+        accountID: UUID? = nil,
+        migratesLegacySnapshot: Bool = false,
+        containerURLOverride: URL? = nil
     ) {
         self.fileManager = fileManager
         self.encoder = encoder
         self.decoder = decoder
         self.visibilityStore = visibilityStore
+        self.accountID = accountID
+        self.migratesLegacySnapshot = migratesLegacySnapshot
+        self.containerURLOverride = containerURLOverride
         // Use consistent ISO8601 encoding/decoding across all snapshots.
         DateCodec.configureEncoder(self.encoder)
         DateCodec.configureDecoder(self.decoder)
@@ -1036,7 +1047,13 @@ struct AppGroupSnapshotStore<Provider: SnapshotFileNaming, Snapshot: SnapshotDat
 
     /// Returns true if the App Group container is accessible
     var isAppGroupAvailable: Bool {
-        fileManager.containerURL(forSecurityApplicationGroupIdentifier: AppGroupConfig.groupId) != nil
+        resolvedContainerURL != nil
+    }
+
+    /// Account-aware suppression key shared by the app and widget readers.
+    func snapshotVisibilityKey(for provider: Provider) -> String {
+        guard let accountNamespace else { return provider.snapshotFileName }
+        return "accounts/\(accountNamespace)/\(provider.snapshotFileName)"
     }
 
     /// Loads a snapshot for the specified provider from disk.
@@ -1044,7 +1061,9 @@ struct AppGroupSnapshotStore<Provider: SnapshotFileNaming, Snapshot: SnapshotDat
     /// - Parameter provider: The provider to load snapshot for
     /// - Returns: The loaded snapshot, or nil if not found or failed to load
     func loadSnapshot(for provider: Provider) -> Snapshot? {
-        guard !visibilityStore.isSnapshotSuppressed(fileName: provider.snapshotFileName) else {
+        guard !visibilityStore.isSnapshotSuppressed(
+            fileName: snapshotVisibilityKey(for: provider)
+        ) else {
             return nil
         }
         // Ignore errors for a non-throwing convenience path.
@@ -1057,9 +1076,18 @@ struct AppGroupSnapshotStore<Provider: SnapshotFileNaming, Snapshot: SnapshotDat
     /// - Returns: The loaded snapshot
     /// - Throws: `UsageSnapshotStoreError` if loading fails
     func tryLoadSnapshot(for provider: Provider) throws -> Snapshot {
-        guard !visibilityStore.isSnapshotSuppressed(fileName: provider.snapshotFileName) else {
+        let visibilityKey = snapshotVisibilityKey(for: provider)
+        guard !visibilityStore.isSnapshotSuppressed(fileName: visibilityKey) else {
             // Suppression intentionally gives callers the same semantics as a
             // missing snapshot while preserving the failed file for retry.
+            throw CocoaError(.fileReadNoSuchFile)
+        }
+        do {
+            try migrateLegacySnapshotIfNeeded(for: provider)
+        } catch {
+            throw UsageSnapshotStoreError.readFailed(underlying: error)
+        }
+        guard !visibilityStore.isSnapshotSuppressed(fileName: visibilityKey) else {
             throw CocoaError(.fileReadNoSuchFile)
         }
         // Resolve the storage path in the App Group container.
@@ -1095,13 +1123,20 @@ struct AppGroupSnapshotStore<Provider: SnapshotFileNaming, Snapshot: SnapshotDat
         try withSecurityScopedAccess(url) {
             try data.write(to: url, options: .atomic)
         }
-        visibilityStore.setSnapshotSuppressed(false, fileName: snapshot.provider.snapshotFileName)
+        try retireLegacyMigrationIfNeeded(for: snapshot.provider)
+        visibilityStore.setSnapshotSuppressed(
+            false,
+            fileName: snapshotVisibilityKey(for: snapshot.provider)
+        )
     }
 
     /// Deletes the snapshot for the specified provider if it exists.
     /// - Parameter provider: The provider whose snapshot should be deleted.
     /// - Throws: `UsageSnapshotStoreError.appGroupUnavailable` if the App Group is unavailable.
     func deleteSnapshot(for provider: Provider) throws {
+        // A user-initiated scoped delete must never be undone by importing the
+        // legacy file on a later load, even when migration never ran before.
+        try retireLegacyMigrationIfNeeded(for: provider)
         guard let url = snapshotFileURL(for: provider) else {
             throw UsageSnapshotStoreError.appGroupUnavailable
         }
@@ -1118,18 +1153,115 @@ struct AppGroupSnapshotStore<Provider: SnapshotFileNaming, Snapshot: SnapshotDat
     ///   - createDirectory: Whether to create the directory if it doesn't exist
     /// - Returns: The file URL, or nil if App Group is unavailable
     private func snapshotFileURL(for provider: Provider, createDirectory: Bool = false) -> URL? {
-        // Locate the App Group container directory.
-        guard let containerURL = fileManager.containerURL(
-            forSecurityApplicationGroupIdentifier: AppGroupConfig.groupId
-        ) else { return nil }
-        let directoryURL = containerURL.appendingPathComponent(
-            AppGroupConfig.snapshotDirectory, isDirectory: true
-        )
+        guard let directoryURL = snapshotDirectoryURL(accountID: accountID) else { return nil }
         // Create the snapshots directory on demand for write operations.
         if createDirectory {
             try? fileManager.createDirectory(at: directoryURL, withIntermediateDirectories: true)
         }
         return directoryURL.appendingPathComponent(provider.snapshotFileName)
+    }
+
+    private var accountNamespace: String? {
+        accountID?.uuidString.lowercased()
+    }
+
+    private var resolvedContainerURL: URL? {
+        containerURLOverride ?? fileManager.containerURL(
+            forSecurityApplicationGroupIdentifier: AppGroupConfig.groupId
+        )
+    }
+
+    private func snapshotDirectoryURL(accountID: UUID?) -> URL? {
+        guard let containerURL = resolvedContainerURL else { return nil }
+        var directoryURL = containerURL.appendingPathComponent(
+            AppGroupConfig.snapshotDirectory,
+            isDirectory: true
+        )
+        if let accountID {
+            directoryURL.appendPathComponent("accounts", isDirectory: true)
+            directoryURL.appendPathComponent(
+                accountID.uuidString.lowercased(),
+                isDirectory: true
+            )
+        }
+        return directoryURL
+    }
+
+    /// A legacy snapshot may seed only the primary account store selected by
+    /// its caller. Secondary accounts start empty and can never inherit it.
+    private func migrateLegacySnapshotIfNeeded(for provider: Provider) throws {
+        guard accountID != nil, migratesLegacySnapshot,
+              let targetURL = snapshotFileURL(for: provider),
+              let targetDirectoryURL = snapshotDirectoryURL(accountID: accountID),
+              let legacyDirectoryURL = snapshotDirectoryURL(accountID: nil) else {
+            return
+        }
+        try fileManager.createDirectory(
+            at: targetDirectoryURL,
+            withIntermediateDirectories: true
+        )
+        let migrationMarkerURL = targetDirectoryURL.appendingPathComponent(
+            ".legacy-migration-complete-\(provider.snapshotFileName)"
+        )
+        guard !fileManager.fileExists(atPath: migrationMarkerURL.path) else { return }
+        let legacyURL = legacyDirectoryURL.appendingPathComponent(provider.snapshotFileName)
+
+        if visibilityStore.isSnapshotSuppressed(fileName: provider.snapshotFileName) {
+            visibilityStore.setSnapshotSuppressed(
+                true,
+                fileName: snapshotVisibilityKey(for: provider)
+            )
+            try writeLegacyMigrationMarker(at: migrationMarkerURL)
+            return
+        }
+
+        if fileManager.fileExists(atPath: targetURL.path) {
+            try writeLegacyMigrationMarker(at: migrationMarkerURL)
+            return
+        }
+
+        guard fileManager.fileExists(atPath: legacyURL.path) else {
+            try writeLegacyMigrationMarker(at: migrationMarkerURL)
+            return
+        }
+
+        let data = try withSecurityScopedAccess(legacyURL) {
+            try Data(contentsOf: legacyURL)
+        }
+        guard let decodedSnapshot = try? decoder.decode(Snapshot.self, from: data),
+              decodedSnapshot.provider.snapshotFileName == provider.snapshotFileName else {
+            try writeLegacyMigrationMarker(at: migrationMarkerURL)
+            return
+        }
+        try withSecurityScopedAccess(targetURL) {
+            try data.write(to: targetURL, options: .atomic)
+        }
+        try writeLegacyMigrationMarker(at: migrationMarkerURL)
+    }
+
+    private func legacyMigrationMarkerURL(for provider: Provider) -> URL? {
+        guard accountID != nil, migratesLegacySnapshot,
+              let directoryURL = snapshotDirectoryURL(accountID: accountID) else {
+            return nil
+        }
+        return directoryURL.appendingPathComponent(
+            ".legacy-migration-complete-\(provider.snapshotFileName)"
+        )
+    }
+
+    private func retireLegacyMigrationIfNeeded(for provider: Provider) throws {
+        guard let markerURL = legacyMigrationMarkerURL(for: provider) else { return }
+        try fileManager.createDirectory(
+            at: markerURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try writeLegacyMigrationMarker(at: markerURL)
+    }
+
+    private func writeLegacyMigrationMarker(at url: URL) throws {
+        try withSecurityScopedAccess(url) {
+            try Data().write(to: url, options: .atomic)
+        }
     }
 
     /// Executes an action with security-scoped resource access.
