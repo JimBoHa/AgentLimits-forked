@@ -37,11 +37,17 @@ final class AppUpdateController: ObservableObject {
 
         self.isConfigured = isConfigured
         controller = SPUStandardUpdaterController(
-            startingUpdater: isConfigured,
+            startingUpdater: false,
             updaterDelegate: nil,
             userDriverDelegate: nil
         )
         updater = controller.updater
+        // The fork currently shares the upstream bundle identifier. Remove any
+        // feed previously persisted by older builds before trusting bundle config.
+        updater.clearFeedURLFromUserDefaults()
+        if isConfigured {
+            controller.startUpdater()
+        }
         canCheckForUpdates = isConfigured && updater.canCheckForUpdates
         lastUpdateCheckDate = updater.lastUpdateCheckDate
         automaticChecksEnabled = isConfigured && updater.automaticallyChecksForUpdates
