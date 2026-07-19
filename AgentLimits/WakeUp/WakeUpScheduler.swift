@@ -12,8 +12,78 @@ import OSLog
 enum LaunchAgentConfig {
     static let labelPrefix = "com.dmng.agentlimit.wakeup"
     static let launchAgentsPath = "Library/LaunchAgents"
-    static let logDirectory = "/tmp"
+    static let logDirectoryPath = "Library/Logs/AgentLimits"
     static let cliTimeoutSeconds: Int = 30
+}
+
+struct UnsafeWakeUpLogDirectory: LocalizedError {
+    let path: String
+
+    var errorDescription: String? {
+        "Wake-up log directory is not a private, user-owned directory: \(path)"
+    }
+}
+
+enum WakeUpLogPathResolver {
+    static func realHomeDirectory(fileManager: FileManager = .default) -> URL {
+        if let pw = getpwuid(getuid()), let home = pw.pointee.pw_dir {
+            return URL(fileURLWithPath: String(cString: home), isDirectory: true)
+        }
+        if let home = ProcessInfo.processInfo.environment["HOME"] {
+            return URL(fileURLWithPath: home, isDirectory: true)
+        }
+        return fileManager.homeDirectoryForCurrentUser
+    }
+
+    static func logDirectory(
+        homeDirectory: URL? = nil,
+        fileManager: FileManager = .default
+    ) -> URL {
+        (homeDirectory ?? realHomeDirectory(fileManager: fileManager))
+            .appendingPathComponent(LaunchAgentConfig.logDirectoryPath, isDirectory: true)
+    }
+
+    static func logURL(
+        for provider: UsageProvider,
+        homeDirectory: URL? = nil,
+        fileManager: FileManager = .default
+    ) -> URL {
+        logDirectory(homeDirectory: homeDirectory, fileManager: fileManager)
+            .appendingPathComponent("agentlimits-wakeup-\(provider.rawValue).log")
+    }
+
+    @discardableResult
+    static func ensureSecureLogDirectory(
+        homeDirectory: URL? = nil,
+        fileManager: FileManager = .default
+    ) throws -> URL {
+        let directory = logDirectory(
+            homeDirectory: homeDirectory,
+            fileManager: fileManager
+        )
+        var isDirectory: ObjCBool = false
+        if fileManager.fileExists(atPath: directory.path, isDirectory: &isDirectory) {
+            let values = try directory.resourceValues(forKeys: [.isSymbolicLinkKey])
+            let attributes = try fileManager.attributesOfItem(atPath: directory.path)
+            let ownerID = (attributes[.ownerAccountID] as? NSNumber)?.uint32Value
+            guard isDirectory.boolValue,
+                  values.isSymbolicLink != true,
+                  ownerID == getuid() else {
+                throw UnsafeWakeUpLogDirectory(path: directory.path)
+            }
+        } else {
+            try fileManager.createDirectory(
+                at: directory,
+                withIntermediateDirectories: true,
+                attributes: [.posixPermissions: NSNumber(value: 0o700)]
+            )
+        }
+        try fileManager.setAttributes(
+            [.posixPermissions: NSNumber(value: 0o700)],
+            ofItemAtPath: directory.path
+        )
+        return directory
+    }
 }
 
 // MARK: - Wake Up Schedule
@@ -67,7 +137,7 @@ struct WakeUpSchedule: Codable, Equatable {
 
     /// Returns the log file path for this schedule
     var logPath: String {
-        "\(LaunchAgentConfig.logDirectory)/agentlimit-wakeup-\(provider.rawValue).log"
+        WakeUpLogPathResolver.logURL(for: provider).path
     }
 }
 
@@ -184,16 +254,7 @@ final class LaunchAgentManager {
         if let homeDirectoryOverride {
             return homeDirectoryOverride
         }
-        // Use POSIX API to get real home directory, bypassing sandbox
-        if let pw = getpwuid(getuid()), let home = pw.pointee.pw_dir {
-            return URL(fileURLWithPath: String(cString: home), isDirectory: true)
-        }
-        // Fallback to environment variable
-        if let home = ProcessInfo.processInfo.environment["HOME"] {
-            return URL(fileURLWithPath: home, isDirectory: true)
-        }
-        // Last resort (may be sandboxed)
-        return fileManager.homeDirectoryForCurrentUser
+        return WakeUpLogPathResolver.realHomeDirectory(fileManager: fileManager)
     }
 
     /// Returns the LaunchAgents directory URL
@@ -205,6 +266,14 @@ final class LaunchAgentManager {
     /// Returns the plist file URL for a schedule
     func plistURL(for schedule: WakeUpSchedule) -> URL? {
         launchAgentsURL?.appendingPathComponent(schedule.plistFileName)
+    }
+
+    func logURL(for schedule: WakeUpSchedule) -> URL {
+        WakeUpLogPathResolver.logURL(
+            for: schedule.provider,
+            homeDirectory: realHomeDirectory,
+            fileManager: fileManager
+        )
     }
 
     /// Checks if a LaunchAgent is installed for the given schedule
@@ -255,6 +324,16 @@ final class LaunchAgentManager {
                 Logger.wakeup.error("LaunchAgentManager: Failed to create directory: \(error.localizedDescription)")
                 throw WakeUpError.launchAgentWriteFailed(error)
             }
+        }
+
+        do {
+            try WakeUpLogPathResolver.ensureSecureLogDirectory(
+                homeDirectory: realHomeDirectory,
+                fileManager: fileManager
+            )
+        } catch {
+            Logger.wakeup.error("LaunchAgentManager: Unsafe log directory: \(error.localizedDescription)")
+            throw WakeUpError.launchAgentWriteFailed(error)
         }
 
         // Write plist file
@@ -505,8 +584,8 @@ final class LaunchAgentManager {
                 fullCommand
             ],
             "StartCalendarInterval": calendarIntervals,
-            "StandardOutPath": schedule.logPath,
-            "StandardErrorPath": schedule.logPath,
+            "StandardOutPath": logURL(for: schedule).path,
+            "StandardErrorPath": logURL(for: schedule).path,
             "RunAtLoad": false
         ]
 
@@ -527,13 +606,19 @@ enum WakeUpCommandBuilder {
         return buildCommand(for: schedule, command: guardedCommand, marker: nil)
     }
 
-    static func buildTestCommand(for schedule: WakeUpSchedule) -> String {
+    static func buildTestCommand(
+        for schedule: WakeUpSchedule,
+        logPath: String? = nil
+    ) -> String {
         let baseCommand = buildCommand(for: schedule, command: schedule.cliCommand, marker: "[TEST]")
-        return buildLoggedTestCommand(command: baseCommand, logPath: schedule.logPath)
+        return buildLoggedTestCommand(
+            command: baseCommand,
+            logPath: logPath ?? schedule.logPath
+        )
     }
 
     static func buildLoggedTestCommand(command: String, logPath: String) -> String {
-        "set -o pipefail; { \(command); } 2>&1 | tee -a \"\(logPath)\""
+        "set -o pipefail; { \(command); } 2>&1 | tee -a \(shellQuote(logPath))"
     }
 
     private static func buildCommand(
@@ -542,13 +627,16 @@ enum WakeUpCommandBuilder {
         marker: String?
     ) -> String {
         let markerSuffix = marker.map { " \($0)" } ?? ""
-        let escapedCommand = command.replacingOccurrences(of: "\"", with: "\\\"")
-        return "echo \"=== $(date)\(markerSuffix) ===\" && echo \"Command: \(escapedCommand)\" && mkdir -p ~/.agentlimits && cd ~/.agentlimits && \(command)"
+        return "echo \"=== $(date)\(markerSuffix) ===\" && mkdir -p ~/.agentlimits && cd ~/.agentlimits && \(command)"
     }
 
     private static func wrapWithTimeout(command: String) -> String {
         let timeout = LaunchAgentConfig.cliTimeoutSeconds
         return "{ \(command) & pid=$!; ( sleep \(timeout); if kill -0 $pid 2>/dev/null; then kill $pid; sleep 2; kill -0 $pid 2>/dev/null && kill -9 $pid; fi ) & watchdog=$!; wait $pid; exit_code=$?; kill -9 $watchdog 2>/dev/null; exit $exit_code; }"
+    }
+
+    private static func shellQuote(_ value: String) -> String {
+        "'" + value.replacingOccurrences(of: "'", with: "'\"'\"'") + "'"
     }
 }
 
@@ -556,11 +644,19 @@ enum WakeUpCommandBuilder {
 /// Uses ShellExecutor for command execution with timeout support.
 final class CLIExecutor {
     private let shellExecutor: ShellExecutor
+    private let fileManager: FileManager
+    private let homeDirectoryOverride: URL?
 
     /// Creates a new CLI executor with the specified timeout.
     /// - Parameter timeout: Maximum time to wait for command completion (default: 30 seconds)
-    init(timeout: TimeInterval = 30) {
+    init(
+        timeout: TimeInterval = 30,
+        fileManager: FileManager = .default,
+        homeDirectory: URL? = nil
+    ) {
         self.shellExecutor = ShellExecutor(timeout: timeout)
+        self.fileManager = fileManager
+        self.homeDirectoryOverride = homeDirectory
     }
 
     /// Executes a CLI command for the given schedule and returns the output.
@@ -569,8 +665,23 @@ final class CLIExecutor {
     /// - Returns: The command output as a string
     /// - Throws: `WakeUpError` if execution fails
     func execute(for schedule: WakeUpSchedule) async throws -> String {
+        let logDirectory: URL
+        do {
+            logDirectory = try WakeUpLogPathResolver.ensureSecureLogDirectory(
+                homeDirectory: homeDirectoryOverride,
+                fileManager: fileManager
+            )
+        } catch {
+            throw WakeUpError.launchAgentWriteFailed(error)
+        }
+        let logPath = logDirectory
+            .appendingPathComponent("agentlimits-wakeup-\(schedule.provider.rawValue).log")
+            .path
         // Build command with logging (same format as LaunchAgent, with [TEST] marker).
-        let command = WakeUpCommandBuilder.buildTestCommand(for: schedule)
+        let command = WakeUpCommandBuilder.buildTestCommand(
+            for: schedule,
+            logPath: logPath
+        )
 
         do {
             return try await shellExecutor.executeString(command: command)

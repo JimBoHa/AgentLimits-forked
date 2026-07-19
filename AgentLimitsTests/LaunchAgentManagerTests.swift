@@ -174,6 +174,56 @@ final class LaunchAgentManagerTests: XCTestCase {
         XCTAssertNil(scheduler.scheduleErrors[context.schedule.provider])
     }
 
+    func testInstallUsesPrivateUserOwnedLogDirectory() throws {
+        let context = makeContext()
+        defer { context.cleanup() }
+
+        try context.manager.install(schedule: context.schedule)
+
+        let logURL = context.manager.logURL(for: context.schedule)
+        let attributes = try FileManager.default.attributesOfItem(
+            atPath: logURL.deletingLastPathComponent().path
+        )
+        let permissions = try XCTUnwrap(
+            attributes[.posixPermissions] as? NSNumber
+        ).intValue & 0o777
+        XCTAssertEqual(permissions, 0o700)
+        XCTAssertTrue(logURL.path.hasPrefix(context.home.path + "/Library/Logs/AgentLimits/"))
+
+        let plist = try XCTUnwrap(
+            try PropertyListSerialization.propertyList(
+                from: context.plistData(),
+                format: nil
+            ) as? [String: Any]
+        )
+        XCTAssertEqual(plist["StandardOutPath"] as? String, logURL.path)
+        XCTAssertEqual(plist["StandardErrorPath"] as? String, logURL.path)
+    }
+
+    func testInstallRejectsSymlinkedLogDirectory() throws {
+        let context = makeContext()
+        defer { context.cleanup() }
+        let logsParent = context.home.appendingPathComponent("Library/Logs")
+        let redirectedLogs = context.home.appendingPathComponent("redirected-logs")
+        try FileManager.default.createDirectory(
+            at: logsParent,
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createDirectory(
+            at: redirectedLogs,
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createSymbolicLink(
+            at: logsParent.appendingPathComponent("AgentLimits"),
+            withDestinationURL: redirectedLogs
+        )
+
+        XCTAssertThrowsError(try context.manager.install(schedule: context.schedule)) { error in
+            XCTAssertTrue(error.localizedDescription.contains("private, user-owned"))
+        }
+        XCTAssertFalse(context.manager.isPlistPresent(for: context.schedule))
+    }
+
     private func makeContext(
         initiallyLoaded: Bool = false,
         removeItem: ((URL) throws -> Void)? = nil
