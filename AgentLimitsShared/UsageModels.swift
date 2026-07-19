@@ -1123,6 +1123,9 @@ struct AppGroupSnapshotStore<Provider: SnapshotFileNaming, Snapshot: SnapshotDat
         try withSecurityScopedAccess(url) {
             try data.write(to: url, options: .atomic)
         }
+        if let migrationMarkerURL = legacyMigrationMarkerURL(for: snapshot.provider) {
+            try writeLegacyMigrationMarker(at: migrationMarkerURL)
+        }
         visibilityStore.setSnapshotSuppressed(
             false,
             fileName: snapshotVisibilityKey(for: snapshot.provider)
@@ -1200,22 +1203,23 @@ struct AppGroupSnapshotStore<Provider: SnapshotFileNaming, Snapshot: SnapshotDat
             ".legacy-migration-complete-\(provider.snapshotFileName)"
         )
         guard !fileManager.fileExists(atPath: migrationMarkerURL.path) else { return }
-        if fileManager.fileExists(atPath: targetURL.path) {
-            try writeLegacyMigrationMarker(at: migrationMarkerURL)
-            return
-        }
-
         let legacyURL = legacyDirectoryURL.appendingPathComponent(provider.snapshotFileName)
-        guard fileManager.fileExists(atPath: legacyURL.path) else {
-            try writeLegacyMigrationMarker(at: migrationMarkerURL)
-            return
-        }
 
         if visibilityStore.isSnapshotSuppressed(fileName: provider.snapshotFileName) {
             visibilityStore.setSnapshotSuppressed(
                 true,
                 fileName: snapshotVisibilityKey(for: provider)
             )
+            try writeLegacyMigrationMarker(at: migrationMarkerURL)
+            return
+        }
+
+        if fileManager.fileExists(atPath: targetURL.path) {
+            try writeLegacyMigrationMarker(at: migrationMarkerURL)
+            return
+        }
+
+        guard fileManager.fileExists(atPath: legacyURL.path) else {
             try writeLegacyMigrationMarker(at: migrationMarkerURL)
             return
         }
@@ -1231,6 +1235,16 @@ struct AppGroupSnapshotStore<Provider: SnapshotFileNaming, Snapshot: SnapshotDat
             try data.write(to: targetURL, options: .atomic)
         }
         try writeLegacyMigrationMarker(at: migrationMarkerURL)
+    }
+
+    private func legacyMigrationMarkerURL(for provider: Provider) -> URL? {
+        guard accountID != nil, migratesLegacySnapshot,
+              let directoryURL = snapshotDirectoryURL(accountID: accountID) else {
+            return nil
+        }
+        return directoryURL.appendingPathComponent(
+            ".legacy-migration-complete-\(provider.snapshotFileName)"
+        )
     }
 
     private func writeLegacyMigrationMarker(at url: URL) throws {

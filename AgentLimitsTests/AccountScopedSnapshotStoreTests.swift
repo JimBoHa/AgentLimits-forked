@@ -159,6 +159,84 @@ final class AccountScopedSnapshotStoreTests: XCTestCase {
         }
     }
 
+    func testFreshScopedSaveRetiresLegacyBeforeLaterDeletion() throws {
+        try withTemporaryContainer { containerURL in
+            let accountID = try XCTUnwrap(
+                UUID(uuidString: "70000000-0000-0000-0000-000000000007")
+            )
+            let visibilityStore = RecordingAccountSnapshotVisibilityStore()
+            let legacyStore = makeStore(
+                visibilityStore: visibilityStore,
+                containerURL: containerURL
+            )
+            let oldSnapshot = makeSnapshot(
+                fetchedAt: Date(timeIntervalSince1970: 7_000)
+            )
+            try legacyStore.saveSnapshot(oldSnapshot)
+            let accountStore = makeStore(
+                visibilityStore: visibilityStore,
+                accountID: accountID,
+                migratesLegacySnapshot: true,
+                containerURL: containerURL
+            )
+            let freshSnapshot = makeSnapshot(
+                fetchedAt: Date(timeIntervalSince1970: 8_000)
+            )
+
+            try accountStore.saveSnapshot(freshSnapshot)
+            try accountStore.deleteSnapshot(for: .chatgptCodex)
+
+            XCTAssertNil(accountStore.loadSnapshot(for: .chatgptCodex))
+            XCTAssertEqual(
+                legacyStore.loadSnapshot(for: .chatgptCodex)?.fetchedAt,
+                oldSnapshot.fetchedAt
+            )
+        }
+    }
+
+    func testLegacySuppressionWinsOverUnmarkedExistingTarget() throws {
+        try withTemporaryContainer { containerURL in
+            let accountID = try XCTUnwrap(
+                UUID(uuidString: "80000000-0000-0000-0000-000000000008")
+            )
+            let visibilityStore = RecordingAccountSnapshotVisibilityStore()
+            let legacyStore = makeStore(
+                visibilityStore: visibilityStore,
+                containerURL: containerURL
+            )
+            try legacyStore.saveSnapshot(
+                makeSnapshot(fetchedAt: Date(timeIntervalSince1970: 9_000))
+            )
+            let unmarkedAccountStore = makeStore(
+                visibilityStore: visibilityStore,
+                accountID: accountID,
+                containerURL: containerURL
+            )
+            try unmarkedAccountStore.saveSnapshot(
+                makeSnapshot(fetchedAt: Date(timeIntervalSince1970: 10_000))
+            )
+            visibilityStore.setSnapshotSuppressed(
+                true,
+                fileName: UsageProvider.chatgptCodex.snapshotFileName
+            )
+            let migrationEnabledStore = makeStore(
+                visibilityStore: visibilityStore,
+                accountID: accountID,
+                migratesLegacySnapshot: true,
+                containerURL: containerURL
+            )
+
+            XCTAssertNil(migrationEnabledStore.loadSnapshot(for: .chatgptCodex))
+            XCTAssertTrue(
+                visibilityStore.isSnapshotSuppressed(
+                    fileName: migrationEnabledStore.snapshotVisibilityKey(
+                        for: .chatgptCodex
+                    )
+                )
+            )
+        }
+    }
+
     private func makeStore(
         visibilityStore: any SnapshotVisibilityControlling = RecordingAccountSnapshotVisibilityStore(),
         accountID: UUID? = nil,
