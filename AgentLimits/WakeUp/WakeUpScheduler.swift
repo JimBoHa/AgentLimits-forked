@@ -276,7 +276,7 @@ final class LaunchAgentManager {
 
 // MARK: - CLI Executor
 
-private enum WakeUpCommandBuilder {
+enum WakeUpCommandBuilder {
     static func buildLaunchAgentCommand(for schedule: WakeUpSchedule) -> String {
         let prefixedCommand = ShellCommandPathPrefixer.prefixIfNeeded(command: schedule.cliCommand)
         let guardedCommand = wrapWithTimeout(command: prefixedCommand)
@@ -285,7 +285,11 @@ private enum WakeUpCommandBuilder {
 
     static func buildTestCommand(for schedule: WakeUpSchedule) -> String {
         let baseCommand = buildCommand(for: schedule, command: schedule.cliCommand, marker: "[TEST]")
-        return "{ \(baseCommand); } 2>&1 | tee -a \"\(schedule.logPath)\""
+        return buildLoggedTestCommand(command: baseCommand, logPath: schedule.logPath)
+    }
+
+    static func buildLoggedTestCommand(command: String, logPath: String) -> String {
+        "set -o pipefail; { \(command); } 2>&1 | tee -a \"\(logPath)\""
     }
 
     private static func buildCommand(
