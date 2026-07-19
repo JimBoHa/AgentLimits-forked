@@ -521,8 +521,8 @@ extension MenuBarController: NSMenuDelegate {
 
     private func makeAboutCredits() -> NSAttributedString {
         let copyright = resolveAboutCopyright()
-        let repositoryURLString = "https://products.desireforwealth.com/products/agentlimits"
-        let creditsText = "\(copyright)\nWebsite: \(repositoryURLString)"
+        let repositoryURLString = "https://github.com/JimBoHa/AgentLimits-forked"
+        let creditsText = "\(copyright)\nFork: \(repositoryURLString)"
         let attributed = NSMutableAttributedString(string: creditsText)
         let linkRange = (creditsText as NSString).range(of: repositoryURLString)
         attributed.addAttribute(.link, value: repositoryURLString, range: linkRange)

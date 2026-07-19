@@ -305,30 +305,29 @@ Monthly-only usage windows:
 ## Release Process
 
 1. Bump `MARKETING_VERSION` / `CURRENT_PROJECT_VERSION` in project settings
-2. Archive → Developer ID Application signing → Notarize → create ZIP (`AgentLimits.zip`)
-3. Create GitHub Release with tag `v{MARKETING_VERSION}` and attach `AgentLimits.zip`
-4. In the Products repository, run `python3 tools/build_appcast.py agentlimits`
-   - This resolves the version from the latest GitHub Release URL, downloads the ZIP,
-     runs `generate_appcast`, updates TOML `release.version` / `release.release_date`,
-     and regenerates all product pages
-5. Review the diff, then `git commit & push` → Cloudflare Workers auto-deploys `appcast.xml`
+2. Configure fork-owned bundle identifiers, App Group, Apple Developer Team, and signing profiles
+3. Archive → Developer ID Application signing → notarize → create ZIP (`AgentLimits.zip`)
+4. Create a release in `JimBoHa/AgentLimits-forked` with tag `v{MARKETING_VERSION}` and attach the notarized ZIP
+5. Generate a signed appcast on infrastructure controlled by the fork owner
+6. Add the fork-owned HTTPS `SUFeedURL` and EdDSA public key only to distribution builds
+
+Until steps 5-6 are complete, Sparkle remains disabled and GitHub Releases is the distribution source.
 
 ### Sparkle EdDSA Key
 
-The EdDSA private key is stored in macOS Keychain (added by `generate_keys` from the Sparkle package).
-**It is not committed to the repository.**
+Generate a new EdDSA key with Sparkle's `generate_keys` tool before enabling fork updates.
+Never reuse or recover the original project's private key. Store the fork private key in macOS Keychain and back it up in a secret manager; never commit it.
 
-- **Public key**: stored in `Info.plist` under `SUPublicEDKey`
-- **Private key backup**: exported from Keychain and saved as a secure note in Bitwarden
+- **Public key**: supplied to distribution builds under `SUPublicEDKey`
+- **Private key**: retained only by the fork owner in Keychain and a secure backup
 
 #### Key Recovery (new Mac or re-install)
 
-1. Retrieve the private key from Bitwarden secure note
+1. Retrieve the fork-owned private key from the configured secret manager
 2. Import it into Keychain with:
    ```bash
    security import <private_key_file> -k ~/Library/Keychains/login.keychain-db
    ```
 3. Verify with `generate_appcast` — it should sign without prompting for a key
 
-If the private key is lost, generate a new key pair with `generate_keys`, update `SUPublicEDKey` in `Info.plist`,
-and publish a new release. Users on old builds will need to update manually once.
+If the private key is lost, generate a new key pair, update the distribution `SUPublicEDKey`, and publish a new release. Existing users must install that transition release manually.
