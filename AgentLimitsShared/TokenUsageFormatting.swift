@@ -21,10 +21,13 @@ enum TokenUsageFormatter {
 
     /// Returns a compact request count string in K/M units.
     static func formatRequests(_ requests: Int) -> String {
-        let kRequests = Double(requests) / 1000.0
-        if kRequests >= 1000 {
-            return String(format: "%.1fK Requests", kRequests / 1000.0)
+        if requests >= 1_000_000 {
+            return String(
+                format: "%.1fM Requests",
+                Double(requests) / 1_000_000.0
+            )
         }
+        let kRequests = Double(requests) / 1000.0
         if kRequests >= 1 {
             return String(format: "%.0fK Requests", kRequests)
         }
