@@ -101,15 +101,18 @@ final class DistributionScriptTests: XCTestCase {
     }
 
     func testAcceptedNotaryLogsWithNullOrEmptyIssuesPass() throws {
+        let lowercaseJobID = "2efe2717-52ef-43a5-96dc-0797e4ca1041"
+        let uppercaseJobID = lowercaseJobID.uppercased()
         for issues in ["null", "[]"] {
             let directory = try temporaryDirectory()
             defer { try? FileManager.default.removeItem(at: directory) }
             let log = directory.appendingPathComponent("accepted.json")
-            let json = #"{"jobId":"job-123","status":"Accepted","statusCode":0,"issues":ISSUES}"#
+            let json = #"{"jobId":"JOB_ID","status":"Accepted","statusCode":0,"issues":ISSUES}"#
+                .replacingOccurrences(of: "JOB_ID", with: uppercaseJobID)
                 .replacingOccurrences(of: "ISSUES", with: issues)
             try Data(json.utf8).write(to: log)
 
-            let result = try runNotaryLogValidator(log: log, jobID: "job-123")
+            let result = try runNotaryLogValidator(log: log, jobID: lowercaseJobID)
             XCTAssertEqual(result.status, 0, result.output)
         }
     }

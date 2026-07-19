@@ -17,7 +17,8 @@ validate_accepted_notary_log() {
     fi
     if ! /usr/bin/jq -e --arg job_id "$expected_job_id" '
         type == "object"
-        and .jobId == $job_id
+        and (.jobId | type == "string")
+        and ((.jobId | ascii_downcase) == ($job_id | ascii_downcase))
         and .status == "Accepted"
         and (.statusCode == 0 or .statusCode == "0")
         and has("issues")
