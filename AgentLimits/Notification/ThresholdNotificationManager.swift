@@ -7,12 +7,56 @@ import Foundation
 import OSLog
 import UserNotifications
 
+@MainActor
+protocol ThresholdNotificationCenterClient {
+    func isAuthorized() async -> Bool
+    func requestAuthorization(options: UNAuthorizationOptions) async throws -> Bool
+    func add(_ request: UNNotificationRequest) async throws
+    func removePendingNotificationRequests(withIdentifiers identifiers: [String])
+    func removeDeliveredNotifications(withIdentifiers identifiers: [String])
+}
+
+@MainActor
+final class SystemThresholdNotificationCenterClient: ThresholdNotificationCenterClient {
+    private let center: UNUserNotificationCenter
+
+    init(center: UNUserNotificationCenter = .current()) {
+        self.center = center
+    }
+
+    func isAuthorized() async -> Bool {
+        let settings = await center.notificationSettings()
+        return settings.authorizationStatus == .authorized
+    }
+
+    func requestAuthorization(options: UNAuthorizationOptions) async throws -> Bool {
+        try await center.requestAuthorization(options: options)
+    }
+
+    func add(_ request: UNNotificationRequest) async throws {
+        try await center.add(request)
+    }
+
+    func removePendingNotificationRequests(withIdentifiers identifiers: [String]) {
+        center.removePendingNotificationRequests(withIdentifiers: identifiers)
+    }
+
+    func removeDeliveredNotifications(withIdentifiers identifiers: [String]) {
+        center.removeDeliveredNotifications(withIdentifiers: identifiers)
+    }
+}
+
 // MARK: - Notification Identifiers
 
 /// Identifiers for threshold notifications
 private enum NotificationIdentifier {
-    static func makeId(provider: UsageProvider, windowKind: UsageWindowKind, level: UsageThresholdLevel) -> String {
-        "threshold-\(provider.rawValue)-\(windowKind.rawValue)-\(level.rawValue)"
+    static func makeId(
+        provider: UsageProvider,
+        windowKind: UsageWindowKind,
+        level: UsageThresholdLevel,
+        submissionID: UUID
+    ) -> String {
+        "threshold-\(provider.rawValue)-\(windowKind.rawValue)-\(level.rawValue)-\(submissionID.uuidString)"
     }
 }
 
@@ -27,15 +71,18 @@ final class ThresholdNotificationManager: ObservableObject {
     @Published private(set) var isNotificationAuthorized: Bool = false
 
     private let store: ThresholdNotificationStore
-    private let notificationCenter: UNUserNotificationCenter
+    private let notificationCenter: any ThresholdNotificationCenterClient
+    private let makeSubmissionID: () -> UUID
 
-    private init(
+    init(
         store: ThresholdNotificationStore? = nil,
-        notificationCenter: UNUserNotificationCenter = .current()
+        notificationCenter: (any ThresholdNotificationCenterClient)? = nil,
+        makeSubmissionID: @escaping () -> UUID = UUID.init
     ) {
         let useStore = store ?? ThresholdNotificationStore()
         self.store = useStore
-        self.notificationCenter = notificationCenter
+        self.notificationCenter = notificationCenter ?? SystemThresholdNotificationCenterClient()
+        self.makeSubmissionID = makeSubmissionID
         let loadedSettings = useStore.loadSettings()
         let sanitizedSettings = Self.sanitizeSettings(loadedSettings)
         if sanitizedSettings != loadedSettings {
@@ -53,8 +100,7 @@ final class ThresholdNotificationManager: ObservableObject {
 
     /// Checks current notification authorization status
     func checkAuthorizationStatus() async {
-        let settings = await notificationCenter.notificationSettings()
-        isNotificationAuthorized = settings.authorizationStatus == .authorized
+        isNotificationAuthorized = await notificationCenter.isAuthorized()
     }
 
     /// Requests notification authorization from user
@@ -123,8 +169,11 @@ final class ThresholdNotificationManager: ObservableObject {
     // MARK: - Threshold Checking
 
     /// Checks thresholds for a snapshot and sends notifications if needed
-    func checkThresholdsIfNeeded(for snapshot: UsageSnapshot) async {
-        guard isNotificationAuthorized else { return }
+    func checkThresholdsIfNeeded(
+        for snapshot: UsageSnapshot,
+        isCurrent: @MainActor () -> Bool = { true }
+    ) async {
+        guard isNotificationAuthorized, isCurrent() else { return }
 
         let providerSettings = getSettings(for: snapshot.provider)
 
@@ -134,29 +183,35 @@ final class ThresholdNotificationManager: ObservableObject {
                 provider: snapshot.provider,
                 window: window,
                 level: .warning,
-                levelSettings: providerSettings.primaryWindow.warning
+                levelSettings: providerSettings.primaryWindow.warning,
+                isCurrent: isCurrent
             )
+            guard isCurrent() else { return }
             await checkWindowThreshold(
                 provider: snapshot.provider,
                 window: window,
                 level: .danger,
-                levelSettings: providerSettings.primaryWindow.danger
+                levelSettings: providerSettings.primaryWindow.danger,
+                isCurrent: isCurrent
             )
         }
 
         // Check secondary window (weekly)
-        if let window = snapshot.secondaryWindow {
+        if let window = snapshot.secondaryWindow, isCurrent() {
             await checkWindowThreshold(
                 provider: snapshot.provider,
                 window: window,
                 level: .warning,
-                levelSettings: providerSettings.secondaryWindow.warning
+                levelSettings: providerSettings.secondaryWindow.warning,
+                isCurrent: isCurrent
             )
+            guard isCurrent() else { return }
             await checkWindowThreshold(
                 provider: snapshot.provider,
                 window: window,
                 level: .danger,
-                levelSettings: providerSettings.secondaryWindow.danger
+                levelSettings: providerSettings.secondaryWindow.danger,
+                isCurrent: isCurrent
             )
         }
     }
@@ -166,8 +221,10 @@ final class ThresholdNotificationManager: ObservableObject {
         provider: UsageProvider,
         window: UsageWindow,
         level: UsageThresholdLevel,
-        levelSettings: ThresholdLevelSettings
+        levelSettings: ThresholdLevelSettings,
+        isCurrent: @MainActor () -> Bool
     ) async {
+        guard isCurrent() else { return }
         // Skip if disabled
         guard levelSettings.isEnabled else { return }
 
@@ -185,12 +242,32 @@ final class ThresholdNotificationManager: ObservableObject {
         }
 
         // Send notification
-        await sendNotification(
+        guard isCurrent() else { return }
+        let notificationIdentifier = NotificationIdentifier.makeId(
             provider: provider,
             windowKind: window.kind,
             level: level,
-            usedPercent: usedPercent
+            submissionID: makeSubmissionID()
         )
+        let didSend = await sendNotification(
+            provider: provider,
+            windowKind: window.kind,
+            level: level,
+            usedPercent: usedPercent,
+            identifier: notificationIdentifier
+        )
+        guard didSend else { return }
+        guard isCurrent() else {
+            // If Clear Data invalidated this generation while add() suspended,
+            // remove any notification the stale operation just submitted.
+            notificationCenter.removePendingNotificationRequests(
+                withIdentifiers: [notificationIdentifier]
+            )
+            notificationCenter.removeDeliveredNotifications(
+                withIdentifiers: [notificationIdentifier]
+            )
+            return
+        }
 
         // Update lastNotifiedResetAt to prevent duplicates
         if let resetAt = window.resetAt {
@@ -234,8 +311,9 @@ final class ThresholdNotificationManager: ObservableObject {
         provider: UsageProvider,
         windowKind: UsageWindowKind,
         level: UsageThresholdLevel,
-        usedPercent: Int
-    ) async {
+        usedPercent: Int,
+        identifier: String
+    ) async -> Bool {
         let content = UNMutableNotificationContent()
 
         // Title: "Codex 使用量警告" or "Claude Code 使用量警告"
@@ -261,7 +339,6 @@ final class ThresholdNotificationManager: ObservableObject {
 
         content.sound = .default
 
-        let identifier = NotificationIdentifier.makeId(provider: provider, windowKind: windowKind, level: level)
         let request = UNNotificationRequest(
             identifier: identifier,
             content: content,
@@ -271,8 +348,10 @@ final class ThresholdNotificationManager: ObservableObject {
         do {
             try await notificationCenter.add(request)
             Logger.notification.info("ThresholdNotificationManager: Sent notification for \(provider.displayName) \(windowKind.rawValue) \(level.rawValue) at \(usedPercent)%")
+            return true
         } catch {
             Logger.notification.error("ThresholdNotificationManager: Failed to send notification: \(error.localizedDescription)")
+            return false
         }
     }
 

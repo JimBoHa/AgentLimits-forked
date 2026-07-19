@@ -5,6 +5,16 @@ import Foundation
 import Combine
 import WidgetKit
 
+/// Storage boundary used to keep token-usage state and persistence coordinated.
+protocol TokenUsageSnapshotStoring {
+    func loadSnapshot(for provider: TokenUsageProvider) -> TokenUsageSnapshot?
+    func saveSnapshot(_ snapshot: TokenUsageSnapshot) throws
+    func deleteSnapshot(for provider: TokenUsageProvider) throws
+}
+
+extension AppGroupSnapshotStore: TokenUsageSnapshotStoring
+    where Provider == TokenUsageProvider, Snapshot == TokenUsageSnapshot {}
+
 /// ViewModel for managing ccusage token usage data
 @MainActor
 final class TokenUsageViewModel: ObservableObject {
@@ -24,24 +34,29 @@ final class TokenUsageViewModel: ObservableObject {
     // MARK: - Private Properties
 
     private let fetcher: CCUsageFetcher
-    private let snapshotStore: TokenUsageSnapshotStore
+    private let snapshotStore: any TokenUsageSnapshotStoring
     private let settingsStore: CCUsageSettingsStore
+    private let snapshotVisibilityStore: any SnapshotVisibilityControlling
     private var autoRefreshCoordinator: AutoRefreshCoordinator?
+    private var suppressedSnapshots: Set<TokenUsageProvider> = []
 
     // MARK: - Initialization
 
     init(
         fetcher: CCUsageFetcher? = nil,
-        snapshotStore: TokenUsageSnapshotStore? = nil,
-        settingsStore: CCUsageSettingsStore? = nil
+        snapshotStore: (any TokenUsageSnapshotStoring)? = nil,
+        settingsStore: CCUsageSettingsStore? = nil,
+        snapshotVisibilityStore: (any SnapshotVisibilityControlling)? = nil
     ) {
         let resolvedFetcher = fetcher ?? CCUsageFetcher()
-        let resolvedSnapshotStore = snapshotStore ?? .shared
+        let resolvedSnapshotStore = snapshotStore ?? TokenUsageSnapshotStore.shared
         let resolvedSettingsStore = settingsStore ?? .shared
 
         self.fetcher = resolvedFetcher
         self.snapshotStore = resolvedSnapshotStore
         self.settingsStore = resolvedSettingsStore
+        let resolvedSnapshotVisibilityStore = snapshotVisibilityStore ?? SnapshotVisibilityStore.shared
+        self.snapshotVisibilityStore = resolvedSnapshotVisibilityStore
 
         // Load settings
         settings = resolvedSettingsStore.loadSettings()
@@ -52,7 +67,8 @@ final class TokenUsageViewModel: ObservableObject {
             statusMessages[provider] = "tokenUsage.notFetched".localized()
 
             // Load cached snapshot
-            if let cached = resolvedSnapshotStore.loadSnapshot(for: provider) {
+            if !resolvedSnapshotVisibilityStore.isSnapshotSuppressed(fileName: provider.snapshotFileName),
+               let cached = resolvedSnapshotStore.loadSnapshot(for: provider) {
                 snapshots[provider] = cached
                 // Show last updated time for cached snapshot.
                 statusMessages[provider] = formatLastUpdated(cached.fetchedAt)
@@ -118,12 +134,63 @@ final class TokenUsageViewModel: ObservableObject {
         }
     }
 
+    // MARK: - Externally Fetched Snapshots
+
+    /// Persists a WebView-produced snapshot and updates the shared in-memory UI state.
+    func saveExternallyFetchedSnapshot(_ snapshot: TokenUsageSnapshot) throws {
+        do {
+            try snapshotStore.saveSnapshot(snapshot)
+            snapshotVisibilityStore.setSnapshotSuppressed(
+                false,
+                fileName: snapshot.provider.snapshotFileName
+            )
+            suppressedSnapshots.remove(snapshot.provider)
+            snapshots[snapshot.provider] = snapshot
+            statusMessages[snapshot.provider] = formatLastUpdated(snapshot.fetchedAt)
+            WidgetCenter.shared.reloadTimelines(ofKind: snapshot.provider.widgetKind)
+        } catch {
+            statusMessages[snapshot.provider] = error.localizedDescription
+            throw error
+        }
+    }
+
+    /// Clears both persisted and in-memory state. Memory is cleared even when
+    /// disk deletion fails so Clear Data cannot leave stale data on screen.
+    func clearSnapshot(for provider: TokenUsageProvider) throws {
+        // Prevent a cached disk read from restoring this snapshot while the
+        // surrounding WebKit clear is still completing (or after delete fails).
+        suppressedSnapshots.insert(provider)
+        snapshotVisibilityStore.setSnapshotSuppressed(true, fileName: provider.snapshotFileName)
+        let deletionError: Error?
+        do {
+            try snapshotStore.deleteSnapshot(for: provider)
+            snapshotVisibilityStore.setSnapshotSuppressed(false, fileName: provider.snapshotFileName)
+            deletionError = nil
+        } catch {
+            deletionError = error
+        }
+
+        snapshots.removeValue(forKey: provider)
+        isFetching[provider] = false
+        statusMessages[provider] = deletionError?.localizedDescription
+            ?? "tokenUsage.notFetched".localized()
+        WidgetCenter.shared.reloadTimelines(ofKind: provider.widgetKind)
+
+        if let deletionError {
+            throw deletionError
+        }
+    }
+
     // MARK: - Private Methods
 
     private func refresh(for provider: TokenUsageProvider) async {
         // Copilot billing is fetched via UsageViewModel (WebView-based).
         // Only reload the cached snapshot here.
         guard provider.isCLIBased else {
+            guard !suppressedSnapshots.contains(provider) else { return }
+            guard !snapshotVisibilityStore.isSnapshotSuppressed(fileName: provider.snapshotFileName) else {
+                return
+            }
             if let cached = snapshotStore.loadSnapshot(for: provider) {
                 snapshots[provider] = cached
                 statusMessages[provider] = formatLastUpdated(cached.fetchedAt)
@@ -140,6 +207,10 @@ final class TokenUsageViewModel: ObservableObject {
             // Fetch snapshot via CLI and persist to App Group store.
             let snapshot = try await fetcher.fetchSnapshot(for: provider)
             try snapshotStore.saveSnapshot(snapshot)
+            snapshotVisibilityStore.setSnapshotSuppressed(
+                false,
+                fileName: snapshot.provider.snapshotFileName
+            )
             snapshots[provider] = snapshot
             statusMessages[provider] = formatLastUpdated(snapshot.fetchedAt)
             // Notify widgets to update with latest data.

@@ -26,9 +26,13 @@ final class AppSharedState: ObservableObject {
 
     init() {
         let pool = UsageWebViewPool()
+        let tokenViewModel = TokenUsageViewModel()
         self.webViewPool = pool
-        self.viewModel = UsageViewModel(webViewPool: pool)
-        self.tokenUsageViewModel = TokenUsageViewModel()
+        self.tokenUsageViewModel = tokenViewModel
+        self.viewModel = UsageViewModel(
+            webViewPool: pool,
+            tokenUsageViewModel: tokenViewModel
+        )
         observePageReadyChanges()
         observeCookieChanges()
         let storedMode = UsageDisplayMode.makeSelectableMode(
@@ -67,6 +71,7 @@ final class AppSharedState: ObservableObject {
 
     /// 設定画面を閉じた後、取得実績のないWebViewを停止状態に戻す。
     func applyBackgroundPolicyOnSettingsClose() {
+        webViewPool.clearForegroundProvider()
         webViewPool.applyBackgroundPolicy(
             activeProviders: Set(viewModel.backgroundActiveProviders)
         )

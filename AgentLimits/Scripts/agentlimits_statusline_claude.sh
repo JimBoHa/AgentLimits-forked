@@ -151,6 +151,7 @@ get_system_language() {
 # Read settings from App Group
 APP_DISPLAY_MODE=$(read_app_setting "usage_display_mode_cached")
 APP_LANGUAGE=$(read_app_setting "app_language")
+SNAPSHOT_SUPPRESSED=$(read_app_setting "snapshot_suppressed.usage_snapshot_claude.json")
 
 # Determine effective language
 if [[ "$APP_LANGUAGE" == "ja" ]]; then
@@ -209,6 +210,7 @@ debug_log "prefs_plist=${PREFS_PLIST} exists=$([[ -f "$PREFS_PLIST" ]] && echo y
 debug_log "snapshot_file=${SNAPSHOT_FILE} exists=$([[ -f "$SNAPSHOT_FILE" ]] && echo yes || echo no)"
 debug_log "app_display_mode_cached=${APP_DISPLAY_MODE:-unset}"
 debug_log "app_language=${APP_LANGUAGE:-unset}"
+debug_log "snapshot_suppressed=${SNAPSHOT_SUPPRESSED:-unset}"
 debug_log "lang_code=${LANG_CODE}"
 debug_log "display_mode_override=${DISPLAY_MODE_OVERRIDE:-none}"
 
@@ -233,8 +235,9 @@ if ! command -v jq &> /dev/null; then
     exit 1
 fi
 
-# Check if snapshot file exists
-if [[ ! -f "$SNAPSHOT_FILE" ]]; then
+# A failed Clear Data deletion leaves the JSON in place but writes this shared
+# tombstone. Match app/widget semantics and never expose that stale snapshot.
+if [[ "$SNAPSHOT_SUPPRESSED" =~ ^(1|[Tt][Rr][Uu][Ee]|[Yy][Ee][Ss])$ ]] || [[ ! -f "$SNAPSHOT_FILE" ]]; then
     echo "$L_ERROR_NO_FILE" >&2
     exit 1
 fi
