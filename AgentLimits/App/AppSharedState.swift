@@ -81,7 +81,7 @@ final class AppSharedState: ObservableObject {
     /// Applies the background WebView policy for providers with fetch history.
     private func loadWebViews() {
         webViewPool.applyBackgroundPolicy(
-            activeProviders: Set(viewModel.backgroundActiveProviders)
+            activeAccounts: viewModel.backgroundActiveAccounts
         )
     }
 
@@ -94,12 +94,12 @@ final class AppSharedState: ObservableObject {
     func applyBackgroundPolicyOnSettingsClose() {
         webViewPool.clearForegroundProvider()
         webViewPool.applyBackgroundPolicy(
-            activeProviders: Set(viewModel.backgroundActiveProviders)
+            activeAccounts: viewModel.backgroundActiveAccounts
         )
     }
 
-    /// Observes every account store once. Events from a background sibling are
-    /// ignored unless that account is currently selected for its provider.
+    /// Observes every account store once. The view model preserves the exact
+    /// account identity for foreground and background sibling events.
     private func observeWebViewStore(_ store: WebViewStore) {
         guard observedAccountIDs.insert(store.account.id).inserted else { return }
         let accountID = store.account.id

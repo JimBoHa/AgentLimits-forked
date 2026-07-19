@@ -5,10 +5,14 @@ import XCTest
 @MainActor
 final class UsageViewModelClearOrchestrationTests: XCTestCase {
     func testClearQuiescesWebsiteDataBeforeDeletingSnapshots() async throws {
-        let usageStore = OrchestrationUsageSnapshotStore(
+        let accountStore = makeProviderAccountStore()
+        let visibilityStore = OrchestrationSnapshotVisibilityStore()
+        let usageRepository = OrchestrationAccountUsageSnapshotRepository(
+            accounts: accountStore.loadAccounts(),
             snapshots: Dictionary(
                 uniqueKeysWithValues: UsageProvider.allCases.map { ($0, makeUsageSnapshot($0)) }
-            )
+            ),
+            visibilityStore: visibilityStore
         )
         let tokenStore = OrchestrationTokenSnapshotStore(
             snapshots: Dictionary(
@@ -17,9 +21,8 @@ final class UsageViewModelClearOrchestrationTests: XCTestCase {
                 }
             )
         )
-        let visibilityStore = OrchestrationSnapshotVisibilityStore()
         let websiteDataClearer = RecordingWebsiteDataClearer()
-        usageStore.onDelete = {
+        usageRepository.onDelete = { _ in
             XCTAssertTrue(websiteDataClearer.didClear)
         }
         tokenStore.onDelete = {
@@ -30,34 +33,35 @@ final class UsageViewModelClearOrchestrationTests: XCTestCase {
             visibilityStore: visibilityStore
         )
         let pool = UsageWebViewPool(
-            accountStore: makeProviderAccountStore(),
+            accountStore: accountStore,
             websiteDataClearer: websiteDataClearer
         )
         let viewModel = makeUsageViewModel(
             pool: pool,
-            usageStore: usageStore,
-            tokenViewModel: tokenViewModel,
-            visibilityStore: visibilityStore
+            usageRepository: usageRepository,
+            tokenViewModel: tokenViewModel
         )
 
         XCTAssertNotNil(viewModel.snapshot)
         try await viewModel.clearData()
 
         XCTAssertEqual(websiteDataClearer.clearCount, 1)
-        XCTAssertTrue(usageStore.snapshots.isEmpty)
+        XCTAssertTrue(usageRepository.snapshotsByAccountID.isEmpty)
+        XCTAssertEqual(
+            Set(usageRepository.deletionAttempts),
+            Set(accountStore.loadAccounts().map(\.id))
+        )
         XCTAssertTrue(tokenStore.snapshots.isEmpty)
         XCTAssertEqual(
             Set(tokenStore.deletionAttempts),
             Set(TokenUsageProvider.allCases)
         )
         XCTAssertNil(viewModel.snapshot)
-        XCTAssertTrue(viewModel.backgroundActiveProviders.isEmpty)
+        XCTAssertTrue(viewModel.backgroundActiveAccounts.isEmpty)
         XCTAssertTrue(tokenViewModel.snapshots.isEmpty)
-        for provider in UsageProvider.allCases {
-            XCTAssertFalse(
-                visibilityStore.isSnapshotSuppressed(fileName: provider.snapshotFileName)
-            )
-            XCTAssertTrue(pool.getWebViewStore(for: provider).isSuspended)
+        for account in accountStore.loadAccounts() {
+            XCTAssertFalse(usageRepository.isSnapshotSuppressed(for: account))
+            XCTAssertTrue(pool.getWebViewStore(for: account).isSuspended)
         }
         for provider in TokenUsageProvider.allCases {
             XCTAssertFalse(
@@ -70,10 +74,12 @@ final class UsageViewModelClearOrchestrationTests: XCTestCase {
 
     func testClearRetriesForAccountRegisteredDuringSnapshotDeletion() async throws {
         let accountStore = makeProviderAccountStore()
-        let usageStore = OrchestrationUsageSnapshotStore(
-            snapshots: [.chatgptCodex: makeUsageSnapshot(.chatgptCodex)]
-        )
         let visibilityStore = OrchestrationSnapshotVisibilityStore()
+        let usageRepository = OrchestrationAccountUsageSnapshotRepository(
+            accounts: accountStore.loadAccounts(),
+            snapshots: [.chatgptCodex: makeUsageSnapshot(.chatgptCodex)],
+            visibilityStore: visibilityStore
+        )
         let websiteDataClearer = RecordingWebsiteDataClearer()
         let tokenViewModel = makeTokenViewModel(
             store: OrchestrationTokenSnapshotStore(),
@@ -85,7 +91,7 @@ final class UsageViewModelClearOrchestrationTests: XCTestCase {
             websiteDataStoreProvider: { _ in .nonPersistent() }
         )
         var addedAccount: ProviderAccount?
-        usageStore.onDelete = {
+        usageRepository.onDelete = { _ in
             guard addedAccount == nil else { return }
             do {
                 addedAccount = try accountStore.addAccount(
@@ -98,43 +104,46 @@ final class UsageViewModelClearOrchestrationTests: XCTestCase {
         }
         let viewModel = makeUsageViewModel(
             pool: pool,
-            usageStore: usageStore,
-            tokenViewModel: tokenViewModel,
-            visibilityStore: visibilityStore
+            usageRepository: usageRepository,
+            tokenViewModel: tokenViewModel
         )
 
         try await viewModel.clearData()
 
         let account = try XCTUnwrap(addedAccount)
         XCTAssertEqual(websiteDataClearer.clearCount, 3)
+        XCTAssertTrue(usageRepository.deletionAttempts.contains(account.id))
         XCTAssertFalse(pool.getWebViewStore(for: account).isDataClearInProgress)
     }
 
     func testDeletionFailuresStaySuppressedAcrossRelaunchAndReturnStructuredError() async throws {
         let claudeSnapshot = makeUsageSnapshot(.claudeCode)
         let copilotTokenSnapshot = makeTokenSnapshot(.copilot)
-        let usageStore = OrchestrationUsageSnapshotStore(
-            snapshots: [.claudeCode: claudeSnapshot]
+        let accountStore = makeProviderAccountStore()
+        let claudeAccount = accountStore.selectedAccount(for: .claudeCode)
+        let visibilityStore = OrchestrationSnapshotVisibilityStore()
+        let usageRepository = OrchestrationAccountUsageSnapshotRepository(
+            accounts: accountStore.loadAccounts(),
+            snapshots: [.claudeCode: claudeSnapshot],
+            visibilityStore: visibilityStore
         )
-        usageStore.deletionErrors[.claudeCode] = OrchestrationError.deleteFailed
+        usageRepository.deletionErrors[claudeAccount.id] = OrchestrationError.deleteFailed
         let tokenStore = OrchestrationTokenSnapshotStore(
             snapshots: [.copilot: copilotTokenSnapshot]
         )
         tokenStore.deletionErrors[.copilot] = OrchestrationError.deleteFailed
-        let visibilityStore = OrchestrationSnapshotVisibilityStore()
         let tokenViewModel = makeTokenViewModel(
             store: tokenStore,
             visibilityStore: visibilityStore
         )
         let pool = UsageWebViewPool(
-            accountStore: makeProviderAccountStore(),
+            accountStore: accountStore,
             websiteDataClearer: RecordingWebsiteDataClearer()
         )
         let viewModel = makeUsageViewModel(
             pool: pool,
-            usageStore: usageStore,
+            usageRepository: usageRepository,
             tokenViewModel: tokenViewModel,
-            visibilityStore: visibilityStore,
             selectedProvider: .claudeCode
         )
 
@@ -146,11 +155,16 @@ final class UsageViewModelClearOrchestrationTests: XCTestCase {
                 return XCTFail("Unexpected clear error: \(error)")
             }
             XCTAssertEqual(failures.count, 2)
-            XCTAssertTrue(failures.contains { $0.target == UsageProvider.claudeCode.displayName })
+            XCTAssertTrue(failures.contains {
+                $0.target == "\(UsageProvider.claudeCode.displayName) — \(claudeAccount.label)"
+            })
             XCTAssertTrue(failures.contains { $0.target == "Copilot billing" })
         }
 
-        XCTAssertEqual(usageStore.snapshots[.claudeCode]?.fetchedAt, claudeSnapshot.fetchedAt)
+        XCTAssertEqual(
+            usageRepository.snapshotsByAccountID[claudeAccount.id]?.fetchedAt,
+            claudeSnapshot.fetchedAt
+        )
         XCTAssertEqual(
             tokenStore.snapshots[.copilot]?.fetchedAt,
             copilotTokenSnapshot.fetchedAt
@@ -159,23 +173,21 @@ final class UsageViewModelClearOrchestrationTests: XCTestCase {
             Set(tokenStore.deletionAttempts),
             Set(TokenUsageProvider.allCases)
         )
-        XCTAssertTrue(
-            visibilityStore.isSnapshotSuppressed(
-                fileName: UsageProvider.claudeCode.snapshotFileName
-            )
-        )
+        XCTAssertTrue(usageRepository.isSnapshotSuppressed(for: claudeAccount))
         XCTAssertTrue(
             visibilityStore.isSnapshotSuppressed(
                 fileName: TokenUsageProvider.copilot.snapshotFileName
             )
         )
 
-        let relaunchedStateManager = ProviderStateManager()
-        relaunchedStateManager.loadCachedSnapshots(
-            from: usageStore,
-            snapshotVisibilityStore: visibilityStore
+        let relaunchedStateManager = ProviderStateManager(
+            accounts: accountStore.loadAccounts()
         )
-        XCTAssertNil(relaunchedStateManager.getState(for: .claudeCode).snapshot)
+        relaunchedStateManager.loadCachedSnapshots(
+            for: accountStore.loadAccounts(),
+            from: usageRepository
+        )
+        XCTAssertNil(relaunchedStateManager.getState(for: claudeAccount.id).snapshot)
 
         let relaunchedTokenViewModel = makeTokenViewModel(
             store: tokenStore,
@@ -186,10 +198,14 @@ final class UsageViewModelClearOrchestrationTests: XCTestCase {
 
     func testWebsiteDataFailureDoesNotPartiallyDeleteSnapshots() async throws {
         let snapshot = makeUsageSnapshot(.chatgptCodex)
-        let usageStore = OrchestrationUsageSnapshotStore(
-            snapshots: [.chatgptCodex: snapshot]
-        )
+        let accountStore = makeProviderAccountStore()
+        let codexAccount = accountStore.selectedAccount(for: .chatgptCodex)
         let visibilityStore = OrchestrationSnapshotVisibilityStore()
+        let usageRepository = OrchestrationAccountUsageSnapshotRepository(
+            accounts: accountStore.loadAccounts(),
+            snapshots: [.chatgptCodex: snapshot],
+            visibilityStore: visibilityStore
+        )
         let websiteDataClearer = RecordingWebsiteDataClearer(
             error: OrchestrationError.websiteDataFailed
         )
@@ -204,14 +220,13 @@ final class UsageViewModelClearOrchestrationTests: XCTestCase {
             visibilityStore: visibilityStore
         )
         let pool = UsageWebViewPool(
-            accountStore: makeProviderAccountStore(),
+            accountStore: accountStore,
             websiteDataClearer: websiteDataClearer
         )
         let viewModel = makeUsageViewModel(
             pool: pool,
-            usageStore: usageStore,
-            tokenViewModel: tokenViewModel,
-            visibilityStore: visibilityStore
+            usageRepository: usageRepository,
+            tokenViewModel: tokenViewModel
         )
 
         do {
@@ -223,15 +238,14 @@ final class UsageViewModelClearOrchestrationTests: XCTestCase {
             }
         }
 
-        XCTAssertEqual(usageStore.snapshots[.chatgptCodex]?.fetchedAt, snapshot.fetchedAt)
+        XCTAssertEqual(
+            usageRepository.snapshotsByAccountID[codexAccount.id]?.fetchedAt,
+            snapshot.fetchedAt
+        )
         XCTAssertEqual(tokenStore.snapshots.count, TokenUsageProvider.allCases.count)
         XCTAssertEqual(tokenViewModel.snapshots.count, TokenUsageProvider.allCases.count)
         XCTAssertNotNil(viewModel.snapshot)
-        XCTAssertFalse(
-            visibilityStore.isSnapshotSuppressed(
-                fileName: UsageProvider.chatgptCodex.snapshotFileName
-            )
-        )
+        XCTAssertFalse(usageRepository.isSnapshotSuppressed(for: codexAccount))
         XCTAssertFalse(pool.getWebViewStore(for: .chatgptCodex).isDataClearInProgress)
         for provider in TokenUsageProvider.allCases {
             XCTAssertFalse(
@@ -255,9 +269,10 @@ final class UsageViewModelClearOrchestrationTests: XCTestCase {
                 accountStore: makeProviderAccountStore(),
                 websiteDataClearer: websiteDataClearer
             ),
-            usageStore: OrchestrationUsageSnapshotStore(),
-            tokenViewModel: tokenViewModel,
-            visibilityStore: visibilityStore
+            usageRepository: OrchestrationAccountUsageSnapshotRepository(
+                visibilityStore: visibilityStore
+            ),
+            tokenViewModel: tokenViewModel
         )
 
         let clearTask = Task { try await viewModel.clearData() }
@@ -272,9 +287,8 @@ final class UsageViewModelClearOrchestrationTests: XCTestCase {
 
     private func makeUsageViewModel(
         pool: UsageWebViewPool,
-        usageStore: OrchestrationUsageSnapshotStore,
+        usageRepository: OrchestrationAccountUsageSnapshotRepository,
         tokenViewModel: TokenUsageViewModel,
-        visibilityStore: OrchestrationSnapshotVisibilityStore,
         selectedProvider: UsageProvider = .chatgptCodex
     ) -> UsageViewModel {
         let defaults = UserDefaults(
@@ -282,13 +296,12 @@ final class UsageViewModelClearOrchestrationTests: XCTestCase {
         )!
         return UsageViewModel(
             webViewPool: pool,
-            store: usageStore,
+            snapshotRepository: usageRepository,
             tokenUsageViewModel: tokenViewModel,
             displayModeStore: UsageDisplayModeStore(
                 userDefaults: defaults,
                 appGroupDefaults: nil
             ),
-            snapshotVisibilityStore: visibilityStore,
             selectedProvider: selectedProvider
         )
     }
@@ -345,29 +358,84 @@ final class UsageViewModelClearOrchestrationTests: XCTestCase {
 }
 
 @MainActor
-private final class OrchestrationUsageSnapshotStore: UsageSnapshotStoring {
-    var snapshots: [UsageProvider: UsageSnapshot]
-    var deletionErrors: [UsageProvider: Error] = [:]
-    var onDelete: (() -> Void)?
+private final class OrchestrationAccountUsageSnapshotRepository:
+    AccountUsageSnapshotRepository {
+    private(set) var snapshotsByAccountID: [UUID: UsageSnapshot]
+    private(set) var projectionSnapshots: [UsageProvider: UsageSnapshot] = [:]
+    private(set) var deletionAttempts: [UUID] = []
+    var deletionErrors: [UUID: Error] = [:]
+    var onDelete: ((ProviderAccount) -> Void)?
 
-    init(snapshots: [UsageProvider: UsageSnapshot] = [:]) {
-        self.snapshots = snapshots
+    private var suppressedAccountIDs: Set<UUID> = []
+    private let visibilityStore: OrchestrationSnapshotVisibilityStore
+
+    init(
+        accounts: [ProviderAccount] = [],
+        snapshots: [UsageProvider: UsageSnapshot] = [:],
+        visibilityStore: OrchestrationSnapshotVisibilityStore
+    ) {
+        self.snapshotsByAccountID = Dictionary(
+            uniqueKeysWithValues: accounts.compactMap { account in
+                snapshots[account.provider].map { (account.id, $0) }
+            }
+        )
+        self.visibilityStore = visibilityStore
     }
 
-    func loadSnapshot(for provider: UsageProvider) -> UsageSnapshot? {
-        snapshots[provider]
+    func loadSnapshot(for account: ProviderAccount) -> UsageSnapshot? {
+        guard !suppressedAccountIDs.contains(account.id) else { return nil }
+        return snapshotsByAccountID[account.id]
     }
 
-    func saveSnapshot(_ snapshot: UsageSnapshot) throws {
-        snapshots[snapshot.provider] = snapshot
+    func saveSnapshot(
+        _ snapshot: UsageSnapshot,
+        for account: ProviderAccount
+    ) throws {
+        guard snapshot.provider == account.provider else {
+            throw AccountUsageSnapshotRepositoryError.providerMismatch
+        }
+        snapshotsByAccountID[account.id] = snapshot
     }
 
-    func deleteSnapshot(for provider: UsageProvider) throws {
-        onDelete?()
-        if let error = deletionErrors[provider] {
+    func deleteSnapshot(for account: ProviderAccount) throws {
+        onDelete?(account)
+        deletionAttempts.append(account.id)
+        if let error = deletionErrors[account.id] {
             throw error
         }
-        snapshots.removeValue(forKey: provider)
+        snapshotsByAccountID.removeValue(forKey: account.id)
+    }
+
+    func setSnapshotSuppressed(
+        _ isSuppressed: Bool,
+        for account: ProviderAccount
+    ) {
+        if isSuppressed {
+            suppressedAccountIDs.insert(account.id)
+        } else {
+            suppressedAccountIDs.remove(account.id)
+        }
+    }
+
+    func publishSelectedSnapshot(
+        _ snapshot: UsageSnapshot?,
+        for account: ProviderAccount
+    ) throws {
+        let fileName = account.provider.snapshotFileName
+        visibilityStore.setSnapshotSuppressed(true, fileName: fileName)
+        if let snapshot {
+            guard snapshot.provider == account.provider else {
+                throw AccountUsageSnapshotRepositoryError.providerMismatch
+            }
+            projectionSnapshots[account.provider] = snapshot
+        } else {
+            projectionSnapshots.removeValue(forKey: account.provider)
+        }
+        visibilityStore.setSnapshotSuppressed(false, fileName: fileName)
+    }
+
+    func isSnapshotSuppressed(for account: ProviderAccount) -> Bool {
+        suppressedAccountIDs.contains(account.id)
     }
 }
 

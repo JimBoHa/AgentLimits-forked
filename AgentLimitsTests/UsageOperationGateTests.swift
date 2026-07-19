@@ -4,8 +4,8 @@ import XCTest
 @MainActor
 final class UsageOperationGateTests: XCTestCase {
     func testClearInvalidatesOutstandingContextsAndFetches() throws {
-        var gate = UsageOperationGate()
-        let context = try XCTUnwrap(gate.captureContext())
+        var gate = UsageOperationGate<UsageProvider>()
+        let context = try XCTUnwrap(gate.captureContext(for: .chatgptCodex))
         let fetch = try XCTUnwrap(
             gate.beginFetch(for: .chatgptCodex, context: context)
         )
@@ -15,16 +15,16 @@ final class UsageOperationGateTests: XCTestCase {
         XCTAssertFalse(gate.isCurrent(context))
         XCTAssertFalse(gate.isCurrent(fetch))
         XCTAssertFalse(gate.finishFetch(fetch))
-        XCTAssertNil(gate.captureContext())
+        XCTAssertNil(gate.captureContext(for: .chatgptCodex))
         XCTAssertNil(gate.beginFetch(for: .claudeCode))
         XCTAssertNil(gate.beginClear())
 
         XCTAssertTrue(gate.finishClear(clear))
-        XCTAssertNotNil(gate.captureContext())
+        XCTAssertNotNil(gate.captureContext(for: .chatgptCodex))
     }
 
     func testStaleFetchCannotFinishNewerFetchingState() throws {
-        var gate = UsageOperationGate()
+        var gate = UsageOperationGate<UsageProvider>()
         let oldFetch = try XCTUnwrap(gate.beginFetch(for: .githubCopilot))
         let clear = try XCTUnwrap(gate.beginClear())
         XCTAssertTrue(gate.finishClear(clear))
@@ -38,11 +38,11 @@ final class UsageOperationGateTests: XCTestCase {
     }
 
     func testOldLoginRecoveryAndBillingContextStaysInvalidAfterClear() throws {
-        var gate = UsageOperationGate()
-        let oldContext = try XCTUnwrap(gate.captureContext())
+        var gate = UsageOperationGate<UsageProvider>()
+        let oldContext = try XCTUnwrap(gate.captureContext(for: .claudeCode))
         let clear = try XCTUnwrap(gate.beginClear())
         XCTAssertTrue(gate.finishClear(clear))
-        let newContext = try XCTUnwrap(gate.captureContext())
+        let newContext = try XCTUnwrap(gate.captureContext(for: .claudeCode))
 
         XCTAssertFalse(gate.isCurrent(oldContext))
         XCTAssertTrue(gate.isCurrent(newContext))
@@ -52,7 +52,7 @@ final class UsageOperationGateTests: XCTestCase {
     }
 
     func testFetchesForDifferentProvidersRemainIndependent() throws {
-        var gate = UsageOperationGate()
+        var gate = UsageOperationGate<UsageProvider>()
         let codex = try XCTUnwrap(gate.beginFetch(for: .chatgptCodex))
         let claude = try XCTUnwrap(gate.beginFetch(for: .claudeCode))
 
@@ -63,8 +63,8 @@ final class UsageOperationGateTests: XCTestCase {
     }
 
     func testPreClearAutoRefreshContextCannotStartLaterProvider() throws {
-        var gate = UsageOperationGate()
-        let loopContext = try XCTUnwrap(gate.captureContext())
+        var gate = UsageOperationGate<UsageProvider>()
+        let loopContext = try XCTUnwrap(gate.captureContext(for: .chatgptCodex))
         let firstProviderFetch = try XCTUnwrap(
             gate.beginFetch(for: .chatgptCodex, context: loopContext)
         )
@@ -76,5 +76,40 @@ final class UsageOperationGateTests: XCTestCase {
         XCTAssertFalse(gate.isCurrent(loopContext))
         XCTAssertNil(gate.beginFetch(for: .claudeCode, context: loopContext))
         XCTAssertNotNil(gate.beginFetch(for: .claudeCode))
+    }
+
+    func testInvalidatingUUIDScopeLeavesSiblingContextAndFetchCurrent() throws {
+        var gate = UsageOperationGate<UUID>()
+        let personalID = UUID()
+        let workID = UUID()
+        let personalContext = try XCTUnwrap(gate.captureContext(for: personalID))
+        let workContext = try XCTUnwrap(gate.captureContext(for: workID))
+        let personalFetch = try XCTUnwrap(
+            gate.beginFetch(for: personalID, context: personalContext)
+        )
+        let workFetch = try XCTUnwrap(
+            gate.beginFetch(for: workID, context: workContext)
+        )
+
+        gate.invalidate(scope: personalID)
+
+        XCTAssertFalse(gate.isCurrent(personalContext))
+        XCTAssertFalse(gate.isCurrent(personalFetch))
+        XCTAssertFalse(gate.finishFetch(personalFetch))
+        XCTAssertTrue(gate.isCurrent(workContext))
+        XCTAssertTrue(gate.isCurrent(workFetch))
+        XCTAssertTrue(gate.finishFetch(workFetch))
+        XCTAssertNotNil(gate.beginFetch(for: personalID))
+    }
+
+    func testContextCannotStartFetchForDifferentUUIDScope() throws {
+        var gate = UsageOperationGate<UUID>()
+        let personalID = UUID()
+        let workID = UUID()
+        let personalContext = try XCTUnwrap(gate.captureContext(for: personalID))
+
+        XCTAssertNil(gate.beginFetch(for: workID, context: personalContext))
+        XCTAssertNotNil(gate.beginFetch(for: personalID, context: personalContext))
+        XCTAssertNotNil(gate.beginFetch(for: workID))
     }
 }
