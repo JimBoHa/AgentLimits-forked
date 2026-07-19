@@ -40,7 +40,7 @@
 "content.refreshNow" = "Actualiser";
 "content.clearData" = "Effacer les données";
 "content.clearDataConfirmTitle" = "Effacer les données";
-"content.clearDataConfirmMessage" = "Cela supprimera les données de connexion du navigateur intégré, le stockage des sites web et les instantanés d'utilisation mis en cache.";
+"content.clearDataConfirmMessage" = "Cela supprimera les données de connexion du navigateur intégré, le stockage des sites web, les instantanés d’utilisation mis en cache et les identifiants de session enregistrés.";
 "content.clearDataConfirmAction" = "Effacer";
 "content.clearDataCancel" = "Annuler";
 "content.provider" = "Service";
@@ -228,7 +228,9 @@
 "accounts.removeTitle" = "Supprimer le compte ?";
 "accounts.cancel" = "Annuler";
 "accounts.removeMessage" = "Supprimer %@ ? Ses données d’utilisation en cache et sa session de connexion isolée seront supprimées.";
-"accounts.removeLegacyMessage" = "Supprimer %@ ? Ce compte migré partage des données WebKit héritées ; toutes les sessions de connexion partagées migrées seront déconnectées. Les comptes isolés ne seront pas affectés.";
+"accounts.removeLegacyMessage" = "Supprimer %@ ? Les données d’utilisation en cache de ce compte seront supprimées. Ce compte migré partage aussi des données WebKit héritées ; toutes les sessions de connexion partagées migrées seront déconnectées. Les comptes isolés ne seront pas affectés.";
+"accounts.removeGitHubMessage" = "Supprimer %@ ? Ses données d’utilisation en cache, son identifiant de session et sa session de connexion isolée seront supprimés.";
+"accounts.removeLegacyGitHubMessage" = "Supprimer %@ ? Les données d’utilisation en cache et l’identifiant de session de ce compte seront supprimés. Ce compte migré partage aussi des données WebKit héritées ; toutes les sessions de connexion partagées migrées seront déconnectées. Les comptes isolés ne seront pas affectés.";
 "accounts.pendingCleanup" = "Le compte a été supprimé. WebKit tentera à nouveau de supprimer ses données de connexion isolées au prochain lancement.";
 "accounts.ok" = "OK";
 "accounts.label" = "Nom du compte";
@@ -240,3 +242,31 @@
 "accounts.chooseFolder" = "Choisir…";
 "accounts.cliDataRootDefault" = "Valeur par défaut du fournisseur";
 "accounts.cliDataRootFormat" = "Données CLI : %@";
+
+/* Sessions actuelles */
+"activity.title" = "Sessions actuelles";
+"activity.unsupported" = "Ce fournisseur n’expose pas le nombre de sessions actuelles.";
+"activity.notChecked" = "Pas encore vérifié.";
+"activity.unavailable" = "Le nombre de sessions actuelles est indisponible.";
+"activity.summaryFormat" = "%d ouvertes — %d actives, %d en attente";
+"activity.staleSummaryFormat" = "%d ouvertes (dernière valeur connue) — %d actives, %d en attente";
+"activity.authenticationRequired" = "Identifiant absent, refusé ou sans accès en lecture à Agent tasks. Ajoutez-le ou remplacez-le.";
+"activity.scopeGitHub" = "Sessions d’agents cloud Copilot visibles avec cet identifiant.";
+"activity.observed" = "Observé";
+"activity.refresh" = "Actualiser les sessions";
+"activity.credentialTitle" = "Identifiant de session GitHub";
+"activity.credentialPlaceholder" = "Coller l’identifiant";
+"activity.credentialHelp" = "Utilisez un PAT à granularité fine ou un jeton d’accès utilisateur d’une GitHub App avec la seule autorisation de lecture « Agent tasks » pour les dépôts. Il reste dans le trousseau de cet appareil. L’API est en préversion publique.";
+"activity.credentialStored" = "Un identifiant est stocké pour ce compte.";
+"activity.noCredential" = "Aucun identifiant n’est stocké pour ce compte.";
+"activity.apiDocumentation" = "Documentation de l’API GitHub Agent Tasks";
+"activity.removeCredential" = "Supprimer l’identifiant";
+"activity.removeCredentialTitle" = "Supprimer l’identifiant de session ?";
+"activity.removeCredentialMessage" = "Cet identifiant ne pourra pas être récupéré depuis AgentLimits après sa suppression.";
+"activity.saveCredential" = "Enregistrer l’identifiant";
+"activity.errorInvalidCredential" = "L’identifiant ne doit pas être vide ni contenir d’espace ou de caractère de contrôle et doit faire au plus 16 Kio.";
+"activity.errorInvalidStoredCredential" = "L’identifiant stocké est invalide. Supprimez-le et ajoutez-en un nouveau.";
+"activity.errorKeychainFormat" = "L’opération du trousseau a échoué (état %d).";
+"activity.errorUnsupportedProvider" = "Ce fournisseur n’accepte pas d’identifiant de session.";
+"activity.errorAccountNotFound" = "Ce compte n’existe plus.";
+"activity.errorClearInProgress" = "Les données d’activité des sessions sont en cours d’effacement.";

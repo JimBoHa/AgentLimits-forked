@@ -40,7 +40,7 @@
 "content.refreshNow" = "Оновити зараз";
 "content.clearData" = "Очистити дані";
 "content.clearDataConfirmTitle" = "Очистити дані";
-"content.clearDataConfirmMessage" = "Це видалить дані входу вбудованого браузера, сховище сайтів і кешовані знімки використання.";
+"content.clearDataConfirmMessage" = "Це видалить дані входу вбудованого браузера, сховище сайтів, кешовані знімки використання та збережені облікові дані сеансів.";
 "content.clearDataConfirmAction" = "Очистити";
 "content.clearDataCancel" = "Скасувати";
 "content.provider" = "Сервіс";
@@ -228,7 +228,9 @@
 "accounts.removeTitle" = "Видалити обліковий запис?";
 "accounts.cancel" = "Скасувати";
 "accounts.removeMessage" = "Видалити %@? Кешовані дані про використання та ізольований сеанс входу буде видалено.";
-"accounts.removeLegacyMessage" = "Видалити %@? Цей перенесений обліковий запис використовує спільні застарілі дані WebKit; з усіх перенесених спільних сеансів входу буде виконано вихід. Ізольовані облікові записи не буде змінено.";
+"accounts.removeLegacyMessage" = "Видалити %@? Кешовані дані про використання цього облікового запису буде видалено. Цей перенесений обліковий запис також використовує спільні застарілі дані WebKit; з усіх перенесених спільних сеансів входу буде виконано вихід. Ізольовані облікові записи не буде змінено.";
+"accounts.removeGitHubMessage" = "Видалити %@? Кешовані дані про використання, облікові дані сеансу та ізольований сеанс входу буде видалено.";
+"accounts.removeLegacyGitHubMessage" = "Видалити %@? Кешовані дані про використання й облікові дані сеансу цього облікового запису буде видалено. Цей перенесений обліковий запис також використовує спільні застарілі дані WebKit; з усіх перенесених спільних сеансів входу буде виконано вихід. Ізольовані облікові записи не буде змінено.";
 "accounts.pendingCleanup" = "Обліковий запис видалено. WebKit повторить спробу видалити його ізольовані дані входу під час наступного запуску.";
 "accounts.ok" = "Гаразд";
 "accounts.label" = "Назва облікового запису";
@@ -240,3 +242,31 @@
 "accounts.chooseFolder" = "Вибрати…";
 "accounts.cliDataRootDefault" = "Типове значення провайдера";
 "accounts.cliDataRootFormat" = "Дані CLI: %@";
+
+/* Поточні сеанси */
+"activity.title" = "Поточні сеанси";
+"activity.unsupported" = "Цей провайдер не надає кількість поточних сеансів.";
+"activity.notChecked" = "Ще не перевірено.";
+"activity.unavailable" = "Кількість поточних сеансів недоступна.";
+"activity.summaryFormat" = "%d відкрито — %d працює, %d очікує";
+"activity.staleSummaryFormat" = "%d відкрито (останні відомі дані) — %d працює, %d очікує";
+"activity.authenticationRequired" = "Облікові дані відсутні, відхилені або не мають доступу на читання Agent tasks. Додайте або замініть їх.";
+"activity.scopeGitHub" = "Сеанси хмарних агентів Copilot, видимі для цих облікових даних.";
+"activity.observed" = "Зафіксовано";
+"activity.refresh" = "Оновити сеанси";
+"activity.credentialTitle" = "Облікові дані сеансу GitHub";
+"activity.credentialPlaceholder" = "Вставте облікові дані";
+"activity.credentialHelp" = "Використовуйте деталізований PAT або токен доступу користувача GitHub App лише з дозволом на читання «Agent tasks» у репозиторіях. Він залишається у в’язці ключів цього пристрою. API перебуває в загальнодоступній попередній версії.";
+"activity.credentialStored" = "Для цього облікового запису збережено облікові дані.";
+"activity.noCredential" = "Для цього облікового запису немає збережених облікових даних.";
+"activity.apiDocumentation" = "Документація GitHub Agent Tasks API";
+"activity.removeCredential" = "Видалити облікові дані";
+"activity.removeCredentialTitle" = "Видалити облікові дані сеансу?";
+"activity.removeCredentialMessage" = "Після видалення ці облікові дані неможливо відновити з AgentLimits.";
+"activity.saveCredential" = "Зберегти облікові дані";
+"activity.errorInvalidCredential" = "Облікові дані не можуть бути порожніми, містити пробіли чи керівні символи або перевищувати 16 КіБ.";
+"activity.errorInvalidStoredCredential" = "Збережені облікові дані недійсні. Видаліть їх і додайте нові.";
+"activity.errorKeychainFormat" = "Не вдалося виконати операцію в’язки ключів (стан %d).";
+"activity.errorUnsupportedProvider" = "Цей провайдер не приймає облікові дані сеансу.";
+"activity.errorAccountNotFound" = "Цей обліковий запис більше не існує.";
+"activity.errorClearInProgress" = "Дані активності сеансів зараз видаляються.";

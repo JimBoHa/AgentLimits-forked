@@ -40,7 +40,7 @@
 "content.refreshNow" = "Odśwież teraz";
 "content.clearData" = "Wyczyść dane";
 "content.clearDataConfirmTitle" = "Wyczyść dane";
-"content.clearDataConfirmMessage" = "Spowoduje to usunięcie danych logowania wbudowanej przeglądarki, pamięci witryn oraz zapisanych w pamięci podręcznej migawek użycia.";
+"content.clearDataConfirmMessage" = "Spowoduje to usunięcie danych logowania wbudowanej przeglądarki, pamięci witryn, zapisanych w pamięci podręcznej migawek użycia oraz zapisanych danych uwierzytelniających sesji.";
 "content.clearDataConfirmAction" = "Wyczyść";
 "content.clearDataCancel" = "Anuluj";
 "content.provider" = "Usługa";
@@ -228,7 +228,9 @@
 "accounts.removeTitle" = "Usunąć konto?";
 "accounts.cancel" = "Anuluj";
 "accounts.removeMessage" = "Usunąć %@? Dane użycia w pamięci podręcznej oraz izolowana sesja logowania zostaną usunięte.";
-"accounts.removeLegacyMessage" = "Usunąć %@? To przeniesione konto współdzieli starsze dane WebKit; nastąpi wylogowanie ze wszystkich przeniesionych współdzielonych sesji logowania. Izolowane konta pozostaną bez zmian.";
+"accounts.removeLegacyMessage" = "Usunąć %@? Dane użycia tego konta w pamięci podręcznej zostaną usunięte. To przeniesione konto współdzieli też starsze dane WebKit; nastąpi wylogowanie ze wszystkich przeniesionych współdzielonych sesji logowania. Izolowane konta pozostaną bez zmian.";
+"accounts.removeGitHubMessage" = "Usunąć %@? Dane użycia w pamięci podręcznej, dane uwierzytelniające sesji oraz izolowana sesja logowania zostaną usunięte.";
+"accounts.removeLegacyGitHubMessage" = "Usunąć %@? Dane użycia w pamięci podręcznej i dane uwierzytelniające sesji tego konta zostaną usunięte. To przeniesione konto współdzieli też starsze dane WebKit; nastąpi wylogowanie ze wszystkich przeniesionych współdzielonych sesji logowania. Izolowane konta pozostaną bez zmian.";
 "accounts.pendingCleanup" = "Konto zostało usunięte. Przy następnym uruchomieniu WebKit ponowi próbę usunięcia izolowanych danych logowania.";
 "accounts.ok" = "OK";
 "accounts.label" = "Nazwa konta";
@@ -240,3 +242,31 @@
 "accounts.chooseFolder" = "Wybierz…";
 "accounts.cliDataRootDefault" = "Ustawienie domyślne dostawcy";
 "accounts.cliDataRootFormat" = "Dane CLI: %@";
+
+/* Bieżące sesje */
+"activity.title" = "Bieżące sesje";
+"activity.unsupported" = "Ten dostawca nie udostępnia liczby bieżących sesji.";
+"activity.notChecked" = "Jeszcze nie sprawdzono.";
+"activity.unavailable" = "Liczba bieżących sesji jest niedostępna.";
+"activity.summaryFormat" = "%d otwartych — %d pracuje, %d oczekuje";
+"activity.staleSummaryFormat" = "%d otwartych (ostatnia znana wartość) — %d pracuje, %d oczekuje";
+"activity.authenticationRequired" = "Brak danych uwierzytelniających, zostały odrzucone lub nie mają dostępu do odczytu Agent tasks. Dodaj je lub zastąp.";
+"activity.scopeGitHub" = "Sesje agentów chmurowych Copilot widoczne dla tych danych uwierzytelniających.";
+"activity.observed" = "Zaobserwowano";
+"activity.refresh" = "Odśwież sesje";
+"activity.credentialTitle" = "Dane uwierzytelniające sesji GitHub";
+"activity.credentialPlaceholder" = "Wklej dane uwierzytelniające";
+"activity.credentialHelp" = "Użyj szczegółowego tokenu PAT lub tokenu dostępu użytkownika GitHub App wyłącznie z uprawnieniem do odczytu „Agent tasks” w repozytoriach. Pozostaje on w pęku kluczy tego urządzenia. Interfejs API jest w publicznej wersji zapoznawczej.";
+"activity.credentialStored" = "Dane uwierzytelniające tego konta są zapisane.";
+"activity.noCredential" = "Brak zapisanych danych uwierzytelniających dla tego konta.";
+"activity.apiDocumentation" = "Dokumentacja interfejsu GitHub Agent Tasks API";
+"activity.removeCredential" = "Usuń dane uwierzytelniające";
+"activity.removeCredentialTitle" = "Usunąć dane uwierzytelniające sesji?";
+"activity.removeCredentialMessage" = "Po usunięciu tych danych uwierzytelniających nie będzie można odzyskać z AgentLimits.";
+"activity.saveCredential" = "Zapisz dane uwierzytelniające";
+"activity.errorInvalidCredential" = "Dane uwierzytelniające nie mogą być puste ani zawierać odstępów lub znaków sterujących i mogą mieć najwyżej 16 KiB.";
+"activity.errorInvalidStoredCredential" = "Zapisane dane uwierzytelniające są nieprawidłowe. Usuń je i dodaj nowe.";
+"activity.errorKeychainFormat" = "Operacja pęku kluczy nie powiodła się (stan %d).";
+"activity.errorUnsupportedProvider" = "Ten dostawca nie przyjmuje danych uwierzytelniających sesji.";
+"activity.errorAccountNotFound" = "To konto już nie istnieje.";
+"activity.errorClearInProgress" = "Trwa usuwanie danych aktywności sesji.";

@@ -12,6 +12,8 @@ import WidgetKit
 struct ContentView: View {
     @ObservedObject private var viewModel: UsageViewModel
     @ObservedObject private var webViewPool: UsageWebViewPool
+    @ObservedObject private var sessionActivityViewModel:
+        SessionActivityViewModel
     private let accountRemovalManager: ProviderAccountRemovalManager
     @AppStorage(UserDefaultsKeys.displayMode) private var displayMode: UsageDisplayMode = .used
     @AppStorage(
@@ -32,15 +34,20 @@ struct ContentView: View {
     @State private var popupWebView: WKWebView?
     @State private var popupWebViewStore: WebViewStore?
     @State private var isShowingAccountManager = false
+    @State private var activityCredentialAccount: ProviderAccount?
     @State private var accountErrorMessage: String?
 
     init(
         viewModel: UsageViewModel,
         webViewPool: UsageWebViewPool,
+        sessionActivityViewModel: SessionActivityViewModel,
         accountRemovalManager: ProviderAccountRemovalManager
     ) {
         self.viewModel = viewModel
         self._webViewPool = ObservedObject(wrappedValue: webViewPool)
+        self._sessionActivityViewModel = ObservedObject(
+            wrappedValue: sessionActivityViewModel
+        )
         self.accountRemovalManager = accountRemovalManager
     }
 
@@ -93,6 +100,29 @@ struct ContentView: View {
                             )
                         }
 
+                        SettingsFormSection(title: "activity.title".localized()) {
+                            SessionActivitySummaryView(
+                                account: selectedAccount,
+                                snapshot: sessionActivityViewModel.snapshot(
+                                    for: selectedAccount.id
+                                ),
+                                isFetching: sessionActivityViewModel.isFetching(
+                                    accountID: selectedAccount.id
+                                ),
+                                onRefresh: {
+                                    let account = selectedAccount
+                                    Task {
+                                        await sessionActivityViewModel.refresh(
+                                            account: account
+                                        )
+                                    }
+                                },
+                                onManageCredential: {
+                                    activityCredentialAccount = selectedAccount
+                                }
+                            )
+                        }
+
                         SettingsFormSection {
                             controlView
                         }
@@ -119,6 +149,7 @@ struct ContentView: View {
         .onChange(of: refreshIntervalMinutes) { _, _ in
             // Restart auto-refresh and notify widgets when interval changes.
             viewModel.restartAutoRefresh()
+            sessionActivityViewModel.restartAutoRefresh()
             WidgetCenter.shared.reloadAllTimelines()
         }
         .onChange(of: viewModel.selectedProvider) { _, newProvider in
@@ -192,8 +223,15 @@ struct ContentView: View {
         .sheet(isPresented: $isShowingAccountManager) {
             ProviderAccountsSettingsView(
                 viewModel: viewModel,
+                sessionActivityViewModel: sessionActivityViewModel,
                 removalManager: accountRemovalManager,
                 initialProvider: viewModel.selectedProvider
+            )
+        }
+        .sheet(item: $activityCredentialAccount) { account in
+            GitHubActivityCredentialView(
+                account: account,
+                viewModel: sessionActivityViewModel
             )
         }
         .sheet(
@@ -642,6 +680,37 @@ private struct UsageWindowRow: View {
     }
 }
 
+#if DEBUG
+private final class PreviewSessionActivityCredentialStore:
+    SessionActivityCredentialStoring {
+    private var credentials: [UUID: String] = [:]
+
+    func credential(for accountID: UUID) throws -> String? {
+        credentials[accountID]
+    }
+
+    func saveCredential(_ credential: String, for accountID: UUID) throws {
+        credentials[accountID] = credential
+    }
+
+    func deleteCredential(for accountID: UUID) throws {
+        credentials.removeValue(forKey: accountID)
+    }
+
+    func deleteAllCredentials() throws {
+        credentials.removeAll()
+    }
+}
+
+nonisolated private struct PreviewGitHubAgentTaskFetcher:
+    GitHubAgentTaskFetching {
+    func fetchCurrentActivity(
+        credential: String
+    ) async throws -> SessionActivityCounts {
+        throw GitHubAgentTaskFetcherError.authenticationRequired
+    }
+}
+
 #Preview {
     let previewDefaults = UserDefaults(
         suiteName: "AgentLimits.ContentViewPreview"
@@ -655,13 +724,21 @@ private struct UsageWindowRow: View {
         websiteDataStoreProvider: { _ in .nonPersistent() }
     )
     let viewModel = UsageViewModel(webViewPool: pool)
+    let activityViewModel = SessionActivityViewModel(
+        accountStore: accountStore,
+        credentialStore: PreviewSessionActivityCredentialStore(),
+        githubFetcher: PreviewGitHubAgentTaskFetcher()
+    )
     let removalManager = ProviderAccountRemovalManager(
         accountStore: accountStore,
-        webViewPool: pool
+        webViewPool: pool,
+        activityDataRetirer: activityViewModel
     )
     return ContentView(
         viewModel: viewModel,
         webViewPool: pool,
+        sessionActivityViewModel: activityViewModel,
         accountRemovalManager: removalManager
     )
 }
+#endif

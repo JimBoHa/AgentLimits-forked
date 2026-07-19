@@ -146,6 +146,59 @@ final class ProviderAccountRemovalLifecycleTests: XCTestCase {
         XCTAssertTrue(pool.cancelDataClear(clearToken))
     }
 
+    func testActivityRetirementFailureCancelsBeforeRegistryCommit()
+        async throws {
+        let fixture = makeFixture()
+        defer {
+            fixture.defaults.removePersistentDomain(
+                forName: fixture.suiteName
+            )
+        }
+        let target = try fixture.store.addAccount(
+            provider: .githubCopilot,
+            label: "Work"
+        )
+        let localRemover = RecordingLocalDataRemover()
+        let activityRetirer = RecordingActivityDataRetirer(
+            error: .activityData
+        )
+        activityRetirer.onRetire = { account in
+            XCTAssertEqual(localRemover.removedAccountIDs, [account.id])
+            XCTAssertEqual(fixture.store.account(id: account.id), account)
+        }
+        let staticRemover = RecordingIdentifiedDataStoreRemover()
+        let pool = makePool(
+            accountStore: fixture.store,
+            providers: [.githubCopilot]
+        )
+        let targetStore = pool.getWebViewStore(for: target)
+        let manager = makeManager(
+            accountStore: fixture.store,
+            pool: pool,
+            localRemover: localRemover,
+            activityRetirer: activityRetirer,
+            staticRemover: staticRemover
+        )
+
+        do {
+            _ = try await manager.removeAccount(id: target.id)
+            XCTFail("Expected activity-data retirement to fail")
+        } catch {
+            XCTAssertEqual(error as? LifecycleTestError, .activityData)
+        }
+
+        XCTAssertEqual(activityRetirer.retiredAccountIDs, [target.id])
+        XCTAssertEqual(fixture.store.account(id: target.id), target)
+        XCTAssertTrue(
+            fixture.store.pendingWebKitDataStoreDeletionIDs.isEmpty
+        )
+        XCTAssertTrue(staticRemover.removalCalls.isEmpty)
+        XCTAssertFalse(targetStore.isRetirementInProgress)
+        XCTAssertFalse(targetStore.isDataClearInProgress)
+        XCTAssertFalse(targetStore.isRetired)
+        XCTAssertTrue(pool.getWebViewStore(for: target) === targetStore)
+    }
+
     func testLegacyWebsiteDataCleanupFailureRestoresWholePool() async throws {
         let fixture = makeFixture()
         defer { fixture.defaults.removePersistentDomain(forName: fixture.suiteName) }
@@ -215,6 +268,7 @@ final class ProviderAccountRemovalLifecycleTests: XCTestCase {
             label: "Work"
         )
         let localRemover = RecordingLocalDataRemover()
+        let activityRetirer = RecordingActivityDataRetirer()
         let staticRemover = RecordingIdentifiedDataStoreRemover(
             existingIdentifiers: [target.id],
             removalError: .websiteData
@@ -234,6 +288,7 @@ final class ProviderAccountRemovalLifecycleTests: XCTestCase {
             accountStore: fixture.store,
             pool: pool,
             localRemover: localRemover,
+            activityRetirer: activityRetirer,
             staticRemover: staticRemover
         )
 
@@ -241,6 +296,7 @@ final class ProviderAccountRemovalLifecycleTests: XCTestCase {
 
         XCTAssertEqual(outcome, .removedWithPendingCleanup)
         XCTAssertEqual(localRemover.removedAccountIDs, [target.id])
+        XCTAssertEqual(activityRetirer.retiredAccountIDs, [target.id])
         XCTAssertEqual(staticRemover.removalCalls, [target.id])
         XCTAssertEqual(retiredAccountIDs, [target.id])
         XCTAssertNil(fixture.store.account(id: target.id))
@@ -541,12 +597,14 @@ final class ProviderAccountRemovalLifecycleTests: XCTestCase {
         accountStore: ProviderAccountStore,
         pool: UsageWebViewPool,
         localRemover: RecordingLocalDataRemover,
+        activityRetirer: RecordingActivityDataRetirer? = nil,
         staticRemover: RecordingIdentifiedDataStoreRemover
     ) -> ProviderAccountRemovalManager {
         ProviderAccountRemovalManager(
             accountStore: accountStore,
             webViewPool: pool,
             localDataRemover: localRemover,
+            activityDataRetirer: activityRetirer,
             websiteDataStoreRemover: staticRemover,
             cleanupAttempts: 1,
             cleanupRetryDelay: .milliseconds(0)
@@ -557,6 +615,7 @@ final class ProviderAccountRemovalLifecycleTests: XCTestCase {
 private enum LifecycleTestError: Error, Equatable {
     case localData
     case websiteData
+    case activityData
 }
 
 @MainActor
@@ -589,6 +648,24 @@ private final class RecordingLocalDataRemover:
         if let error {
             throw error
         }
+    }
+}
+
+@MainActor
+private final class RecordingActivityDataRetirer:
+    ProviderAccountActivityDataRetiring {
+    private(set) var retiredAccountIDs: [UUID] = []
+    var error: LifecycleTestError?
+    var onRetire: ((ProviderAccount) -> Void)?
+
+    init(error: LifecycleTestError? = nil) {
+        self.error = error
+    }
+
+    func retireActivityData(for account: ProviderAccount) throws {
+        retiredAccountIDs.append(account.id)
+        onRetire?(account)
+        if let error { throw error }
     }
 }
 

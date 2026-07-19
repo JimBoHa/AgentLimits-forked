@@ -41,7 +41,7 @@
 "content.refreshNow" = "今すぐ更新";
 "content.clearData" = "データを削除";
 "content.clearDataConfirmTitle" = "データ削除";
-"content.clearDataConfirmMessage" = "内部ブラウザのログイン情報、サイトデータ、保存済みの使用量スナップショットを削除します。";
+"content.clearDataConfirmMessage" = "内部ブラウザのログイン情報、サイトデータ、保存済みの使用量スナップショット、保存済みのセッション認証情報を削除します。";
 "content.clearDataConfirmAction" = "削除する";
 "content.clearDataCancel" = "キャンセル";
 "content.provider" = "サービス";
@@ -227,7 +227,9 @@
 "accounts.removeTitle" = "アカウントを削除しますか？";
 "accounts.cancel" = "キャンセル";
 "accounts.removeMessage" = "%@を削除しますか？キャッシュされた使用量データと分離されたログインセッションが削除されます。";
-"accounts.removeLegacyMessage" = "%@を削除しますか？この移行済みアカウントは従来のWebKitデータを共有しているため、移行されたすべての共有ログインセッションからサインアウトします。分離されたアカウントには影響しません。";
+"accounts.removeLegacyMessage" = "%@を削除しますか？このアカウントのキャッシュされた使用量データを削除します。また、この移行済みアカウントは従来のWebKitデータを共有しているため、移行されたすべての共有ログインセッションからサインアウトします。分離されたアカウントには影響しません。";
+"accounts.removeGitHubMessage" = "%@を削除しますか？キャッシュされた使用量データ、セッション認証情報、分離されたログインセッションが削除されます。";
+"accounts.removeLegacyGitHubMessage" = "%@を削除しますか？このアカウントのキャッシュされた使用量データとセッション認証情報を削除します。また、この移行済みアカウントは従来のWebKitデータを共有しているため、移行されたすべての共有ログインセッションからサインアウトします。分離されたアカウントには影響しません。";
 "accounts.pendingCleanup" = "アカウントを削除しました。分離されたログインデータの削除は、次回起動時にWebKitが再試行します。";
 "accounts.ok" = "OK";
 "accounts.label" = "アカウント名";
@@ -239,3 +241,31 @@
 "accounts.chooseFolder" = "選択…";
 "accounts.cliDataRootDefault" = "プロバイダーのデフォルト";
 "accounts.cliDataRootFormat" = "CLIデータ: %@";
+
+/* 現在のセッション */
+"activity.title" = "現在のセッション";
+"activity.unsupported" = "このプロバイダーは現在のセッション数を公開していません。";
+"activity.notChecked" = "まだ確認されていません。";
+"activity.unavailable" = "現在のセッション数を取得できません。";
+"activity.summaryFormat" = "%d件が開いています — %d件が作業中、%d件が待機中";
+"activity.staleSummaryFormat" = "%d件が開いています（前回確認時）— %d件が作業中、%d件が待機中";
+"activity.authenticationRequired" = "認証情報がないか拒否されたか、Agent tasksの読み取り権限がありません。追加または置き換えてください。";
+"activity.scopeGitHub" = "この認証情報から確認できるCopilotクラウドエージェントのセッションです。";
+"activity.observed" = "確認日時";
+"activity.refresh" = "セッションを更新";
+"activity.credentialTitle" = "GitHubセッション認証情報";
+"activity.credentialPlaceholder" = "認証情報を貼り付け";
+"activity.credentialHelp" = "リポジトリの「Agent tasks」読み取り権限だけを付与したFine-grained PATまたはGitHub Appのユーザーアクセストークンを使用してください。このデバイスのキーチェーン内だけに保存されます。このAPIはパブリックプレビューです。";
+"activity.credentialStored" = "このアカウントの認証情報が保存されています。";
+"activity.noCredential" = "このアカウントの認証情報は保存されていません。";
+"activity.apiDocumentation" = "GitHub Agent Tasks APIドキュメント";
+"activity.removeCredential" = "認証情報を削除";
+"activity.removeCredentialTitle" = "セッション認証情報を削除しますか？";
+"activity.removeCredentialMessage" = "削除後、この認証情報をAgentLimitsから復元することはできません。";
+"activity.saveCredential" = "認証情報を保存";
+"activity.errorInvalidCredential" = "認証情報は空にできません。空白や制御文字を含めず、16 KiB以下にしてください。";
+"activity.errorInvalidStoredCredential" = "保存されている認証情報が無効です。削除して新しい認証情報を追加してください。";
+"activity.errorKeychainFormat" = "キーチェーンの操作に失敗しました（ステータス%d）。";
+"activity.errorUnsupportedProvider" = "このプロバイダーはセッション認証情報を受け付けません。";
+"activity.errorAccountNotFound" = "このアカウントは存在しません。";
+"activity.errorClearInProgress" = "セッションアクティビティデータを消去中です。";

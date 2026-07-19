@@ -40,7 +40,7 @@
 "content.refreshNow" = "立即更新";
 "content.clearData" = "清除資料";
 "content.clearDataConfirmTitle" = "清除資料";
-"content.clearDataConfirmMessage" = "這將移除內建瀏覽器的登入資料、網站儲存空間，以及快取的使用量快照。";
+"content.clearDataConfirmMessage" = "這將移除內建瀏覽器的登入資料、網站儲存空間、快取的使用量快照，以及儲存的工作階段憑證。";
 "content.clearDataConfirmAction" = "清除";
 "content.clearDataCancel" = "取消";
 "content.provider" = "服務";
@@ -228,7 +228,9 @@
 "accounts.removeTitle" = "刪除帳號？";
 "accounts.cancel" = "取消";
 "accounts.removeMessage" = "要刪除 %@ 嗎？其快取的用量資料和隔離的登入工作階段將被刪除。";
-"accounts.removeLegacyMessage" = "要刪除 %@ 嗎？此移轉的帳號共用舊版 WebKit 資料；所有已移轉的共用登入工作階段都會登出。隔離帳號不受影響。";
+"accounts.removeLegacyMessage" = "要刪除 %@ 嗎？此帳號的快取用量資料將被刪除。此移轉的帳號也共用舊版 WebKit 資料；所有已移轉的共用登入工作階段都會登出。隔離帳號不受影響。";
+"accounts.removeGitHubMessage" = "要刪除 %@ 嗎？其快取的用量資料、工作階段憑證和隔離的登入工作階段將被刪除。";
+"accounts.removeLegacyGitHubMessage" = "要刪除 %@ 嗎？此帳號的快取用量資料和工作階段憑證將被刪除。此移轉的帳號也共用舊版 WebKit 資料；所有已移轉的共用登入工作階段都會登出。隔離帳號不受影響。";
 "accounts.pendingCleanup" = "帳號已刪除。WebKit 將在下次啟動時重試刪除其隔離的登入資料。";
 "accounts.ok" = "確定";
 "accounts.label" = "帳號名稱";
@@ -240,3 +242,31 @@
 "accounts.chooseFolder" = "選擇…";
 "accounts.cliDataRootDefault" = "服務預設值";
 "accounts.cliDataRootFormat" = "CLI 資料：%@";
+
+/* 目前工作階段 */
+"activity.title" = "目前工作階段";
+"activity.unsupported" = "此供應商未提供目前的工作階段數量。";
+"activity.notChecked" = "尚未檢查。";
+"activity.unavailable" = "無法取得目前的工作階段數量。";
+"activity.summaryFormat" = "%d 個未結束 — %d 個執行中，%d 個等待中";
+"activity.staleSummaryFormat" = "%d 個未結束（上次已知）— %d 個執行中，%d 個等待中";
+"activity.authenticationRequired" = "憑證遺失、遭拒或沒有 Agent tasks 讀取權限。請加入或取代憑證。";
+"activity.scopeGitHub" = "此憑證可見的 Copilot 雲端代理程式工作階段。";
+"activity.observed" = "觀測於";
+"activity.refresh" = "重新整理工作階段";
+"activity.credentialTitle" = "GitHub 工作階段憑證";
+"activity.credentialPlaceholder" = "貼上憑證";
+"activity.credentialHelp" = "請使用僅有儲存庫「Agent tasks」讀取權限的細部 PAT 或 GitHub App 使用者存取權杖。它只會保留在此裝置的鑰匙圈中。此 API 正處於公開預覽階段。";
+"activity.credentialStored" = "已為此帳號儲存憑證。";
+"activity.noCredential" = "未為此帳號儲存憑證。";
+"activity.apiDocumentation" = "GitHub Agent Tasks API 文件";
+"activity.removeCredential" = "移除憑證";
+"activity.removeCredentialTitle" = "要移除工作階段憑證嗎？";
+"activity.removeCredentialMessage" = "移除後，無法從 AgentLimits 復原此憑證。";
+"activity.saveCredential" = "儲存憑證";
+"activity.errorInvalidCredential" = "憑證不可為空、不得包含空白或控制字元，且大小上限為 16 KiB。";
+"activity.errorInvalidStoredCredential" = "儲存的憑證無效。請將其移除並加入新憑證。";
+"activity.errorKeychainFormat" = "鑰匙圈操作失敗（狀態 %d）。";
+"activity.errorUnsupportedProvider" = "此供應商不接受工作階段憑證。";
+"activity.errorAccountNotFound" = "此帳號已不存在。";
+"activity.errorClearInProgress" = "正在清除工作階段活動資料。";

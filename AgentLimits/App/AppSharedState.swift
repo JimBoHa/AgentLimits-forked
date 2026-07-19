@@ -18,6 +18,7 @@ final class AppSharedState: ObservableObject {
     let accountRemovalManager: ProviderAccountRemovalManager
     let viewModel: UsageViewModel
     let tokenUsageViewModel: TokenUsageViewModel
+    let sessionActivityViewModel: SessionActivityViewModel
 
     /// 設定ウィンドウクローズ時のコールバック（AppDelegate が設定する）
     var onSettingsWindowClosed: (() -> Void)?
@@ -30,17 +31,23 @@ final class AppSharedState: ObservableObject {
     init() {
         let accountStore = ProviderAccountStore.shared
         let pool = UsageWebViewPool(accountStore: accountStore)
+        let activityViewModel = SessionActivityViewModel(
+            accountStore: accountStore
+        )
         let removalManager = ProviderAccountRemovalManager(
             accountStore: accountStore,
-            webViewPool: pool
+            webViewPool: pool,
+            activityDataRetirer: activityViewModel
         )
         let tokenViewModel = TokenUsageViewModel(accountStore: accountStore)
         self.webViewPool = pool
         self.accountRemovalManager = removalManager
         self.tokenUsageViewModel = tokenViewModel
+        self.sessionActivityViewModel = activityViewModel
         self.viewModel = UsageViewModel(
             webViewPool: pool,
-            tokenUsageViewModel: tokenViewModel
+            tokenUsageViewModel: tokenViewModel,
+            sessionActivityDataClearer: activityViewModel
         )
         pool.webViewStoreWillRetire
             .sink { [weak self] accountID in
@@ -76,6 +83,7 @@ final class AppSharedState: ObservableObject {
         loadWebViews()
         viewModel.startAutoRefresh()
         tokenUsageViewModel.startAutoRefresh()
+        sessionActivityViewModel.startAutoRefresh()
     }
 
     /// Applies the background WebView policy for providers with fetch history.

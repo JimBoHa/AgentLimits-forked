@@ -92,11 +92,14 @@ struct ClearDataDeletionFailure: Hashable {
 
 enum ClearDataError: LocalizedError {
     case websiteData(String)
+    case activityData(String)
     case snapshotDeletion([ClearDataDeletionFailure])
 
     var errorDescription: String? {
         switch self {
         case .websiteData(let reason):
+            return reason
+        case .activityData(let reason):
             return reason
         case .snapshotDeletion(let failures):
             return failures
@@ -135,6 +138,8 @@ final class UsageViewModel: ObservableObject {
     private let usageFetcher: any UsageSnapshotFetching
     private let copilotBillingFetcher: any CopilotBillingFetching
     private let tokenUsageViewModel: TokenUsageViewModel
+    private let sessionActivityDataClearer:
+        (any SessionActivityDataClearing)?
     private let webViewPool: UsageWebViewPool
     private let displayModeStore: UsageDisplayModeStore
     private let stateManager: ProviderStateManager
@@ -154,6 +159,8 @@ final class UsageViewModel: ObservableObject {
         usageFetcher: (any UsageSnapshotFetching)? = nil,
         copilotBillingFetcher: (any CopilotBillingFetching)? = nil,
         tokenUsageViewModel: TokenUsageViewModel? = nil,
+        sessionActivityDataClearer:
+            (any SessionActivityDataClearing)? = nil,
         displayModeStore: UsageDisplayModeStore? = nil,
         stateManager: ProviderStateManager? = nil,
         selectedProvider: UsageProvider = .chatgptCodex
@@ -183,6 +190,7 @@ final class UsageViewModel: ObservableObject {
             ?? CopilotBillingFetcher()
         self.tokenUsageViewModel = tokenUsageViewModel
             ?? TokenUsageViewModel(accountStore: webViewPool.accountStore)
+        self.sessionActivityDataClearer = sessionActivityDataClearer
         self.webViewPool = webViewPool
         self.displayModeStore = resolvedDisplayModeStore
         self.stateManager = resolvedStateManager
@@ -587,10 +595,30 @@ final class UsageViewModel: ObservableObject {
                 "Another token-data clear is already active."
             )
         }
+        let activityDataClearToken: SessionActivityDataClearToken?
+        if let sessionActivityDataClearer {
+            guard let token = sessionActivityDataClearer
+                .beginActivityDataClear() else {
+                _ = tokenUsageViewModel.finishDataClear(tokenDataClearToken)
+                _ = webViewPool.cancelDataClear(webViewClearToken)
+                _ = operationGate.finishClear(clearToken)
+                throw ClearDataError.activityData(
+                    "Another session-activity clear is already active."
+                )
+            }
+            activityDataClearToken = token
+        } else {
+            activityDataClearToken = nil
+        }
         var didFinishWebsiteDataClear = false
         defer {
             if !didFinishWebsiteDataClear {
                 _ = webViewPool.cancelDataClear(webViewClearToken)
+            }
+            if let activityDataClearToken {
+                _ = sessionActivityDataClearer?.finishActivityDataClear(
+                    activityDataClearToken
+                )
             }
             _ = tokenUsageViewModel.finishDataClear(tokenDataClearToken)
             _ = operationGate.finishClear(clearToken)
@@ -603,6 +631,7 @@ final class UsageViewModel: ObservableObject {
         var deletionFailuresByIdentifier:
             [String: ClearDataDeletionFailure] = [:]
         var processedAccountIDs: Set<UUID> = []
+        var didClearActivityData = activityDataClearToken == nil
 
         // Repeat because account registration can occur from another window
         // during either the WebKit clear or a synchronous deletion callback.
@@ -611,6 +640,20 @@ final class UsageViewModel: ObservableObject {
                 try await ensureWebsiteDataClearCoverage(webViewClearToken)
             } catch {
                 throw ClearDataError.websiteData(error.localizedDescription)
+            }
+            if !didClearActivityData,
+               let activityDataClearToken,
+               let sessionActivityDataClearer {
+                do {
+                    try sessionActivityDataClearer.clearAllActivityData(
+                        during: activityDataClearToken
+                    )
+                    didClearActivityData = true
+                } catch {
+                    throw ClearDataError.activityData(
+                        error.localizedDescription
+                    )
+                }
             }
 
             let accounts = accountStore.loadAccounts()

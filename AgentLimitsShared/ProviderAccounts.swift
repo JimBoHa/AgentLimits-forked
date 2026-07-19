@@ -5,7 +5,12 @@ import Foundation
 /// The original account for an existing install keeps the shared default store
 /// so an upgrade does not sign the user out. Every subsequently created account
 /// receives an identified store keyed by its immutable UUID.
-enum ProviderAccountWebKitStorage: String, Codable, Equatable, Hashable {
+enum ProviderAccountWebKitStorage:
+    String,
+    Codable,
+    Equatable,
+    Hashable,
+    Sendable {
     case legacyDefault
     case isolated
 }
@@ -15,7 +20,12 @@ enum ProviderAccountWebKitStorage: String, Codable, Equatable, Hashable {
 /// The stable UUID is also suitable for an isolated WebKit data store and an
 /// account-scoped snapshot namespace. A nil CLI data root means the provider's
 /// normal default profile directory.
-struct ProviderAccount: Codable, Equatable, Hashable, Identifiable {
+struct ProviderAccount:
+    Codable,
+    Equatable,
+    Hashable,
+    Identifiable,
+    Sendable {
     let id: UUID
     let provider: UsageProvider
     var label: String

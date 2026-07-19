@@ -40,7 +40,7 @@
 "content.refreshNow" = "Şimdi yenile";
 "content.clearData" = "Verileri temizle";
 "content.clearDataConfirmTitle" = "Verileri temizle";
-"content.clearDataConfirmMessage" = "Bu işlem gömülü tarayıcının giriş verilerini, web sitesi depolamasını ve önbelleğe alınmış kullanım anlık görüntülerini kaldırır.";
+"content.clearDataConfirmMessage" = "Bu işlem gömülü tarayıcının giriş verilerini, web sitesi depolamasını, önbelleğe alınmış kullanım anlık görüntülerini ve kaydedilmiş oturum kimlik bilgilerini kaldırır.";
 "content.clearDataConfirmAction" = "Temizle";
 "content.clearDataCancel" = "İptal";
 "content.provider" = "Hizmet";
@@ -228,7 +228,9 @@
 "accounts.removeTitle" = "Hesap silinsin mi?";
 "accounts.cancel" = "İptal";
 "accounts.removeMessage" = "%@ silinsin mi? Önbelleğe alınmış kullanım verileri ve yalıtılmış giriş oturumu silinecek.";
-"accounts.removeLegacyMessage" = "%@ silinsin mi? Bu taşınmış hesap eski WebKit verilerini paylaşır; taşınmış tüm paylaşılan giriş oturumları kapatılacak. Yalıtılmış hesaplar etkilenmeyecek.";
+"accounts.removeLegacyMessage" = "%@ silinsin mi? Bu hesabın önbelleğe alınmış kullanım verileri silinecek. Bu taşınmış hesap ayrıca eski WebKit verilerini paylaşır; taşınmış tüm paylaşılan giriş oturumları kapatılacak. Yalıtılmış hesaplar etkilenmeyecek.";
+"accounts.removeGitHubMessage" = "%@ silinsin mi? Önbelleğe alınmış kullanım verileri, oturum kimlik bilgisi ve yalıtılmış giriş oturumu silinecek.";
+"accounts.removeLegacyGitHubMessage" = "%@ silinsin mi? Bu hesabın önbelleğe alınmış kullanım verileri ve oturum kimlik bilgisi silinecek. Bu taşınmış hesap ayrıca eski WebKit verilerini paylaşır; taşınmış tüm paylaşılan giriş oturumları kapatılacak. Yalıtılmış hesaplar etkilenmeyecek.";
 "accounts.pendingCleanup" = "Hesap kaldırıldı. WebKit, yalıtılmış giriş verilerini bir sonraki başlatmada silmeyi yeniden deneyecek.";
 "accounts.ok" = "Tamam";
 "accounts.label" = "Hesap adı";
@@ -240,3 +242,31 @@
 "accounts.chooseFolder" = "Seç…";
 "accounts.cliDataRootDefault" = "Sağlayıcı varsayılanı";
 "accounts.cliDataRootFormat" = "CLI verileri: %@";
+
+/* Mevcut oturumlar */
+"activity.title" = "Mevcut oturumlar";
+"activity.unsupported" = "Bu sağlayıcı mevcut oturum sayılarını sunmuyor.";
+"activity.notChecked" = "Henüz kontrol edilmedi.";
+"activity.unavailable" = "Mevcut oturum sayısı kullanılamıyor.";
+"activity.summaryFormat" = "%d açık — %d çalışıyor, %d bekliyor";
+"activity.staleSummaryFormat" = "%d açık (son bilinen) — %d çalışıyor, %d bekliyor";
+"activity.authenticationRequired" = "Kimlik bilgisi eksik, reddedilmiş veya Agent tasks okuma erişimi yok. Ekleyin ya da değiştirin.";
+"activity.scopeGitHub" = "Bu kimlik bilgisinin görebildiği Copilot bulut aracısı oturumları.";
+"activity.observed" = "Gözlemlendi";
+"activity.refresh" = "Oturumları yenile";
+"activity.credentialTitle" = "GitHub oturum kimlik bilgisi";
+"activity.credentialPlaceholder" = "Kimlik bilgisini yapıştırın";
+"activity.credentialHelp" = "Yalnızca depolarda “Agent tasks” okuma iznine sahip ayrıntılı bir PAT veya GitHub App kullanıcı erişim belirteci kullanın. Bu aygıtın Anahtar Zinciri’nde kalır. API herkese açık önizlemededir.";
+"activity.credentialStored" = "Bu hesap için bir kimlik bilgisi saklanıyor.";
+"activity.noCredential" = "Bu hesap için saklanan kimlik bilgisi yok.";
+"activity.apiDocumentation" = "GitHub Agent Tasks API belgeleri";
+"activity.removeCredential" = "Kimlik bilgisini kaldır";
+"activity.removeCredentialTitle" = "Oturum kimlik bilgisi kaldırılsın mı?";
+"activity.removeCredentialMessage" = "Bu kimlik bilgisi kaldırıldıktan sonra AgentLimits’ten kurtarılamaz.";
+"activity.saveCredential" = "Kimlik bilgisini kaydet";
+"activity.errorInvalidCredential" = "Kimlik bilgisi boş olamaz, boşluk veya denetim karakteri içeremez ve en fazla 16 KiB olabilir.";
+"activity.errorInvalidStoredCredential" = "Saklanan kimlik bilgisi geçersiz. Kaldırıp yeni bir kimlik bilgisi ekleyin.";
+"activity.errorKeychainFormat" = "Anahtar Zinciri işlemi başarısız oldu (durum %d).";
+"activity.errorUnsupportedProvider" = "Bu sağlayıcı oturum kimlik bilgisi kabul etmiyor.";
+"activity.errorAccountNotFound" = "Bu hesap artık mevcut değil.";
+"activity.errorClearInProgress" = "Oturum etkinliği verileri şu anda temizleniyor.";

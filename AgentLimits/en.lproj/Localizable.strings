@@ -41,7 +41,7 @@
 "content.refreshNow" = "Refresh Now";
 "content.clearData" = "Clear Data";
 "content.clearDataConfirmTitle" = "Clear Data";
-"content.clearDataConfirmMessage" = "This will remove embedded browser login data, website storage, and cached usage snapshots.";
+"content.clearDataConfirmMessage" = "This will remove embedded browser login data, website storage, cached usage snapshots, and saved session credentials.";
 "content.clearDataConfirmAction" = "Clear";
 "content.clearDataCancel" = "Cancel";
 "content.provider" = "Service";
@@ -227,7 +227,9 @@
 "accounts.removeTitle" = "Remove Account?";
 "accounts.cancel" = "Cancel";
 "accounts.removeMessage" = "Remove %@? Its cached usage and isolated login session will be deleted.";
-"accounts.removeLegacyMessage" = "Remove %@? This migrated account shares legacy WebKit data; all migrated shared login sessions will be signed out. Isolated accounts remain untouched.";
+"accounts.removeLegacyMessage" = "Remove %@? Its cached usage will be deleted. This migrated account also shares legacy WebKit data; all migrated shared login sessions will be signed out. Isolated accounts remain untouched.";
+"accounts.removeGitHubMessage" = "Remove %@? Its cached usage, session credential, and isolated login session will be deleted.";
+"accounts.removeLegacyGitHubMessage" = "Remove %@? Its cached usage and session credential will be deleted. This migrated account also shares legacy WebKit data; all migrated shared login sessions will be signed out. Isolated accounts remain untouched.";
 "accounts.pendingCleanup" = "The account was removed. WebKit will retry deleting its isolated login data on the next launch.";
 "accounts.ok" = "OK";
 "accounts.label" = "Account name";
@@ -239,3 +241,31 @@
 "accounts.chooseFolder" = "Choose…";
 "accounts.cliDataRootDefault" = "Provider default";
 "accounts.cliDataRootFormat" = "CLI data: %@";
+
+/* Current Sessions */
+"activity.title" = "Current Sessions";
+"activity.unsupported" = "This provider does not expose current session counts.";
+"activity.notChecked" = "Not checked yet.";
+"activity.unavailable" = "Current session count unavailable.";
+"activity.summaryFormat" = "%d open — %d working, %d waiting";
+"activity.staleSummaryFormat" = "%d open (last known) — %d working, %d waiting";
+"activity.authenticationRequired" = "Credential missing, rejected, or lacks Agent tasks read access. Add or replace it.";
+"activity.scopeGitHub" = "Copilot cloud-agent sessions visible to this credential.";
+"activity.observed" = "Observed";
+"activity.refresh" = "Refresh Sessions";
+"activity.credentialTitle" = "GitHub Session Credential";
+"activity.credentialPlaceholder" = "Paste credential";
+"activity.credentialHelp" = "Use a fine-grained PAT or GitHub App user access token with only repository “Agent tasks” read permission. It stays in this device’s Keychain. The API is in public preview.";
+"activity.credentialStored" = "A credential is stored for this account.";
+"activity.noCredential" = "No credential is stored for this account.";
+"activity.apiDocumentation" = "GitHub Agent Tasks API documentation";
+"activity.removeCredential" = "Remove Credential";
+"activity.removeCredentialTitle" = "Remove Session Credential?";
+"activity.removeCredentialMessage" = "This credential cannot be recovered from AgentLimits after removal.";
+"activity.saveCredential" = "Save Credential";
+"activity.errorInvalidCredential" = "The credential must be nonempty, contain no whitespace or control characters, and be at most 16 KiB.";
+"activity.errorInvalidStoredCredential" = "The stored credential is invalid. Remove it and add a new credential.";
+"activity.errorKeychainFormat" = "Keychain operation failed (status %d).";
+"activity.errorUnsupportedProvider" = "This provider does not accept a session credential.";
+"activity.errorAccountNotFound" = "This account no longer exists.";
+"activity.errorClearInProgress" = "Session activity data is currently being cleared.";

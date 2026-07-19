@@ -628,7 +628,14 @@ protocol AIProviderProtocol: Hashable, CaseIterable, Identifiable where ID == St
 
 /// Supported AI code assistant providers for Usage Limits tracking.
 /// Uses `chatgptCodex` and `claudeCode` as rawValue for JSON compatibility.
-enum UsageProvider: String, Codable, CaseIterable, Identifiable, SnapshotFileNaming, AIProviderProtocol {
+enum UsageProvider:
+    String,
+    Codable,
+    CaseIterable,
+    Identifiable,
+    SnapshotFileNaming,
+    AIProviderProtocol,
+    Sendable {
     case chatgptCodex
     case claudeCode
     case githubCopilot

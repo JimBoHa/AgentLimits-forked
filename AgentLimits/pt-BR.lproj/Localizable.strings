@@ -40,7 +40,7 @@
 "content.refreshNow" = "Atualizar agora";
 "content.clearData" = "Limpar dados";
 "content.clearDataConfirmTitle" = "Limpar dados";
-"content.clearDataConfirmMessage" = "Isso removerá dados de login do navegador incorporado, armazenamento de sites e snapshots de uso em cache.";
+"content.clearDataConfirmMessage" = "Isso removerá dados de login do navegador incorporado, armazenamento de sites, snapshots de uso em cache e credenciais de sessão salvas.";
 "content.clearDataConfirmAction" = "Limpar";
 "content.clearDataCancel" = "Cancelar";
 "content.provider" = "Serviço";
@@ -228,7 +228,9 @@
 "accounts.removeTitle" = "Remover conta?";
 "accounts.cancel" = "Cancelar";
 "accounts.removeMessage" = "Remover %@? Os dados de uso em cache e a sessão de login isolada dessa conta serão excluídos.";
-"accounts.removeLegacyMessage" = "Remover %@? Esta conta migrada compartilha dados legados do WebKit; todas as sessões de login compartilhadas migradas serão encerradas. As contas isoladas permanecerão intactas.";
+"accounts.removeLegacyMessage" = "Remover %@? Os dados de uso em cache desta conta serão excluídos. Esta conta migrada também compartilha dados legados do WebKit; todas as sessões de login compartilhadas migradas serão encerradas. As contas isoladas permanecerão intactas.";
+"accounts.removeGitHubMessage" = "Remover %@? Os dados de uso em cache, a credencial de sessão e a sessão de login isolada dessa conta serão excluídos.";
+"accounts.removeLegacyGitHubMessage" = "Remover %@? Os dados de uso em cache e a credencial de sessão desta conta serão excluídos. Esta conta migrada também compartilha dados legados do WebKit; todas as sessões de login compartilhadas migradas serão encerradas. As contas isoladas permanecerão intactas.";
 "accounts.pendingCleanup" = "A conta foi removida. O WebKit tentará excluir novamente os dados de login isolados dela na próxima inicialização.";
 "accounts.ok" = "OK";
 "accounts.label" = "Nome da conta";
@@ -240,3 +242,31 @@
 "accounts.chooseFolder" = "Escolher…";
 "accounts.cliDataRootDefault" = "Padrão do provedor";
 "accounts.cliDataRootFormat" = "Dados da CLI: %@";
+
+/* Sessões atuais */
+"activity.title" = "Sessões atuais";
+"activity.unsupported" = "Este provedor não disponibiliza a contagem de sessões atuais.";
+"activity.notChecked" = "Ainda não verificado.";
+"activity.unavailable" = "A contagem de sessões atuais não está disponível.";
+"activity.summaryFormat" = "%d abertas — %d trabalhando, %d aguardando";
+"activity.staleSummaryFormat" = "%d abertas (último valor conhecido) — %d trabalhando, %d aguardando";
+"activity.authenticationRequired" = "A credencial não existe, foi rejeitada ou não tem acesso de leitura a Agent tasks. Adicione ou substitua-a.";
+"activity.scopeGitHub" = "Sessões de agentes na nuvem do Copilot visíveis para esta credencial.";
+"activity.observed" = "Observado";
+"activity.refresh" = "Atualizar sessões";
+"activity.credentialTitle" = "Credencial de sessão do GitHub";
+"activity.credentialPlaceholder" = "Cole a credencial";
+"activity.credentialHelp" = "Use um PAT refinado ou token de acesso de usuário de um GitHub App somente com permissão de leitura de “Agent tasks” nos repositórios. Ele permanece nas Chaves deste dispositivo. A API está em prévia pública.";
+"activity.credentialStored" = "Há uma credencial armazenada para esta conta.";
+"activity.noCredential" = "Não há credencial armazenada para esta conta.";
+"activity.apiDocumentation" = "Documentação da API GitHub Agent Tasks";
+"activity.removeCredential" = "Remover credencial";
+"activity.removeCredentialTitle" = "Remover a credencial de sessão?";
+"activity.removeCredentialMessage" = "Esta credencial não poderá ser recuperada pelo AgentLimits após a remoção.";
+"activity.saveCredential" = "Salvar credencial";
+"activity.errorInvalidCredential" = "A credencial não pode estar vazia, não deve conter espaços nem caracteres de controle e deve ter no máximo 16 KiB.";
+"activity.errorInvalidStoredCredential" = "A credencial armazenada é inválida. Remova-a e adicione uma nova.";
+"activity.errorKeychainFormat" = "Falha na operação das Chaves (status %d).";
+"activity.errorUnsupportedProvider" = "Este provedor não aceita credenciais de sessão.";
+"activity.errorAccountNotFound" = "Esta conta não existe mais.";
+"activity.errorClearInProgress" = "Os dados de atividade das sessões estão sendo apagados.";

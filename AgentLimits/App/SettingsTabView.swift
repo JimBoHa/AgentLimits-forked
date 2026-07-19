@@ -48,6 +48,7 @@ struct SettingsTabView: View {
     let viewModel: UsageViewModel
     let webViewPool: UsageWebViewPool
     let tokenUsageViewModel: TokenUsageViewModel
+    let sessionActivityViewModel: SessionActivityViewModel
     let accountRemovalManager: ProviderAccountRemovalManager
 
     private var selectedTabBinding: Binding<SettingsTab?> {
@@ -90,6 +91,7 @@ struct SettingsTabView: View {
             ContentView(
                 viewModel: viewModel,
                 webViewPool: webViewPool,
+                sessionActivityViewModel: sessionActivityViewModel,
                 accountRemovalManager: accountRemovalManager
             )
         case .wakeUp:
