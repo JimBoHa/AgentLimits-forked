@@ -34,11 +34,18 @@ Copy the local configuration template, then replace its example Team ID:
 ```sh
 cp Configurations/DevelopmentTeam.local.xcconfig.example \
   Configurations/DevelopmentTeam.local.xcconfig
+chmod 600 Configurations/DevelopmentTeam.local.xcconfig
+chmod -N Configurations/DevelopmentTeam.local.xcconfig
 ```
 
-The local file is gitignored. Never commit certificates, private keys,
-provisioning profiles, App Store Connect keys, passwords, or notarization
-credentials.
+The local file is gitignored and must remain Team-only. Signed release scripts
+reject includes, conditional assignments, compiler flags, symlinks, ACLs, and
+group/other-writable files. They build from a clean `git archive` snapshot with
+a generated Team-only config, then record and recheck the local config hash.
+They also replace inherited Xcode config/toolchain overrides and use the system
+release-tool path before invoking Xcode.
+Never commit certificates, private keys, provisioning profiles, App Store
+Connect keys, passwords, or notarization credentials.
 
 ## Unsigned preflight artifacts
 

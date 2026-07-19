@@ -2,6 +2,9 @@
 
 set -euo pipefail
 
+PATH="/usr/bin:/bin:/usr/sbin:/sbin"
+export PATH
+
 usage() {
     echo "Usage: $0 OUTPUT_DIRECTORY NOTARY_KEYCHAIN_PROFILE \"DEVELOPER_ID_INSTALLER_IDENTITY\"" >&2
     echo "Example installer identity: Developer ID Installer: Example Corp (ABCDE12345)" >&2
@@ -19,16 +22,23 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 project_root="$(cd "$script_dir/.." && pwd)"
 developer_dir="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}"
 local_config="$project_root/Configurations/DevelopmentTeam.local.xcconfig"
+validated_development_team=""
+validated_development_team_config_hash=""
+# shellcheck disable=SC1091
+source "$script_dir/signing-config.sh"
 
 if [[ ! -x "$developer_dir/usr/bin/xcodebuild" ]]; then
     echo "Xcode not found at $developer_dir" >&2
     exit 69
 fi
-if [[ ! -f "$local_config" ]]; then
+if [[ ! -e "$local_config" && ! -L "$local_config" ]]; then
     echo "Missing $local_config" >&2
     echo "Copy the .example file and set your Apple Developer Team ID." >&2
     exit 78
 fi
+validate_development_team_config "$local_config" || exit $?
+team_id="$validated_development_team"
+local_config_hash="$validated_development_team_config_hash"
 if [[ -e "$output_dir" ]]; then
     echo "Refusing to overwrite existing path: $output_dir" >&2
     exit 73
@@ -41,6 +51,8 @@ fi
 source_commit="$(git -C "$project_root" rev-parse HEAD)"
 
 verify_source_unchanged() {
+    verify_development_team_config_unchanged \
+        "$local_config" "$team_id" "$local_config_hash" || exit $?
     if [[ "$(git -C "$project_root" rev-parse HEAD)" != "$source_commit" \
         || -n "$(git -C "$project_root" status --porcelain \
             --untracked-files=normal)" ]]; then
@@ -63,23 +75,30 @@ trap cleanup EXIT
 
 export DEVELOPER_DIR="$developer_dir"
 
+build_root="$work_dir/source"
+mkdir -p "$build_root"
+git -C "$project_root" archive --format=tar "$source_commit" \
+    | tar -xf - -C "$build_root"
+snapshot_config="$build_root/Configurations/DevelopmentTeam.local.xcconfig"
+printf 'DEVELOPMENT_TEAM = %s\n' "$team_id" >"$snapshot_config"
+chmod 600 "$snapshot_config"
+prepare_xcode_signing_environment "$snapshot_config"
+verify_source_unchanged
+
 settings="$(xcodebuild \
-    -project "$project_root/AgentLimits.xcodeproj" \
+    -project "$build_root/AgentLimits.xcodeproj" \
     -scheme AgentLimits \
     -configuration Release \
     -showBuildSettings 2>/dev/null)"
-team_id="$(printf '%s\n' "$settings" \
+resolved_team_id="$(printf '%s\n' "$settings" \
     | sed -n 's/^[[:space:]]*DEVELOPMENT_TEAM = //p' \
     | head -1)"
 
-if [[ -z "$team_id" ]]; then
-    echo "DEVELOPMENT_TEAM is empty after resolving Xcode settings" >&2
+if [[ "$resolved_team_id" != "$team_id" ]]; then
+    echo "Resolved Apple Team does not match the validated local config" >&2
     exit 78
 fi
-if [[ ! "$team_id" =~ ^[A-Z0-9]{10}$ ]]; then
-    echo "Unexpected Apple Team ID format: $team_id" >&2
-    exit 78
-fi
+verify_source_unchanged
 if [[ ! "$installer_identity" =~ ^Developer\ ID\ Installer:\ .+\ \(${team_id}\)$ ]]; then
     echo "Installer identity does not belong to Team $team_id" >&2
     exit 78
@@ -98,7 +117,7 @@ export_dir="$work_dir/export"
 echo "Archiving macOS app for team $team_id..."
 if ! xcodebuild archive \
     -allowProvisioningUpdates \
-    -project "$project_root/AgentLimits.xcodeproj" \
+    -project "$build_root/AgentLimits.xcodeproj" \
     -scheme AgentLimits \
     -configuration Release \
     -destination 'generic/platform=macOS' \
@@ -109,6 +128,7 @@ if ! xcodebuild archive \
     tail -120 "$archive_log" >&2
     exit 1
 fi
+verify_source_unchanged
 
 archive_team="$(plutil -extract ApplicationProperties.Team raw \
     "$archive/Info.plist" 2>/dev/null || true)"
@@ -126,7 +146,7 @@ if ! xcodebuild -exportArchive \
     -archivePath "$archive" \
     -exportPath "$export_dir" \
     -exportOptionsPlist \
-        "$project_root/Distribution/ExportOptions-DeveloperID.plist" \
+        "$build_root/Distribution/ExportOptions-DeveloperID.plist" \
     >"$export_log" 2>&1; then
     tail -120 "$export_log" >&2
     exit 1
@@ -458,6 +478,8 @@ cat >"$output_dir/BUILD-METADATA.txt" <<EOF
 AgentLimits Forked $version ($build)
 Team ID: $team_id
 Git commit: $source_commit
+Signing config SHA-256: $local_config_hash
+Build source: clean git archive with generated Team-only config
 Xcode: $(xcodebuild -version | tr '\n' ' ')
 macOS architectures: $architectures
 macOS widget architectures: $widget_architectures
