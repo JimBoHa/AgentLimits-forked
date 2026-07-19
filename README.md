@@ -4,7 +4,7 @@
 
 **In Development**
 
-AgentLimits is a macOS Sonoma+ menu bar app with Notification Center widgets. It shows usage limits for ChatGPT Codex / Claude Code (5-hour + weekly, or monthly when the provider returns a monthly window), GitHub Copilot (monthly premium requests), and ccusage token usage.
+AgentLimits is a macOS Sonoma+ menu bar app with Notification Center widgets, plus an iPhone and iPad companion under active development. The Mac app shows usage limits for ChatGPT Codex / Claude Code (5-hour + weekly, or monthly when the provider returns a monthly window), GitHub Copilot (monthly premium requests), and ccusage token usage.
 
 ![](./images/agentlimit_sample.png)
 
@@ -17,6 +17,20 @@ Fork releases: [JimBoHa/AgentLimits-forked releases](https://github.com/JimBoHa/
 3. Open **AgentLimits Settings...** from the menu bar.
 4. In **Usage**, choose Codex, Claude Code, or Copilot, choose or add an account, set refresh interval (1–10 minutes), open the bottom login panel (`▲`), then sign in.
 5. Use the menu bar **Display Mode** to switch Used/Remaining, and **Refresh Now** for manual updates.
+
+## iPhone and iPad Companion
+
+The `AgentLimitsiOS` target supports separate named account profiles for Codex,
+Claude Code, and GitHub Copilot. GitHub Copilot profiles can store an
+account-specific, least-privilege credential in the device-only,
+non-synchronizing Keychain and show exact open, working, and waiting cloud-agent
+session counts. Codex and Claude Code do not currently expose equivalent
+current-session counts, so the app reports those counts as unavailable instead
+of inventing zeroes. Usage-quota mirroring from the Mac is not part of this
+initial companion target.
+
+See the [privacy policy](PRIVACY.md) for on-device storage, provider requests,
+retention, and deletion behavior.
 
 ## What It Tracks
 - **Usage limits (Codex / Claude Code):** 5-hour + weekly usage, or monthly usage when the provider returns a monthly window, via internal APIs.

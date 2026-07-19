@@ -11,6 +11,8 @@
 		42D45BBB2EF64A5000A51EA8 /* WidgetKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 42D45BBA2EF64A5000A51EA8 /* WidgetKit.framework */; };
 		42D45BBD2EF64A5000A51EA8 /* SwiftUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 42D45BBC2EF64A5000A51EA8 /* SwiftUI.framework */; };
 		42D45BCC2EF64A5100A51EA8 /* AgentLimitsWidgetExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 42D45BB82EF64A5000A51EA8 /* AgentLimitsWidgetExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		B20000000000000000000006 /* GitHubAgentTaskFetcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000004 /* GitHubAgentTaskFetcher.swift */; };
+		B20000000000000000000007 /* agentlimits.icon in Resources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000005 /* agentlimits.icon */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -27,6 +29,20 @@
 			proxyType = 1;
 			remoteGlobalIDString = 42D45BB72EF64A5000A51EA8;
 			remoteInfo = AgentLimitsWidgetExtension;
+		};
+		B20000000000000000000008 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 42D45B822EF649FD00A51EA8 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = B20000000000000000000016;
+			remoteInfo = AgentLimitsiOS;
+		};
+		B20000000000000000000010 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 42D45B822EF649FD00A51EA8 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = B20000000000000000000016;
+			remoteInfo = AgentLimitsiOS;
 		};
 /* End PBXContainerItemProxy section */
 
@@ -51,6 +67,11 @@
 		42D45BBA2EF64A5000A51EA8 /* WidgetKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WidgetKit.framework; path = System/Library/Frameworks/WidgetKit.framework; sourceTree = SDKROOT; };
 		42D45BBC2EF64A5000A51EA8 /* SwiftUI.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SwiftUI.framework; path = System/Library/Frameworks/SwiftUI.framework; sourceTree = SDKROOT; };
 		7A1B2C3D4E5F678901234567 /* Configurations/DevelopmentTeam.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Configurations/DevelopmentTeam.xcconfig; sourceTree = "<group>"; };
+		B20000000000000000000001 /* AgentLimits.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = AgentLimits.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		B20000000000000000000002 /* AgentLimitsiOSTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AgentLimitsiOSTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		B20000000000000000000003 /* AgentLimitsiOSUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AgentLimitsiOSUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		B20000000000000000000004 /* GitHubAgentTaskFetcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentLimits/Activity/GitHubAgentTaskFetcher.swift; sourceTree = SOURCE_ROOT; };
+		B20000000000000000000005 /* agentlimits.icon */ = {isa = PBXFileReference; lastKnownFileType = folder.iconcomposer.icon; path = AgentLimits/agentlimits.icon; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -67,6 +88,13 @@
 				Info.plist,
 			);
 			target = 42D45BB72EF64A5000A51EA8 /* AgentLimitsWidgetExtension */;
+		};
+		B20000000000000000000037 /* Exceptions for "AgentLimitsiOS" folder in "AgentLimitsiOS" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = B20000000000000000000016 /* AgentLimitsiOS */;
 		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
@@ -97,6 +125,24 @@
 			path = AgentLimitsWidget;
 			sourceTree = "<group>";
 		};
+		B20000000000000000000012 /* AgentLimitsiOS */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				B20000000000000000000037 /* Exceptions for "AgentLimitsiOS" folder in "AgentLimitsiOS" target */,
+			);
+			path = AgentLimitsiOS;
+			sourceTree = "<group>";
+		};
+		B20000000000000000000013 /* AgentLimitsiOSTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = AgentLimitsiOSTests;
+			sourceTree = "<group>";
+		};
+		B20000000000000000000014 /* AgentLimitsiOSUITests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = AgentLimitsiOSUITests;
+			sourceTree = "<group>";
+		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -124,6 +170,27 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		B20000000000000000000020 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		B20000000000000000000023 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		B20000000000000000000026 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -135,6 +202,10 @@
 				01349414347243A598E67AD9 /* AgentLimitsShared */,
 				42D45BBE2EF64A5000A51EA8 /* AgentLimitsWidget */,
 				A10000000000000000000002 /* AgentLimitsTests */,
+				B20000000000000000000012 /* AgentLimitsiOS */,
+				B20000000000000000000013 /* AgentLimitsiOSTests */,
+				B20000000000000000000014 /* AgentLimitsiOSUITests */,
+				B20000000000000000000015 /* Shared Mobile Sources */,
 				42D45BB92EF64A5000A51EA8 /* Frameworks */,
 				42D45B8B2EF649FE00A51EA8 /* Products */,
 			);
@@ -146,6 +217,9 @@
 				42D45B8A2EF649FE00A51EA8 /* AgentLimitsForked.app */,
 				42D45BB82EF64A5000A51EA8 /* AgentLimitsWidgetExtension.appex */,
 				A10000000000000000000001 /* AgentLimitsTests.xctest */,
+				B20000000000000000000001 /* AgentLimits.app */,
+				B20000000000000000000002 /* AgentLimitsiOSTests.xctest */,
+				B20000000000000000000003 /* AgentLimitsiOSUITests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -165,6 +239,15 @@
 				7A1B2C3D4E5F678901234567 /* Configurations/DevelopmentTeam.xcconfig */,
 			);
 			name = Configurations;
+			sourceTree = "<group>";
+		};
+		B20000000000000000000015 /* Shared Mobile Sources */ = {
+			isa = PBXGroup;
+			children = (
+				B20000000000000000000004 /* GitHubAgentTaskFetcher.swift */,
+				B20000000000000000000005 /* agentlimits.icon */,
+			);
+			name = "Shared Mobile Sources";
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -242,6 +325,74 @@
 			productReference = 42D45BB82EF64A5000A51EA8 /* AgentLimitsWidgetExtension.appex */;
 			productType = "com.apple.product-type.app-extension";
 		};
+		B20000000000000000000016 /* AgentLimitsiOS */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = B20000000000000000000030 /* Build configuration list for PBXNativeTarget "AgentLimitsiOS" */;
+			buildPhases = (
+				B20000000000000000000019 /* Sources */,
+				B20000000000000000000020 /* Frameworks */,
+				B20000000000000000000021 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				B20000000000000000000012 /* AgentLimitsiOS */,
+			);
+			name = AgentLimitsiOS;
+			packageProductDependencies = (
+			);
+			productName = AgentLimitsiOS;
+			productReference = B20000000000000000000001 /* AgentLimits.app */;
+			productType = "com.apple.product-type.application";
+		};
+		B20000000000000000000017 /* AgentLimitsiOSTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = B20000000000000000000033 /* Build configuration list for PBXNativeTarget "AgentLimitsiOSTests" */;
+			buildPhases = (
+				B20000000000000000000022 /* Sources */,
+				B20000000000000000000023 /* Frameworks */,
+				B20000000000000000000024 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				B20000000000000000000009 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				B20000000000000000000013 /* AgentLimitsiOSTests */,
+			);
+			name = AgentLimitsiOSTests;
+			packageProductDependencies = (
+			);
+			productName = AgentLimitsiOSTests;
+			productReference = B20000000000000000000002 /* AgentLimitsiOSTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		B20000000000000000000018 /* AgentLimitsiOSUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = B20000000000000000000036 /* Build configuration list for PBXNativeTarget "AgentLimitsiOSUITests" */;
+			buildPhases = (
+				B20000000000000000000025 /* Sources */,
+				B20000000000000000000026 /* Frameworks */,
+				B20000000000000000000027 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				B20000000000000000000011 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				B20000000000000000000014 /* AgentLimitsiOSUITests */,
+			);
+			name = AgentLimitsiOSUITests;
+			packageProductDependencies = (
+			);
+			productName = AgentLimitsiOSUITests;
+			productReference = B20000000000000000000003 /* AgentLimitsiOSUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -261,6 +412,17 @@
 					};
 					42D45BB72EF64A5000A51EA8 = {
 						CreatedOnToolsVersion = 26.2;
+					};
+					B20000000000000000000016 = {
+						CreatedOnToolsVersion = 26.6;
+					};
+					B20000000000000000000017 = {
+						CreatedOnToolsVersion = 26.6;
+						TestTargetID = B20000000000000000000016;
+					};
+					B20000000000000000000018 = {
+						CreatedOnToolsVersion = 26.6;
+						TestTargetID = B20000000000000000000016;
 					};
 				};
 			};
@@ -297,6 +459,9 @@
 				42D45B892EF649FE00A51EA8 /* AgentLimits */,
 				42D45BB72EF64A5000A51EA8 /* AgentLimitsWidgetExtension */,
 				A10000000000000000000003 /* AgentLimitsTests */,
+				B20000000000000000000016 /* AgentLimitsiOS */,
+				B20000000000000000000017 /* AgentLimitsiOSTests */,
+				B20000000000000000000018 /* AgentLimitsiOSUITests */,
 			);
 		};
 /* End PBXProject section */
@@ -317,6 +482,28 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		42D45BB62EF64A5000A51EA8 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		B20000000000000000000021 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				B20000000000000000000007 /* agentlimits.icon in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		B20000000000000000000024 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		B20000000000000000000027 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -347,6 +534,28 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		B20000000000000000000019 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				B20000000000000000000006 /* GitHubAgentTaskFetcher.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		B20000000000000000000022 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		B20000000000000000000025 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -359,6 +568,16 @@
 			isa = PBXTargetDependency;
 			target = 42D45BB72EF64A5000A51EA8 /* AgentLimitsWidgetExtension */;
 			targetProxy = 42D45BCA2EF64A5100A51EA8 /* PBXContainerItemProxy */;
+		};
+		B20000000000000000000009 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = B20000000000000000000016 /* AgentLimitsiOS */;
+			targetProxy = B20000000000000000000008 /* PBXContainerItemProxy */;
+		};
+		B20000000000000000000011 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = B20000000000000000000016 /* AgentLimitsiOS */;
+			targetProxy = B20000000000000000000010 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -668,6 +887,156 @@
 			};
 			name = Release;
 		};
+		B20000000000000000000028 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 7A1B2C3D4E5F678901234567 /* Configurations/DevelopmentTeam.xcconfig */;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = agentlimits;
+				CURRENT_PROJECT_VERSION = 16;
+				DEAD_CODE_STRIPPING = YES;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = AgentLimitsiOS/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "AgentLimits Forked";
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 1.1.6;
+				PRODUCT_BUNDLE_IDENTIFIER = com.jimboha.agentlimits.ios;
+				PRODUCT_MODULE_NAME = AgentLimitsiOS;
+				PRODUCT_NAME = AgentLimits;
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		B20000000000000000000029 /* Release */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 7A1B2C3D4E5F678901234567 /* Configurations/DevelopmentTeam.xcconfig */;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = agentlimits;
+				CURRENT_PROJECT_VERSION = 16;
+				DEAD_CODE_STRIPPING = YES;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = AgentLimitsiOS/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "AgentLimits Forked";
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 1.1.6;
+				PRODUCT_BUNDLE_IDENTIFIER = com.jimboha.agentlimits.ios;
+				PRODUCT_MODULE_NAME = AgentLimitsiOS;
+				PRODUCT_NAME = AgentLimits;
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		B20000000000000000000031 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 7A1B2C3D4E5F678901234567 /* Configurations/DevelopmentTeam.xcconfig */;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.jimboha.agentlimits.ios.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_DEFAULT_ACTOR_ISOLATION = nonisolated;
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/AgentLimits.app/AgentLimits";
+			};
+			name = Debug;
+		};
+		B20000000000000000000032 /* Release */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 7A1B2C3D4E5F678901234567 /* Configurations/DevelopmentTeam.xcconfig */;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.jimboha.agentlimits.ios.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_DEFAULT_ACTOR_ISOLATION = nonisolated;
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/AgentLimits.app/AgentLimits";
+			};
+			name = Release;
+		};
+		B20000000000000000000034 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 7A1B2C3D4E5F678901234567 /* Configurations/DevelopmentTeam.xcconfig */;
+			buildSettings = {
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.jimboha.agentlimits.ios.uitests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_DEFAULT_ACTOR_ISOLATION = nonisolated;
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = AgentLimitsiOS;
+			};
+			name = Debug;
+		};
+		B20000000000000000000035 /* Release */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 7A1B2C3D4E5F678901234567 /* Configurations/DevelopmentTeam.xcconfig */;
+			buildSettings = {
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.jimboha.agentlimits.ios.uitests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_DEFAULT_ACTOR_ISOLATION = nonisolated;
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = AgentLimitsiOS;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -703,6 +1072,33 @@
 			buildConfigurations = (
 				42D45BCF2EF64A5100A51EA8 /* Debug */,
 				42D45BD02EF64A5100A51EA8 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		B20000000000000000000030 /* Build configuration list for PBXNativeTarget "AgentLimitsiOS" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				B20000000000000000000028 /* Debug */,
+				B20000000000000000000029 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		B20000000000000000000033 /* Build configuration list for PBXNativeTarget "AgentLimitsiOSTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				B20000000000000000000031 /* Debug */,
+				B20000000000000000000032 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		B20000000000000000000036 /* Build configuration list for PBXNativeTarget "AgentLimitsiOSUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				B20000000000000000000034 /* Debug */,
+				B20000000000000000000035 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
