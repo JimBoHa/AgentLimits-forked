@@ -266,13 +266,7 @@ else
     EFFECTIVE_DISPLAY_MODE="used"
 fi
 
-if [[ -n "$DISPLAY_MODE_OVERRIDE" ]]; then
-    DISPLAY_MODE="$DISPLAY_MODE_OVERRIDE"
-elif [[ "$snapshot_display_mode" == "remaining" ]]; then
-    DISPLAY_MODE="remaining"
-elif [[ "$snapshot_display_mode" == "used" ]]; then
-    DISPLAY_MODE="used"
-fi
+DISPLAY_MODE="$EFFECTIVE_DISPLAY_MODE"
 
 debug_log "snapshot_display_mode=${snapshot_display_mode:-unset}"
 debug_log "display_mode_effective=${DISPLAY_MODE}"
