@@ -25,12 +25,15 @@ final class WebViewStore: ObservableObject {
     private var coordinator: WebViewCoordinator?
     private let cookieStore: WKHTTPCookieStore
     private var cookieObserver: CookieObserver?
+    private var popupNavigationTask: Task<Void, Never>?
     /// Pool-owned guard that blocks navigation while website data is clearing.
     var isNavigationAllowed: (() -> Bool)?
     /// Callback invoked when popup navigation finishes. Returns true if popup should close.
     var onPopupNavigationFinished: ((WKWebView) async -> Bool)?
     private var isClosingPopup = false
     private(set) var isDataClearInProgress = false
+    private(set) var isRetirementInProgress = false
+    private(set) var isRetired = false
     private var dataClearWebViews: [ObjectIdentifier: WKWebView] = [:]
     private var pendingDataClearWebViews: Set<ObjectIdentifier> = []
     private var pendingDataClearNavigations: [ObjectIdentifier: WKNavigation] = [:]
@@ -82,7 +85,8 @@ final class WebViewStore: ObservableObject {
 
     /// Loads the usage URL if not already loaded
     func loadIfNeeded() {
-        guard !isSuspended, !isDataClearInProgress else { return }
+        guard !isSuspended, !isDataClearInProgress,
+              !isRetirementInProgress, !isRetired else { return }
         guard isNavigationAllowed?() != false else { return }
         if webView.url == nil {
             // Initial navigation to provider usage page.
@@ -92,7 +96,8 @@ final class WebViewStore: ObservableObject {
 
     /// Reloads the usage URL, ignoring cache
     func reloadFromOrigin() {
-        guard !isDataClearInProgress else { return }
+        guard !isDataClearInProgress, !isRetirementInProgress,
+              !isRetired else { return }
         guard isNavigationAllowed?() != false else { return }
         // Reset readiness and force a fresh load.
         isSuspended = false
@@ -107,6 +112,7 @@ final class WebViewStore: ObservableObject {
 
     /// 非アクティブなログインページがバックグラウンドで動き続けないようにWebViewを停止する。
     func suspend() {
+        guard !isRetirementInProgress, !isRetired else { return }
         guard !isDataClearInProgress else { return }
         isSuspended = true
         isPageReady = false
@@ -120,7 +126,8 @@ final class WebViewStore: ObservableObject {
     /// プロバイダーの使用状況ページを読み込んでWebViewを復帰する。
     func resume() {
         guard isSuspended else { return }
-        guard !isDataClearInProgress else { return }
+        guard !isDataClearInProgress, !isRetirementInProgress,
+              !isRetired else { return }
         guard isNavigationAllowed?() != false else { return }
         isSuspended = false
         reloadFromOrigin()
@@ -131,6 +138,8 @@ final class WebViewStore: ObservableObject {
         // Prevent duplicate close calls.
         guard !isClosingPopup else { return }
         isClosingPopup = true
+        popupNavigationTask?.cancel()
+        popupNavigationTask = nil
         // Stop any popup loading and release the reference.
         if let popupWebView {
             popupWebView.stopLoading()
@@ -140,6 +149,57 @@ final class WebViewStore: ObservableObject {
         popupWebView = nil
         onPopupNavigationFinished = nil
         isClosingPopup = false
+    }
+
+    /// Starts permanent account retirement using the same exclusive blank-page
+    /// quiescence boundary as global website-data clearing.
+    func beginRetirement() -> Bool {
+        guard !isRetired, !isRetirementInProgress,
+              !isDataClearInProgress else { return false }
+        isRetirementInProgress = true
+        beginDataClear()
+        return true
+    }
+
+    /// Converts an already-quiesced global-clear session into permanent
+    /// retirement without starting a second navigation interval.
+    func beginRetirementDuringDataClear() -> Bool {
+        guard !isRetired, !isRetirementInProgress,
+              isDataClearInProgress else { return false }
+        isRetirementInProgress = true
+        return true
+    }
+
+    /// Restores a quiesced session when registry/local-data commit failed.
+    func cancelRetirement() {
+        guard isRetirementInProgress, !isRetired else { return }
+        finishDataClear()
+        isRetirementInProgress = false
+    }
+
+    /// Permanently detaches observers, delegates, callbacks, popups, and page
+    /// activity. External references remain inert and cannot navigate again.
+    func finalizeRetirement() {
+        guard isRetirementInProgress, !isRetired else { return }
+        isRetired = true
+        popupNavigationTask?.cancel()
+        popupNavigationTask = nil
+        onPopupNavigationFinished = nil
+        closePopupWebView()
+        finishDataClear()
+
+        webView.stopLoading()
+        webView.navigationDelegate = nil
+        webView.uiDelegate = nil
+        if let cookieObserver {
+            cookieStore.remove(cookieObserver)
+            self.cookieObserver = nil
+        }
+        coordinator = nil
+        isNavigationAllowed = nil
+        isSuspended = true
+        isPageReady = false
+        isRetirementInProgress = false
     }
 
     /// Stops all page activity and closes the visible popup before the pool
@@ -233,13 +293,15 @@ final class WebViewStore: ObservableObject {
         if permittedBlankNavigations.contains(identifier), Self.isBlankURL(url) {
             return true
         }
-        guard !isDataClearInProgress, !isSuspended else { return false }
+        guard !isDataClearInProgress, !isSuspended,
+              !isRetirementInProgress, !isRetired else { return false }
         guard isNavigationAllowed?() != false else { return false }
         return webView === self.webView || webView === popupWebView
     }
 
     func shouldCreatePopup(from webView: WKWebView) -> Bool {
-        guard !isDataClearInProgress, !isSuspended else { return false }
+        guard !isDataClearInProgress, !isSuspended,
+              !isRetirementInProgress, !isRetired else { return false }
         guard isNavigationAllowed?() != false else { return false }
         return webView === self.webView || webView === popupWebView
     }
@@ -270,12 +332,15 @@ final class WebViewStore: ObservableObject {
             isPageReady = webView.url?.host == targetHost
         } else if webView === popupWebView {
             // Check login status when popup navigation finishes.
-            Task {
-                if let callback = onPopupNavigationFinished,
-                   await callback(webView) {
+            popupNavigationTask?.cancel()
+            let callback = onPopupNavigationFinished
+            popupNavigationTask = Task { [weak self, weak webView, callback] in
+                guard let webView, let callback else { return }
+                if await callback(webView), !Task.isCancelled {
                     // Wait before closing to allow redirect processing.
                     try? await Task.sleep(nanoseconds: 500_000_000)
-                    closePopupWebView()
+                    guard !Task.isCancelled else { return }
+                    self?.closePopupWebView()
                 }
             }
         }
