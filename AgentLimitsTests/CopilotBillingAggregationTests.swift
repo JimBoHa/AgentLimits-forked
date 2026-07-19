@@ -2,6 +2,7 @@ import Foundation
 import XCTest
 @testable import AgentLimits
 
+@MainActor
 final class CopilotBillingAggregationTests: XCTestCase {
     func testPeriodsAcceptBothTimestampFormatsAndRejectInvalidRows() throws {
         let calendar = utcCalendar()
