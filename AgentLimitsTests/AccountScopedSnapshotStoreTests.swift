@@ -237,6 +237,67 @@ final class AccountScopedSnapshotStoreTests: XCTestCase {
         }
     }
 
+    func testDeleteBeforeFirstLoadRetiresLegacyMigration() throws {
+        try withTemporaryContainer { containerURL in
+            let accountID = try XCTUnwrap(
+                UUID(uuidString: "90000000-0000-0000-0000-000000000009")
+            )
+            let visibilityStore = RecordingAccountSnapshotVisibilityStore()
+            let legacyStore = makeStore(
+                visibilityStore: visibilityStore,
+                containerURL: containerURL
+            )
+            try legacyStore.saveSnapshot(
+                makeSnapshot(fetchedAt: Date(timeIntervalSince1970: 11_000))
+            )
+            let accountStore = makeStore(
+                visibilityStore: visibilityStore,
+                accountID: accountID,
+                migratesLegacySnapshot: true,
+                containerURL: containerURL
+            )
+
+            try accountStore.deleteSnapshot(for: .chatgptCodex)
+
+            XCTAssertNil(accountStore.loadSnapshot(for: .chatgptCodex))
+            XCTAssertNotNil(legacyStore.loadSnapshot(for: .chatgptCodex))
+        }
+    }
+
+    func testLegacyMigrationRejectsSnapshotForDifferentProvider() throws {
+        try withTemporaryContainer { containerURL in
+            let accountID = try XCTUnwrap(
+                UUID(uuidString: "a0000000-0000-0000-0000-00000000000a")
+            )
+            let mismatchedSnapshot = UsageSnapshot(
+                provider: .claudeCode,
+                fetchedAt: Date(timeIntervalSince1970: 12_000),
+                primaryWindow: nil,
+                secondaryWindow: nil
+            )
+            let encoder = JSONEncoder()
+            DateCodec.configureEncoder(encoder)
+            try writeLegacyData(
+                encoder.encode(mismatchedSnapshot),
+                fileName: UsageProvider.chatgptCodex.snapshotFileName,
+                containerURL: containerURL
+            )
+            let accountStore = makeStore(
+                accountID: accountID,
+                migratesLegacySnapshot: true,
+                containerURL: containerURL
+            )
+
+            XCTAssertNil(accountStore.loadSnapshot(for: .chatgptCodex))
+
+            let legacyStore = makeStore(containerURL: containerURL)
+            try legacyStore.saveSnapshot(
+                makeSnapshot(fetchedAt: Date(timeIntervalSince1970: 13_000))
+            )
+            XCTAssertNil(accountStore.loadSnapshot(for: .chatgptCodex))
+        }
+    }
+
     private func makeStore(
         visibilityStore: any SnapshotVisibilityControlling = RecordingAccountSnapshotVisibilityStore(),
         accountID: UUID? = nil,
@@ -262,6 +323,25 @@ final class AccountScopedSnapshotStoreTests: XCTestCase {
                 limitWindowSeconds: UsageLimitDuration.fiveHours
             ),
             secondaryWindow: nil
+        )
+    }
+
+    private func writeLegacyData(
+        _ data: Data,
+        fileName: String,
+        containerURL: URL
+    ) throws {
+        let directoryURL = containerURL.appendingPathComponent(
+            AppGroupConfig.snapshotDirectory,
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(
+            at: directoryURL,
+            withIntermediateDirectories: true
+        )
+        try data.write(
+            to: directoryURL.appendingPathComponent(fileName),
+            options: .atomic
         )
     }
 

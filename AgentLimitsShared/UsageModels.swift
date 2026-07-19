@@ -1123,9 +1123,7 @@ struct AppGroupSnapshotStore<Provider: SnapshotFileNaming, Snapshot: SnapshotDat
         try withSecurityScopedAccess(url) {
             try data.write(to: url, options: .atomic)
         }
-        if let migrationMarkerURL = legacyMigrationMarkerURL(for: snapshot.provider) {
-            try writeLegacyMigrationMarker(at: migrationMarkerURL)
-        }
+        try retireLegacyMigrationIfNeeded(for: snapshot.provider)
         visibilityStore.setSnapshotSuppressed(
             false,
             fileName: snapshotVisibilityKey(for: snapshot.provider)
@@ -1136,6 +1134,9 @@ struct AppGroupSnapshotStore<Provider: SnapshotFileNaming, Snapshot: SnapshotDat
     /// - Parameter provider: The provider whose snapshot should be deleted.
     /// - Throws: `UsageSnapshotStoreError.appGroupUnavailable` if the App Group is unavailable.
     func deleteSnapshot(for provider: Provider) throws {
+        // A user-initiated scoped delete must never be undone by importing the
+        // legacy file on a later load, even when migration never ran before.
+        try retireLegacyMigrationIfNeeded(for: provider)
         guard let url = snapshotFileURL(for: provider) else {
             throw UsageSnapshotStoreError.appGroupUnavailable
         }
@@ -1227,7 +1228,8 @@ struct AppGroupSnapshotStore<Provider: SnapshotFileNaming, Snapshot: SnapshotDat
         let data = try withSecurityScopedAccess(legacyURL) {
             try Data(contentsOf: legacyURL)
         }
-        guard (try? decoder.decode(Snapshot.self, from: data)) != nil else {
+        guard let decodedSnapshot = try? decoder.decode(Snapshot.self, from: data),
+              decodedSnapshot.provider.snapshotFileName == provider.snapshotFileName else {
             try writeLegacyMigrationMarker(at: migrationMarkerURL)
             return
         }
@@ -1245,6 +1247,15 @@ struct AppGroupSnapshotStore<Provider: SnapshotFileNaming, Snapshot: SnapshotDat
         return directoryURL.appendingPathComponent(
             ".legacy-migration-complete-\(provider.snapshotFileName)"
         )
+    }
+
+    private func retireLegacyMigrationIfNeeded(for provider: Provider) throws {
+        guard let markerURL = legacyMigrationMarkerURL(for: provider) else { return }
+        try fileManager.createDirectory(
+            at: markerURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try writeLegacyMigrationMarker(at: markerURL)
     }
 
     private func writeLegacyMigrationMarker(at url: URL) throws {
