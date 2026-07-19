@@ -48,6 +48,8 @@ enum TokenUsageSnapshotClearError: LocalizedError {
 final class TokenUsageViewModel: ObservableObject {
     struct ExternalSnapshotContext: Equatable {
         fileprivate let value: UsageOperationGate.Context
+        fileprivate let provider: TokenUsageProvider
+        fileprivate let settingsRevision: UInt64
     }
 
     struct DataClearToken: Equatable {
@@ -76,6 +78,7 @@ final class TokenUsageViewModel: ObservableObject {
     private var autoRefreshCoordinator: AutoRefreshCoordinator?
     private var suppressedSnapshots: Set<TokenUsageProvider> = []
     private var operationGate = UsageOperationGate()
+    private var settingsRevisions: [TokenUsageProvider: UInt64] = [:]
 
     // MARK: - Initialization
 
@@ -100,6 +103,7 @@ final class TokenUsageViewModel: ObservableObject {
 
         // Initialize state for all providers
         for provider in TokenUsageProvider.allCases {
+            settingsRevisions[provider] = 0
             isFetching[provider] = false
             statusMessages[provider] = "tokenUsage.notFetched".localized()
 
@@ -117,6 +121,9 @@ final class TokenUsageViewModel: ObservableObject {
 
     /// Updates settings for a provider
     func updateSettings(_ newSettings: CCUsageSettings) {
+        if settings[newSettings.provider]?.isEnabled != newSettings.isEnabled {
+            settingsRevisions[newSettings.provider, default: 0] &+= 1
+        }
         // Persist updated settings for the selected provider.
         settings[newSettings.provider] = newSettings
         settingsStore.updateSettings(newSettings)
@@ -173,9 +180,20 @@ final class TokenUsageViewModel: ObservableObject {
 
     // MARK: - Externally Fetched Snapshots
 
-    /// Captures the token-usage generation before external async work starts.
-    func captureExternalSnapshotContext() -> ExternalSnapshotContext? {
-        operationGate.captureContext().map(ExternalSnapshotContext.init(value:))
+    /// Captures the provider setting and clear-data generation before external
+    /// async work starts. Disabled providers cannot begin external fetches.
+    func captureExternalSnapshotContext(
+        for provider: TokenUsageProvider
+    ) -> ExternalSnapshotContext? {
+        guard settings[provider]?.isEnabled == true,
+              let value = operationGate.captureContext() else {
+            return nil
+        }
+        return ExternalSnapshotContext(
+            value: value,
+            provider: provider,
+            settingsRevision: settingsRevisions[provider, default: 0]
+        )
     }
 
     /// Persists a WebView-produced snapshot and updates the shared in-memory UI state.
@@ -185,7 +203,10 @@ final class TokenUsageViewModel: ObservableObject {
         context: ExternalSnapshotContext
     ) throws -> Bool {
         let operationContext = context.value
-        guard operationGate.isCurrent(operationContext) else {
+        guard context.provider == snapshot.provider,
+              settings[snapshot.provider]?.isEnabled == true,
+              settingsRevisions[snapshot.provider, default: 0] == context.settingsRevision,
+              operationGate.isCurrent(operationContext) else {
             return false
         }
         do {
