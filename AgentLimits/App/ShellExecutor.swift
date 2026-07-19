@@ -9,7 +9,7 @@ import Darwin
 // MARK: - Execution Result
 
 /// Resolves the user's login shell path for CLI execution.
-enum ShellPathResolver {
+nonisolated enum ShellPathResolver {
     /// Returns the login shell path from the system user record.
     /// Falls back to `/bin/zsh` when unavailable or non-executable.
     static func resolveLoginShellPath(fallback: String = "/bin/zsh") -> String {
@@ -32,7 +32,7 @@ enum ShellPathResolver {
 }
 
 /// Adds a PATH prefix to commands to ensure Homebrew binaries are discoverable.
-enum ShellCommandPathPrefixer {
+nonisolated enum ShellCommandPathPrefixer {
     private static let pathPrefix = "export PATH=\"/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH\";"
 
     /// Returns a command prefixed with PATH export unless it already sets PATH.
@@ -45,26 +45,26 @@ enum ShellCommandPathPrefixer {
     }
 }
 
-/// Contains the complete result of a shell command execution
-struct ShellExecutionResult {
-    /// Standard output data from the command
+/// Contains the complete result of a shell command execution.
+nonisolated struct ShellExecutionResult {
+    /// Standard output data from the command.
     let stdout: Data
-    /// Standard error data from the command
+    /// Standard error data from the command.
     let stderr: Data
-    /// Process exit code (0 = success)
+    /// Process exit code (0 = success). Signal exits use the shell convention 128 + signal.
     let exitCode: Int32
 
-    /// Standard output as String (UTF-8 decoded)
+    /// Standard output as String (UTF-8 decoded).
     var stdoutString: String {
         String(data: stdout, encoding: .utf8) ?? ""
     }
 
-    /// Standard error as String (UTF-8 decoded)
+    /// Standard error as String (UTF-8 decoded).
     var stderrString: String {
         String(data: stderr, encoding: .utf8) ?? ""
     }
 
-    /// Whether the command succeeded (exit code 0)
+    /// Whether the command succeeded (exit code 0).
     var isSuccess: Bool {
         exitCode == 0
     }
@@ -72,13 +72,15 @@ struct ShellExecutionResult {
 
 // MARK: - Shell Executor Errors
 
-/// Errors that can occur during shell command execution
-enum ShellExecutorError: Error, LocalizedError {
-    /// The shell process failed to launch
+/// Errors that can occur during shell command execution.
+nonisolated enum ShellExecutorError: Error, LocalizedError {
+    /// The shell process failed to launch.
     case launchFailed(underlying: Error)
-    /// The command timed out and was terminated
+    /// The command timed out and was terminated.
     case timeout
-    /// The command exited with a non-zero status
+    /// The command produced more output than the executor is allowed to retain.
+    case outputLimitExceeded(maximumBytes: Int)
+    /// The command exited with a non-zero status.
     case executionFailed(exitCode: Int32, stderr: String)
 
     var errorDescription: String? {
@@ -87,6 +89,8 @@ enum ShellExecutorError: Error, LocalizedError {
             return "Failed to launch shell: \(error.localizedDescription)"
         case .timeout:
             return "Command execution timed out"
+        case .outputLimitExceeded(let maximumBytes):
+            return "Command output exceeded the \(maximumBytes)-byte limit"
         case .executionFailed(let code, let stderr):
             let stderrPreview = stderr.prefix(200)
             return "Command failed (\(code)): \(stderrPreview)"
@@ -98,43 +102,57 @@ enum ShellExecutorError: Error, LocalizedError {
 
 /// Executes shell commands asynchronously with timeout support.
 /// Uses the user's login shell with login mode to ensure environment variables are loaded.
-final class ShellExecutor: Sendable {
-    /// Default timeout in seconds
+nonisolated final class ShellExecutor: Sendable {
+    /// Default timeout in seconds.
     static let defaultTimeout: TimeInterval = 60
 
-    /// Timeout duration for command execution
+    /// Maximum combined stdout and stderr retained for one command.
+    static let defaultMaximumOutputBytes = 64 * 1024 * 1024
+
+    /// Timeout duration for command execution.
     private let timeout: TimeInterval
 
-    /// Path to the shell executable
+    /// Grace period between SIGTERM and SIGKILL.
+    private let terminationGracePeriod: TimeInterval
+
+    /// Maximum combined stdout and stderr retained for one command.
+    private let maximumOutputBytes: Int
+
+    /// Path to the shell executable.
     private let shellPath: String
 
-    /// Working directory for command execution
+    /// Working directory for command execution.
     private let workingDirectory: URL
 
     /// Creates a new shell executor with the specified configuration.
     /// - Parameters:
-    ///   - timeout: Maximum time to wait for command completion (default: 60 seconds)
-    ///   - shellPath: Path to the shell executable (default: user's login shell)
-    ///   - workingDirectory: Directory to execute commands in (default: user's home)
+    ///   - timeout: Maximum time to wait for command completion (default: 60 seconds).
+    ///   - shellPath: Path to the shell executable (default: user's login shell).
+    ///   - workingDirectory: Directory to execute commands in (default: user's home).
+    ///   - terminationGracePeriod: Time between SIGTERM and SIGKILL. Kept internal for tests.
+    ///   - maximumOutputBytes: Maximum combined stdout and stderr retained in memory.
     init(
         timeout: TimeInterval = defaultTimeout,
         shellPath: String = ShellPathResolver.resolveLoginShellPath(),
-        workingDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
+        workingDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
+        terminationGracePeriod: TimeInterval = 1,
+        maximumOutputBytes: Int = defaultMaximumOutputBytes
     ) {
         self.timeout = timeout
         self.shellPath = shellPath
         self.workingDirectory = workingDirectory
+        self.terminationGracePeriod = terminationGracePeriod
+        self.maximumOutputBytes = max(0, maximumOutputBytes)
     }
 
     // MARK: - Public API
 
     /// Executes a shell command and returns the raw stdout data.
     /// Throws if the command fails or times out.
-    /// - Parameter command: The shell command to execute
-    /// - Returns: The stdout data from the command
-    /// - Throws: `ShellExecutorError` if execution fails
+    /// - Parameter command: The shell command to execute.
+    /// - Returns: The stdout data from the command.
+    /// - Throws: `ShellExecutorError` if execution fails.
     func execute(command: String) async throws -> Data {
-        // Run command and validate exit code.
         let result = try await executeWithResult(command: command)
         if !result.isSuccess {
             throw ShellExecutorError.executionFailed(
@@ -147,11 +165,10 @@ final class ShellExecutor: Sendable {
 
     /// Executes a shell command and returns stdout as a String.
     /// Throws if the command fails or times out.
-    /// - Parameter command: The shell command to execute
-    /// - Returns: The stdout output as a UTF-8 string
-    /// - Throws: `ShellExecutorError` if execution fails
+    /// - Parameter command: The shell command to execute.
+    /// - Returns: The stdout output as a UTF-8 string.
+    /// - Throws: `ShellExecutorError` if execution fails.
     func executeString(command: String) async throws -> String {
-        // Run command and validate exit code, returning stdout as String.
         let result = try await executeWithResult(command: command)
         if !result.isSuccess {
             throw ShellExecutorError.executionFailed(
@@ -164,65 +181,746 @@ final class ShellExecutor: Sendable {
 
     /// Executes a shell command and returns the full result including exit code.
     /// Does not throw on non-zero exit code - check `result.isSuccess` instead.
-    /// - Parameter command: The shell command to execute
-    /// - Returns: The complete execution result
-    /// - Throws: `ShellExecutorError.launchFailed` or `.timeout` only
+    /// - Parameter command: The shell command to execute.
+    /// - Returns: The complete execution result.
+    /// - Throws: A lifecycle `ShellExecutorError` or `CancellationError`.
     func executeWithResult(command: String) async throws -> ShellExecutionResult {
-        let process = Process()
-        let stdout = Pipe()
-        let stderr = Pipe()
-        let prefixedCommand = ShellCommandPathPrefixer.prefixIfNeeded(command: command)
+        let operation = ShellSubprocessOperation(
+            executablePath: shellPath,
+            arguments: [
+                shellPath,
+                "-l",
+                "-c",
+                ShellCommandPathPrefixer.prefixIfNeeded(command: command)
+            ],
+            workingDirectory: workingDirectory,
+            timeout: timeout,
+            terminationGracePeriod: terminationGracePeriod,
+            maximumOutputBytes: maximumOutputBytes
+        )
 
-        // Configure the process to run via login shell
-        // Using -l flag ensures PATH and other environment variables are loaded
-        process.executableURL = URL(fileURLWithPath: shellPath)
-        process.arguments = ["-l", "-c", prefixedCommand]
-        process.standardOutput = stdout
-        process.standardError = stderr
-        process.currentDirectoryURL = workingDirectory
+        return try await withTaskCancellationHandler {
+            try Task.checkCancellation()
+            return try await operation.run()
+        } onCancel: {
+            operation.cancel()
+        }
+    }
+}
 
-        return try await withCheckedThrowingContinuation { continuation in
-            // Attempt to start the process
-            do {
-                try process.run()
-            } catch {
-                continuation.resume(throwing: ShellExecutorError.launchFailed(underlying: error))
-                return
-            }
+// MARK: - Subprocess Lifecycle
 
-            // Set up timeout handler
-            let timeoutWorkItem = DispatchWorkItem {
-                if process.isRunning {
-                    // Terminate process on timeout.
-                    process.terminate()
-                }
-            }
-            DispatchQueue.global().asyncAfter(
-                deadline: .now() + timeout,
-                execute: timeoutWorkItem
-            )
+/// A single-use subprocess operation. All mutable state is protected by `cancellationLock`;
+/// process monitoring and continuation completion happen on one worker queue.
+nonisolated private final class ShellSubprocessOperation: @unchecked Sendable {
+    private enum ForcedTermination {
+        case timeout
+        case cancelled
+        case outputLimitExceeded(maximumBytes: Int)
+        case infrastructure(Error)
+    }
 
-            // Handle process termination
-            process.terminationHandler = { proc in
-                timeoutWorkItem.cancel()
+    private struct PipeDescriptors {
+        let read: Int32
+        let write: Int32
+    }
 
-                // Read all output data
-                let outputData = stdout.fileHandleForReading.readDataToEndOfFile()
-                let errorData = stderr.fileHandleForReading.readDataToEndOfFile()
+    private static let pollIntervalMilliseconds: Int32 = 10
+    private static let readBufferSize = 64 * 1024
+    private static let readsPerStreamPerPass = 16
 
-                // Check if terminated due to timeout (uncaught signal)
-                if proc.terminationReason == .uncaughtSignal {
-                    continuation.resume(throwing: ShellExecutorError.timeout)
-                } else {
-                    // Return the result - caller decides how to handle exit code
-                    let result = ShellExecutionResult(
-                        stdout: outputData,
-                        stderr: errorData,
-                        exitCode: proc.terminationStatus
-                    )
-                    continuation.resume(returning: result)
+    private let executablePath: String
+    private let arguments: [String]
+    private let workingDirectory: URL
+    private let timeout: TimeInterval
+    private let terminationGracePeriod: TimeInterval
+    private let maximumOutputBytes: Int
+    private let cancellationLock = NSLock()
+    private var cancellationRequested = false
+
+    init(
+        executablePath: String,
+        arguments: [String],
+        workingDirectory: URL,
+        timeout: TimeInterval,
+        terminationGracePeriod: TimeInterval,
+        maximumOutputBytes: Int
+    ) {
+        self.executablePath = executablePath
+        self.arguments = arguments
+        self.workingDirectory = workingDirectory
+        self.timeout = max(0, timeout)
+        self.terminationGracePeriod = max(0, terminationGracePeriod)
+        self.maximumOutputBytes = maximumOutputBytes
+    }
+
+    func run() async throws -> ShellExecutionResult {
+        try await withCheckedThrowingContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async { [self] in
+                do {
+                    continuation.resume(returning: try runSynchronously())
+                } catch {
+                    continuation.resume(throwing: error)
                 }
             }
         }
+    }
+
+    func cancel() {
+        cancellationLock.lock()
+        cancellationRequested = true
+        cancellationLock.unlock()
+    }
+
+    private var isCancellationRequested: Bool {
+        cancellationLock.lock()
+        defer { cancellationLock.unlock() }
+        return cancellationRequested
+    }
+
+    private func runSynchronously() throws -> ShellExecutionResult {
+        if isCancellationRequested {
+            throw CancellationError()
+        }
+
+        let stdoutPipe: PipeDescriptors
+        do {
+            stdoutPipe = try Self.makePipe()
+        } catch {
+            throw ShellExecutorError.launchFailed(underlying: error)
+        }
+
+        let stderrPipe: PipeDescriptors
+        do {
+            stderrPipe = try Self.makePipe()
+        } catch {
+            Self.closeDescriptor(stdoutPipe.read)
+            Self.closeDescriptor(stdoutPipe.write)
+            throw ShellExecutorError.launchFailed(underlying: error)
+        }
+
+        do {
+            try Self.configureReadDescriptor(stdoutPipe.read)
+            try Self.configureReadDescriptor(stderrPipe.read)
+        } catch {
+            Self.closeDescriptor(stdoutPipe.read)
+            Self.closeDescriptor(stdoutPipe.write)
+            Self.closeDescriptor(stderrPipe.read)
+            Self.closeDescriptor(stderrPipe.write)
+            throw ShellExecutorError.launchFailed(underlying: error)
+        }
+
+        let processID: pid_t
+        do {
+            processID = try spawn(stdoutPipe: stdoutPipe, stderrPipe: stderrPipe)
+        } catch {
+            Self.closeDescriptor(stdoutPipe.read)
+            Self.closeDescriptor(stdoutPipe.write)
+            Self.closeDescriptor(stderrPipe.read)
+            Self.closeDescriptor(stderrPipe.write)
+            throw ShellExecutorError.launchFailed(underlying: error)
+        }
+
+        // Only the child retains the duplicated write ends after a successful spawn.
+        Self.closeDescriptor(stdoutPipe.write)
+        Self.closeDescriptor(stderrPipe.write)
+
+        return try monitor(
+            processID: processID,
+            stdoutDescriptor: stdoutPipe.read,
+            stderrDescriptor: stderrPipe.read
+        )
+    }
+
+    private func spawn(
+        stdoutPipe: PipeDescriptors,
+        stderrPipe: PipeDescriptors
+    ) throws -> pid_t {
+        var fileActions: posix_spawn_file_actions_t?
+        var attributes: posix_spawnattr_t?
+
+        var result = posix_spawn_file_actions_init(&fileActions)
+        guard result == 0 else {
+            throw Self.posixError(code: result, operation: "posix_spawn_file_actions_init")
+        }
+        defer { posix_spawn_file_actions_destroy(&fileActions) }
+
+        result = posix_spawnattr_init(&attributes)
+        guard result == 0 else {
+            throw Self.posixError(code: result, operation: "posix_spawnattr_init")
+        }
+        defer { posix_spawnattr_destroy(&attributes) }
+
+        result = posix_spawn_file_actions_addopen(
+            &fileActions,
+            STDIN_FILENO,
+            "/dev/null",
+            O_RDONLY,
+            0
+        )
+        guard result == 0 else {
+            throw Self.posixError(code: result, operation: "redirect stdin")
+        }
+        result = posix_spawn_file_actions_adddup2(&fileActions, stdoutPipe.write, STDOUT_FILENO)
+        guard result == 0 else {
+            throw Self.posixError(code: result, operation: "redirect stdout")
+        }
+        result = posix_spawn_file_actions_adddup2(&fileActions, stderrPipe.write, STDERR_FILENO)
+        guard result == 0 else {
+            throw Self.posixError(code: result, operation: "redirect stderr")
+        }
+
+        for descriptor in [stdoutPipe.read, stdoutPipe.write, stderrPipe.read, stderrPipe.write] {
+            result = posix_spawn_file_actions_addclose(&fileActions, descriptor)
+            guard result == 0 else {
+                throw Self.posixError(code: result, operation: "close inherited pipe")
+            }
+        }
+
+        result = workingDirectory.withUnsafeFileSystemRepresentation { path in
+            guard let path else { return EINVAL }
+            return posix_spawn_file_actions_addchdir_np(&fileActions, path)
+        }
+        guard result == 0 else {
+            throw Self.posixError(code: result, operation: "set working directory")
+        }
+
+        result = posix_spawnattr_setpgroup(&attributes, 0)
+        guard result == 0 else {
+            throw Self.posixError(code: result, operation: "set process group")
+        }
+
+        var defaultSignals = sigset_t()
+        guard sigfillset(&defaultSignals) == 0,
+              sigdelset(&defaultSignals, SIGKILL) == 0,
+              sigdelset(&defaultSignals, SIGSTOP) == 0 else {
+            throw Self.posixError(code: errno, operation: "configure default signals")
+        }
+        result = posix_spawnattr_setsigdefault(&attributes, &defaultSignals)
+        guard result == 0 else {
+            throw Self.posixError(code: result, operation: "set default signals")
+        }
+
+        var signalMask = sigset_t()
+        guard sigemptyset(&signalMask) == 0 else {
+            throw Self.posixError(code: errno, operation: "configure signal mask")
+        }
+        result = posix_spawnattr_setsigmask(&attributes, &signalMask)
+        guard result == 0 else {
+            throw Self.posixError(code: result, operation: "clear signal mask")
+        }
+
+        let spawnFlags = POSIX_SPAWN_SETPGROUP
+            | POSIX_SPAWN_SETSIGDEF
+            | POSIX_SPAWN_SETSIGMASK
+            | POSIX_SPAWN_CLOEXEC_DEFAULT
+        result = posix_spawnattr_setflags(&attributes, Int16(spawnFlags))
+        guard result == 0 else {
+            throw Self.posixError(code: result, operation: "enable process group")
+        }
+
+        let argumentPointers = try Self.makeCStringPointers(arguments)
+        defer { Self.freeCStringPointers(argumentPointers) }
+        var argumentVector = argumentPointers + [nil]
+
+        let environment = ProcessInfo.processInfo.environment.map { "\($0.key)=\($0.value)" }
+        let environmentPointers = try Self.makeCStringPointers(environment)
+        defer { Self.freeCStringPointers(environmentPointers) }
+        var environmentVector = environmentPointers + [nil]
+
+        var processID: pid_t = 0
+        result = executablePath.withCString { executablePointer in
+            argumentVector.withUnsafeMutableBufferPointer { argumentsBuffer in
+                environmentVector.withUnsafeMutableBufferPointer { environmentBuffer in
+                    posix_spawn(
+                        &processID,
+                        executablePointer,
+                        &fileActions,
+                        &attributes,
+                        argumentsBuffer.baseAddress,
+                        environmentBuffer.baseAddress
+                    )
+                }
+            }
+        }
+        guard result == 0 else {
+            throw Self.posixError(code: result, operation: "posix_spawn")
+        }
+
+        return processID
+    }
+
+    private func monitor(
+        processID: pid_t,
+        stdoutDescriptor: Int32,
+        stderrDescriptor: Int32
+    ) throws -> ShellExecutionResult {
+        var stdoutDescriptor: Int32? = stdoutDescriptor
+        var stderrDescriptor: Int32? = stderrDescriptor
+        defer {
+            stdoutDescriptor.map(Self.closeDescriptor)
+            stderrDescriptor.map(Self.closeDescriptor)
+        }
+
+        var stdout = Data()
+        var stderr = Data()
+        var remainingCaptureBytes = maximumOutputBytes
+        var waitStatus: Int32?
+        var childReapingComplete = false
+        var forcedTermination: ForcedTermination?
+        var cleanupError: Error?
+        var terminationSentAt: TimeInterval?
+        var killSentAt: TimeInterval?
+        let deadline = Self.monotonicTime() + timeout
+
+        while true {
+            var didExceedOutputLimit = false
+            do {
+                try Self.drain(
+                    &stdoutDescriptor,
+                    into: &stdout,
+                    remainingCaptureBytes: &remainingCaptureBytes,
+                    didExceedOutputLimit: &didExceedOutputLimit
+                )
+            } catch {
+                stdoutDescriptor.map(Self.closeDescriptor)
+                stdoutDescriptor = nil
+                forcedTermination = .infrastructure(error)
+            }
+            do {
+                try Self.drain(
+                    &stderrDescriptor,
+                    into: &stderr,
+                    remainingCaptureBytes: &remainingCaptureBytes,
+                    didExceedOutputLimit: &didExceedOutputLimit
+                )
+            } catch {
+                stderrDescriptor.map(Self.closeDescriptor)
+                stderrDescriptor = nil
+                forcedTermination = .infrastructure(error)
+            }
+
+            if didExceedOutputLimit, forcedTermination == nil {
+                forcedTermination = .outputLimitExceeded(maximumBytes: maximumOutputBytes)
+            }
+
+            // Normal completion can reap once both streams reach EOF. Forced cleanup
+            // retains the child through group signaling so its PID anchors the PGID.
+            if forcedTermination == nil,
+               !childReapingComplete,
+               stdoutDescriptor == nil,
+               stderrDescriptor == nil {
+                do {
+                    if let status = try Self.reapIfExited(processID) {
+                        waitStatus = status
+                        childReapingComplete = true
+                    }
+                } catch {
+                    childReapingComplete = Self.isNoChildError(error)
+                    forcedTermination = .infrastructure(error)
+                }
+            }
+
+            if forcedTermination == nil,
+               let waitStatus,
+               stdoutDescriptor == nil,
+               stderrDescriptor == nil {
+                return ShellExecutionResult(
+                    stdout: stdout,
+                    stderr: stderr,
+                    exitCode: Self.exitCode(from: waitStatus)
+                )
+            }
+
+            let now = Self.monotonicTime()
+            if forcedTermination == nil {
+                if isCancellationRequested {
+                    forcedTermination = .cancelled
+                } else if now >= deadline {
+                    forcedTermination = .timeout
+                }
+            }
+
+            // ECHILD means another owner already reaped the direct child. With both
+            // streams closed there is no safely owned PID/PGID left to signal.
+            if forcedTermination != nil,
+               childReapingComplete,
+               waitStatus == nil,
+               stdoutDescriptor == nil,
+               stderrDescriptor == nil {
+                throw Self.error(for: forcedTermination!)
+            }
+
+            if forcedTermination != nil, terminationSentAt == nil {
+                terminationSentAt = now
+                do {
+                    _ = try Self.signalProcessGroup(processID, signal: SIGTERM)
+                } catch {
+                    cleanupError = error
+                }
+            }
+
+            if forcedTermination != nil {
+                var groupExists: Bool
+                do {
+                    groupExists = try Self.processGroupExists(processID)
+                } catch {
+                    cleanupError = error
+                    groupExists = true
+                }
+
+                if !groupExists,
+                   childReapingComplete,
+                   stdoutDescriptor == nil,
+                   stderrDescriptor == nil {
+                    throw Self.error(for: forcedTermination!)
+                }
+
+                if killSentAt == nil,
+                   let terminationSentAt,
+                   now - terminationSentAt >= terminationGracePeriod {
+                    if groupExists {
+                        do {
+                            _ = try Self.signalProcessGroup(processID, signal: SIGKILL)
+                        } catch {
+                            cleanupError = error
+                        }
+                    }
+                    killSentAt = now
+                }
+
+                if killSentAt != nil,
+                   !childReapingComplete,
+                   stdoutDescriptor == nil,
+                   stderrDescriptor == nil {
+                    do {
+                        if let status = try Self.reapIfExited(processID) {
+                            waitStatus = status
+                            childReapingComplete = true
+                        }
+                    } catch {
+                        childReapingComplete = Self.isNoChildError(error)
+                        forcedTermination = .infrastructure(error)
+                    }
+                }
+
+                if killSentAt != nil, childReapingComplete {
+                    do {
+                        groupExists = try Self.processGroupExists(processID)
+                    } catch {
+                        cleanupError = error
+                        groupExists = true
+                    }
+                    if !groupExists,
+                       stdoutDescriptor == nil,
+                       stderrDescriptor == nil {
+                        throw Self.error(for: forcedTermination!)
+                    }
+                }
+
+                // Process-group cleanup cannot reach descendants that deliberately move to
+                // another group. Bound pipe cleanup and transfer direct-child reaping rather
+                // than letting such a descendant hang the caller.
+                if let killSentAt,
+                   now - killSentAt >= max(1, terminationGracePeriod * 4) {
+                    stdoutDescriptor.map(Self.closeDescriptor)
+                    stderrDescriptor.map(Self.closeDescriptor)
+                    stdoutDescriptor = nil
+                    stderrDescriptor = nil
+
+                    if !childReapingComplete {
+                        do {
+                            if let status = try Self.reapIfExited(processID) {
+                                waitStatus = status
+                                childReapingComplete = true
+                            }
+                        } catch {
+                            childReapingComplete = Self.isNoChildError(error)
+                            forcedTermination = .infrastructure(error)
+                        }
+                    }
+                    if !childReapingComplete {
+                        Self.transferReaping(processID)
+                        childReapingComplete = true
+                    }
+                    var finalGroupExists = groupExists
+                    if waitStatus != nil {
+                        do {
+                            finalGroupExists = try Self.processGroupExists(processID)
+                        } catch {
+                            cleanupError = error
+                            finalGroupExists = true
+                        }
+                    }
+                    if finalGroupExists, let cleanupError {
+                        forcedTermination = .infrastructure(cleanupError)
+                    } else if finalGroupExists {
+                        forcedTermination = .infrastructure(
+                            Self.posixError(
+                                code: EBUSY,
+                                operation: "subprocess group survived cleanup"
+                            )
+                        )
+                    }
+                    throw Self.error(for: forcedTermination!)
+                }
+            }
+
+            var descriptors = [pollfd]()
+            if let stdoutDescriptor {
+                descriptors.append(pollfd(fd: stdoutDescriptor, events: Int16(POLLIN | POLLHUP | POLLERR), revents: 0))
+            }
+            if let stderrDescriptor {
+                descriptors.append(pollfd(fd: stderrDescriptor, events: Int16(POLLIN | POLLHUP | POLLERR), revents: 0))
+            }
+
+            let pollResult = descriptors.withUnsafeMutableBufferPointer { buffer in
+                Darwin.poll(buffer.baseAddress, nfds_t(buffer.count), Self.pollIntervalMilliseconds)
+            }
+            if pollResult < 0, errno != EINTR {
+                forcedTermination = forcedTermination ?? .infrastructure(
+                    Self.posixError(code: errno, operation: "poll")
+                )
+            }
+        }
+    }
+
+    private static func makePipe() throws -> PipeDescriptors {
+        var descriptors = [Int32](repeating: -1, count: 2)
+        guard Darwin.pipe(&descriptors) == 0 else {
+            throw posixError(code: errno, operation: "pipe")
+        }
+
+        // A GUI process is allowed to start with stdin/stdout/stderr closed. Move pipe
+        // descriptors above that range so child file actions can never close a freshly
+        // duplicated standard stream by aliasing its source descriptor.
+        for index in descriptors.indices where descriptors[index] <= STDERR_FILENO {
+            let originalDescriptor = descriptors[index]
+            let duplicateDescriptor = fcntl(
+                originalDescriptor,
+                F_DUPFD_CLOEXEC,
+                STDERR_FILENO + 1
+            )
+            guard duplicateDescriptor >= 0 else {
+                let error = posixError(code: errno, operation: "fcntl(F_DUPFD_CLOEXEC)")
+                descriptors.forEach(closeDescriptor)
+                throw error
+            }
+            closeDescriptor(originalDescriptor)
+            descriptors[index] = duplicateDescriptor
+        }
+
+        for descriptor in descriptors {
+            let flags = fcntl(descriptor, F_GETFD)
+            if flags < 0 || fcntl(descriptor, F_SETFD, flags | FD_CLOEXEC) < 0 {
+                let error = posixError(code: errno, operation: "fcntl(FD_CLOEXEC)")
+                closeDescriptor(descriptors[0])
+                closeDescriptor(descriptors[1])
+                throw error
+            }
+        }
+
+        return PipeDescriptors(read: descriptors[0], write: descriptors[1])
+    }
+
+    private static func configureReadDescriptor(_ descriptor: Int32) throws {
+        let flags = fcntl(descriptor, F_GETFL)
+        guard flags >= 0, fcntl(descriptor, F_SETFL, flags | O_NONBLOCK) == 0 else {
+            throw posixError(code: errno, operation: "fcntl(O_NONBLOCK)")
+        }
+    }
+
+    private static func drain(
+        _ descriptor: inout Int32?,
+        into data: inout Data,
+        remainingCaptureBytes: inout Int,
+        didExceedOutputLimit: inout Bool
+    ) throws {
+        guard let openDescriptor = descriptor else { return }
+        var buffer = [UInt8](repeating: 0, count: readBufferSize)
+
+        for _ in 0..<readsPerStreamPerPass {
+            let byteCount = Darwin.read(openDescriptor, &buffer, buffer.count)
+            if byteCount > 0 {
+                let retainedByteCount = min(byteCount, remainingCaptureBytes)
+                if retainedByteCount > 0 {
+                    data.append(buffer, count: retainedByteCount)
+                    remainingCaptureBytes -= retainedByteCount
+                }
+                if retainedByteCount < byteCount {
+                    didExceedOutputLimit = true
+                }
+                continue
+            }
+            if byteCount == 0 {
+                closeDescriptor(openDescriptor)
+                descriptor = nil
+                return
+            }
+            if errno == EINTR {
+                continue
+            }
+            if errno == EAGAIN || errno == EWOULDBLOCK {
+                return
+            }
+            throw posixError(code: errno, operation: "read subprocess output")
+        }
+    }
+
+    private static func reapIfExited(_ processID: pid_t) throws -> Int32? {
+        while true {
+            var status: Int32 = 0
+            let result = waitpid(processID, &status, WNOHANG)
+            if result == processID {
+                return status
+            }
+            if result == 0 {
+                return nil
+            }
+            if errno == EINTR {
+                continue
+            }
+            throw posixError(code: errno, operation: "waitpid")
+        }
+    }
+
+    private static func exitCode(from waitStatus: Int32) -> Int32 {
+        let terminationSignal = waitStatus & 0x7f
+        if terminationSignal == 0 {
+            return (waitStatus >> 8) & 0xff
+        }
+        return 128 + terminationSignal
+    }
+
+    @discardableResult
+    private static func signalProcessGroup(_ processID: pid_t, signal: Int32) throws -> Bool {
+        if Darwin.kill(-processID, signal) == 0 {
+            return true
+        }
+        let errorCode = errno
+        guard errorCode != ESRCH else { return false }
+        throw posixError(code: errorCode, operation: "signal subprocess group")
+    }
+
+    private static func processGroupExists(_ processID: pid_t) throws -> Bool {
+        if Darwin.kill(-processID, 0) == 0 {
+            return true
+        }
+        let errorCode = errno
+        if errorCode == ESRCH {
+            return false
+        }
+        if errorCode == EPERM {
+            return true
+        }
+        throw posixError(code: errorCode, operation: "inspect subprocess group")
+    }
+
+    private static func error(for forcedTermination: ForcedTermination) -> Error {
+        switch forcedTermination {
+        case .timeout:
+            return ShellExecutorError.timeout
+        case .cancelled:
+            return CancellationError()
+        case .outputLimitExceeded(let maximumBytes):
+            return ShellExecutorError.outputLimitExceeded(maximumBytes: maximumBytes)
+        case .infrastructure(let error):
+            return ShellExecutorError.launchFailed(underlying: error)
+        }
+    }
+
+    private static func isNoChildError(_ error: Error) -> Bool {
+        let error = error as NSError
+        return error.domain == NSPOSIXErrorDomain && error.code == Int(ECHILD)
+    }
+
+    private static func transferReaping(_ processID: pid_t) {
+        ShellChildReaper.shared.takeOwnership(of: processID)
+    }
+
+    private static func makeCStringPointers(
+        _ strings: [String]
+    ) throws -> [UnsafeMutablePointer<CChar>?] {
+        var pointers = [UnsafeMutablePointer<CChar>?]()
+        pointers.reserveCapacity(strings.count)
+
+        for string in strings {
+            guard let pointer = strdup(string) else {
+                freeCStringPointers(pointers)
+                throw posixError(code: ENOMEM, operation: "strdup")
+            }
+            pointers.append(pointer)
+        }
+        return pointers
+    }
+
+    private static func freeCStringPointers(_ pointers: [UnsafeMutablePointer<CChar>?]) {
+        for pointer in pointers {
+            free(pointer)
+        }
+    }
+
+    private static func monotonicTime() -> TimeInterval {
+        ProcessInfo.processInfo.systemUptime
+    }
+
+    private static func closeDescriptor(_ descriptor: Int32) {
+        guard descriptor >= 0 else { return }
+        _ = Darwin.close(descriptor)
+    }
+
+    private static func posixError(code: Int32, operation: String) -> NSError {
+        let reason = String(cString: strerror(code))
+        return NSError(
+            domain: NSPOSIXErrorDomain,
+            code: Int(code),
+            userInfo: [NSLocalizedDescriptionKey: "\(operation): \(reason)"]
+        )
+    }
+}
+
+/// Retains process-exit sources for children whose cleanup outlives a command call.
+/// No worker thread blocks while a stubborn child remains alive.
+nonisolated private final class ShellChildReaper: @unchecked Sendable {
+    static let shared = ShellChildReaper()
+
+    private let lock = NSLock()
+    private let queue = DispatchQueue(
+        label: "com.agentlimits.shell-child-reaper",
+        qos: .utility
+    )
+    private var sources: [pid_t: DispatchSourceProcess] = [:]
+
+    func takeOwnership(of processID: pid_t) {
+        let source = DispatchSource.makeProcessSource(
+            identifier: processID,
+            eventMask: .exit,
+            queue: queue
+        )
+        source.setEventHandler { [weak self] in
+            self?.reapAndRemove(processID)
+        }
+
+        lock.lock()
+        guard sources[processID] == nil else {
+            lock.unlock()
+            source.cancel()
+            source.resume()
+            return
+        }
+        sources[processID] = source
+        lock.unlock()
+
+        source.resume()
+    }
+
+    private func reapAndRemove(_ processID: pid_t) {
+        var status: Int32 = 0
+        while waitpid(processID, &status, 0) < 0, errno == EINTR {}
+
+        lock.lock()
+        let source = sources.removeValue(forKey: processID)
+        lock.unlock()
+        source?.cancel()
     }
 }
