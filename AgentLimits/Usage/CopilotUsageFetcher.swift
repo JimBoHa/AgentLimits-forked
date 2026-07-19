@@ -32,6 +32,14 @@ struct CopilotUsageResponse: Codable {
 }
 
 extension CopilotUsageResponse {
+    /// Copilot reset dates are date-only UTC billing boundaries.
+    private static let billingCalendar: Calendar = {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.locale = Locale(identifier: "en_US_POSIX")
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        return calendar
+    }()
+
     /// Date formatter for parsing resetDate ("yyyy-MM-dd")
     private static let resetDateFormatter: DateFormatter = {
         let formatter = DateFormatter()
@@ -86,7 +94,7 @@ extension CopilotUsageResponse {
         guard let resetAt = resetAt else {
             return UsageLimitDuration.thirtyDays
         }
-        let cal = Calendar.current
+        let cal = Self.billingCalendar
         // Assume billing period starts on the 1st of the previous or current month
         let resetComponents = cal.dateComponents([.year, .month], from: resetAt)
         guard let resetMonth = resetComponents.month,
