@@ -44,6 +44,7 @@
 - [ ] PKG has a valid Developer ID Installer signature.
 - [ ] DMG has a valid Developer ID Application signature from the same Team.
 - [ ] Apple accepts app, PKG, and DMG notarization submissions.
+- [ ] Every Apple notarization log matches its submission and has zero issues.
 - [ ] Stapler validation and Gatekeeper app/package assessments pass.
 - [ ] DMG integrity and clean-user quarantine installation pass.
 
