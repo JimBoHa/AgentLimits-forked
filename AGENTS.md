@@ -5,9 +5,9 @@
 - The app logs in via an embedded WKWebView and fetches:
   - Codex: `https://chatgpt.com/backend-api/wham/usage`
   - Claude Code: `https://claude.ai/api/organizations/{orgId}/usage`
-- ccusage token usage is fetched via CLI:
-  - Codex: `npx -y ccusage@latest codex daily`
-  - Claude Code: `npx -y ccusage@latest claude daily`
+- ccusage token usage is fetched via a preinstalled CLI:
+  - Codex: `ccusage codex daily`
+  - Claude Code: `ccusage claude daily`
 - Each widget reads a provider-specific snapshot from the App Group storage and only renders UI.
 - Menu bar displays real-time usage percentages for enabled providers.
 
@@ -75,7 +75,7 @@
 - Usage color settings (donut + status colors) are configured in Notification settings
 
 ### Advanced Settings (CLI Paths / Scripts / Widget Tap)
-- Full path overrides for `codex`, `claude`, `npx`
+- Full path overrides for `codex`, `claude`, `ccusage`
 - Resolved PATH results shown in UI
 - Bundled status line script path shown with copy action
 - Widget tap action configuration (open website / refresh data)
@@ -148,7 +148,7 @@
 | `ccusage_settings` | ccusage settings (JSON) |
 | `cli_path_codex` | Full path override for codex |
 | `cli_path_claude` | Full path override for claude |
-| `cli_path_npx` | Full path override for npx |
+| `cli_path_ccusage` | Full path override for ccusage |
 | `usage_color_donut` | Donut ring color (widget) |
 | `usage_color_donut_use_status` | Donut uses usage status colors |
 | `usage_color_green` | Usage normal color |

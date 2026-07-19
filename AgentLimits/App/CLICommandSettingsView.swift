@@ -16,9 +16,9 @@ struct CLICommandSettingsView: View {
     ) private var claudeCommandPathText: String = ""
 
     @AppStorage(
-        CLICommandPathKeys.npx,
+        CLICommandPathKeys.ccusage,
         store: AppGroupDefaults.shared
-    ) private var npxCommandPathText: String = ""
+    ) private var ccusageCommandPathText: String = ""
 
     @State private var resolvedPaths: [CLICommandKind: String] = [:]
     @State private var scriptCopyFeedback: Bool = false
@@ -55,7 +55,7 @@ struct CLICommandSettingsView: View {
         .onAppear { refreshAllResolvedPaths() }
         .onChange(of: codexCommandPathText) { refreshResolvedPath(for: .codex) }
         .onChange(of: claudeCommandPathText) { refreshResolvedPath(for: .claude) }
-        .onChange(of: npxCommandPathText) { refreshResolvedPath(for: .npx) }
+        .onChange(of: ccusageCommandPathText) { refreshResolvedPath(for: .ccusage) }
     }
 
     private struct CommandPathDescriptor: Identifiable {
@@ -79,9 +79,9 @@ struct CLICommandSettingsView: View {
                 placeholderKey: "cliPaths.claude.placeholder"
             ),
             CommandPathDescriptor(
-                kind: .npx,
-                titleKey: "cliPaths.npx",
-                placeholderKey: "cliPaths.npx.placeholder"
+                kind: .ccusage,
+                titleKey: "cliPaths.ccusage",
+                placeholderKey: "cliPaths.ccusage.placeholder"
             )
         ]
     }
@@ -201,8 +201,8 @@ struct CLICommandSettingsView: View {
             return codexCommandPathText
         case .claude:
             return claudeCommandPathText
-        case .npx:
-            return npxCommandPathText
+        case .ccusage:
+            return ccusageCommandPathText
         }
     }
 
@@ -212,8 +212,8 @@ struct CLICommandSettingsView: View {
             return $codexCommandPathText
         case .claude:
             return $claudeCommandPathText
-        case .npx:
-            return $npxCommandPathText
+        case .ccusage:
+            return $ccusageCommandPathText
         }
     }
 

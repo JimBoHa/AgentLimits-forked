@@ -154,10 +154,10 @@
 "cliPaths.sectionTitle" = "Шляхи команд CLI";
 "cliPaths.codex" = "шлях codex";
 "cliPaths.claude" = "шлях claude";
-"cliPaths.npx" = "шлях npx";
+"cliPaths.ccusage" = "шлях ccusage";
 "cliPaths.codex.placeholder" = "напр. /opt/homebrew/bin/codex";
 "cliPaths.claude.placeholder" = "напр. /opt/homebrew/bin/claude";
-"cliPaths.npx.placeholder" = "напр. /opt/homebrew/bin/npx";
+"cliPaths.ccusage.placeholder" = "напр. /opt/homebrew/bin/ccusage";
 "cliPaths.note" = "Зміни набудуть чинності під час наступного запуску CLI.";
 "cliPaths.resolvedLabel" = "Визначено:";
 "cliPaths.notFound" = "Не знайдено";

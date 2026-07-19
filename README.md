@@ -24,9 +24,9 @@ Fork releases: [JimBoHa/AgentLimits-forked releases](https://github.com/JimBoHa/
   - Claude Code: `https://claude.ai/api/organizations/{orgId}/usage`
 - **Usage limits (GitHub Copilot):** Monthly premium interaction quota via entitlement API.
   - Copilot: `https://github.com/github-copilot/chat/entitlement`
-- **Token usage (ccusage):** daily/weekly/monthly tokens and cost via CLI.
-  - Codex: `npx -y ccusage@latest codex daily`
-  - Claude Code: `npx -y ccusage@latest claude daily`
+- **Token usage (ccusage):** daily/weekly/monthly tokens and cost via a preinstalled CLI.
+  - Codex: `ccusage codex daily`
+  - Claude Code: `ccusage claude daily`
 - **Premium request usage (Copilot):** daily premium request count and cost via WebView.
   - API: `https://github.com/settings/billing/usage_table` (fetched automatically with Copilot usage)
 
@@ -138,7 +138,7 @@ Pacemaker shows a time-based usage benchmark to help you stay on track.
 
 ### Advanced
 1. Open **Advanced**.
-2. Set full paths for `codex`, `claude`, `npx` if needed (blank = resolve via PATH).
+2. Set full paths for `codex`, `claude`, and `ccusage` if needed (blank = resolve via PATH).
 3. Review PATH resolution results.
 4. Choose widget tap action (open website / refresh data).
 5. Toggle **Hide menu bar icon** to completely hide the icon from the menu bar. To access settings while hidden, double-click the app icon while it is still running.
@@ -177,6 +177,7 @@ Snapshots are stored in the App Group container:
 - ccusage output changes may break parsing.
 - Widget refresh can be throttled by macOS.
 - Threshold notifications require permission.
+- Install ccusage explicitly first (for example, `npm install -g ccusage`) and review upgrades before applying them. AgentLimits never downloads or runs `ccusage@latest` automatically.
 - CLI execution uses the **user login shell** and prefixes PATH with `/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH`.
 - Full-path overrides in **Advanced** take precedence.
 - Claude Code logins may require multiple attempts.

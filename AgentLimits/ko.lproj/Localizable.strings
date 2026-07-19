@@ -154,10 +154,10 @@
 "cliPaths.sectionTitle" = "CLI 명령 경로";
 "cliPaths.codex" = "codex 경로";
 "cliPaths.claude" = "claude 경로";
-"cliPaths.npx" = "npx 경로";
+"cliPaths.ccusage" = "ccusage 경로";
 "cliPaths.codex.placeholder" = "예: /opt/homebrew/bin/codex";
 "cliPaths.claude.placeholder" = "예: /opt/homebrew/bin/claude";
-"cliPaths.npx.placeholder" = "예: /opt/homebrew/bin/npx";
+"cliPaths.ccusage.placeholder" = "예: /opt/homebrew/bin/ccusage";
 "cliPaths.note" = "변경 사항은 다음 CLI 실행부터 적용됩니다.";
 "cliPaths.resolvedLabel" = "해결됨:";
 "cliPaths.notFound" = "찾을 수 없음";

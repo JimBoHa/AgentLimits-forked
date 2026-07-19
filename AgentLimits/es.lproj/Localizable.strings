@@ -154,10 +154,10 @@
 "cliPaths.sectionTitle" = "Rutas de comandos CLI";
 "cliPaths.codex" = "ruta de codex";
 "cliPaths.claude" = "ruta de claude";
-"cliPaths.npx" = "ruta de npx";
+"cliPaths.ccusage" = "ruta de ccusage";
 "cliPaths.codex.placeholder" = "p. ej. /opt/homebrew/bin/codex";
 "cliPaths.claude.placeholder" = "p. ej. /opt/homebrew/bin/claude";
-"cliPaths.npx.placeholder" = "p. ej. /opt/homebrew/bin/npx";
+"cliPaths.ccusage.placeholder" = "p. ej. /opt/homebrew/bin/ccusage";
 "cliPaths.note" = "Los cambios se aplican en la próxima ejecución de CLI.";
 "cliPaths.resolvedLabel" = "Resuelto:";
 "cliPaths.notFound" = "No encontrado";
