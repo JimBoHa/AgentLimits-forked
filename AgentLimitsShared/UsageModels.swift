@@ -10,17 +10,53 @@ import SwiftUI
 
 /// App Group configuration for shared data access between App and Widget
 enum AppGroupConfig {
-    static let groupId = "group.com.dmng.agentlimit"
+    static let infoDictionaryKey = "AgentLimitsAppGroupIdentifier"
+    static let forkGroupIdentifier = "group.com.jimboha.agentlimits.macos"
     static let appLanguageKey = "app_language"
-    static let snapshotDirectory = "Library/Application Support/AgentLimit"
+    static let snapshotDirectory = "Library/Application Support/AgentLimitsForked"
     static let usageRefreshIntervalMinutesKey = "usage_refresh_interval_minutes"
     static let tokenUsageRefreshIntervalMinutesKey = "token_usage_refresh_interval_minutes"
+
+    /// Build-configured App Group. Missing or unexpected production values fail closed.
+    static var groupId: String? {
+        resolveGroupIdentifier(
+            Bundle.main.object(forInfoDictionaryKey: infoDictionaryKey) as? String,
+            isRunningTests: isRunningTests
+        )
+    }
+
+    /// Tests without a built host Info.plist use only fork-owned test-safe fallback.
+    static func resolveGroupIdentifier(
+        _ configuredValue: String?,
+        isRunningTests: Bool
+    ) -> String? {
+        let candidate = configuredValue?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let candidate, !candidate.isEmpty else {
+            return isRunningTests ? forkGroupIdentifier : nil
+        }
+        guard candidate == forkGroupIdentifier else { return nil }
+        return candidate
+    }
+
+    private static var isRunningTests: Bool {
+        let environment = ProcessInfo.processInfo.environment
+        return environment["XCTestConfigurationFilePath"] != nil
+            || environment["XCTestBundlePath"] != nil
+            || NSClassFromString("XCTestCase") != nil
+            || NSClassFromString("XCTest.XCTestCase") != nil
+    }
+}
+
+enum DeepLinkConfig {
+    static let scheme = "agentlimits-forked"
 }
 
 /// Shared UserDefaults accessor for the App Group container.
 enum AppGroupDefaults {
     static var shared: UserDefaults? {
-        UserDefaults(suiteName: AppGroupConfig.groupId)
+        guard let groupId = AppGroupConfig.groupId else { return nil }
+        return UserDefaults(suiteName: groupId)
     }
 }
 
@@ -728,7 +764,9 @@ enum UsageProvider:
     /// Deep link URL for widget tap action.
     /// Constructs a URL with the provider's rawValue as a query parameter.
     var widgetDeepLinkURL: URL {
-        guard let url = URL(string: "agentlimits://open-usage?provider=\(rawValue)") else {
+        guard let url = URL(
+            string: "\(DeepLinkConfig.scheme)://open-usage?provider=\(rawValue)"
+        ) else {
             preconditionFailure("Invalid deep link URL for provider: \(rawValue)")
         }
         return url
@@ -1371,8 +1409,10 @@ struct AppGroupSnapshotStore<Provider: SnapshotFileNaming, Snapshot: SnapshotDat
     }
 
     private var resolvedContainerURL: URL? {
-        containerURLOverride ?? fileManager.containerURL(
-            forSecurityApplicationGroupIdentifier: AppGroupConfig.groupId
+        if let containerURLOverride { return containerURLOverride }
+        guard let groupId = AppGroupConfig.groupId else { return nil }
+        return fileManager.containerURL(
+            forSecurityApplicationGroupIdentifier: groupId
         )
     }
 

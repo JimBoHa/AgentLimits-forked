@@ -3,7 +3,6 @@ import Foundation
 /// Language helper for widget that reads settings from App Group
 enum WidgetLanguageHelper {
     private static let languageKey = AppGroupConfig.appLanguageKey
-    private static let groupId = AppGroupConfig.groupId
 
     private static var cachedBundle: Bundle?
     private static var cachedLanguageCode: String?
@@ -38,8 +37,7 @@ enum WidgetLanguageHelper {
     }
 
     private static var effectiveLanguageCode: String {
-        let sharedDefaults = UserDefaults(suiteName: groupId)
-        let rawValue = sharedDefaults?.string(forKey: languageKey)
+        let rawValue = AppGroupDefaults.shared?.string(forKey: languageKey)
         return LanguageCodeResolver.effectiveLanguageCode(for: rawValue)
     }
 

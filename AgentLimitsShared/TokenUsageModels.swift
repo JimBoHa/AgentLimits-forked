@@ -112,7 +112,9 @@ enum TokenUsageProvider: String, Codable, CaseIterable, Identifiable, SnapshotFi
     /// Deep link URL for widget tap action.
     /// Constructs a URL with the provider's rawValue as a query parameter.
     var widgetDeepLinkURL: URL {
-        guard let url = URL(string: "agentlimits://open-token-usage?provider=\(rawValue)") else {
+        guard let url = URL(
+            string: "\(DeepLinkConfig.scheme)://open-token-usage?provider=\(rawValue)"
+        ) else {
             preconditionFailure("Invalid deep link URL for token usage provider: \(rawValue)")
         }
         return url

@@ -1,9 +1,15 @@
 // MARK: - AppUpdateController.swift
 // Sparkle アップデータのシングルトンラッパー。
-// フィード URL と公開鍵が両方設定されている配布ビルドでのみ updater を起動する。
+// フォーク所有の配布経路が別途レビューされるまで updater は起動しない。
 
 import Combine
 import Sparkle
+
+/// Enabling updates requires a reviewed source change, not mutable defaults or
+/// an accidentally inherited Info.plist feed.
+nonisolated enum ForkUpdatePolicy {
+    static let allowsAutomaticUpdates = false
+}
 
 /// Sparkle の SPUStandardUpdaterController をラップし、SwiftUI へ状態を公開するコントローラ。
 @MainActor
@@ -13,7 +19,7 @@ final class AppUpdateController: ObservableObject {
 
     let updater: SPUUpdater
 
-    /// Fork-owned feed and EdDSA public key are both present.
+    /// Always false until a fork-owned feed and EdDSA trust path are reviewed.
     let isConfigured: Bool
 
     private let controller: SPUStandardUpdaterController
@@ -30,10 +36,7 @@ final class AppUpdateController: ObservableObject {
     private var cancellables = Set<AnyCancellable>()
 
     private init() {
-        let bundle = Bundle.main
-        let feedURL = bundle.object(forInfoDictionaryKey: "SUFeedURL") as? String
-        let publicKey = bundle.object(forInfoDictionaryKey: "SUPublicEDKey") as? String
-        let isConfigured = Self.hasValue(feedURL) && Self.hasValue(publicKey)
+        let isConfigured = ForkUpdatePolicy.allowsAutomaticUpdates
 
         self.isConfigured = isConfigured
         controller = SPUStandardUpdaterController(
@@ -42,8 +45,7 @@ final class AppUpdateController: ObservableObject {
             userDriverDelegate: nil
         )
         updater = controller.updater
-        // The fork currently shares the upstream bundle identifier. Remove any
-        // feed previously persisted by older builds before trusting bundle config.
+        // Trust only fork build configuration, never a persisted feed override.
         updater.clearFeedURLFromUserDefaults()
         if isConfigured {
             controller.startUpdater()
@@ -76,10 +78,5 @@ final class AppUpdateController: ObservableObject {
         }
         updater.automaticallyChecksForUpdates = enabled
         automaticChecksEnabled = enabled
-    }
-
-    private static func hasValue(_ value: String?) -> Bool {
-        guard let value else { return false }
-        return !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 }

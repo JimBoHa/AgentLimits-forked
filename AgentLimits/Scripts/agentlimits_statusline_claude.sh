@@ -16,10 +16,10 @@
 set -euo pipefail
 
 # App Group identifier
-APP_GROUP="group.com.dmng.agentlimit"
+APP_GROUP="group.com.jimboha.agentlimits.macos"
 
 # Snapshot file path
-SNAPSHOT_FILE="$HOME/Library/Group Containers/${APP_GROUP}/Library/Application Support/AgentLimit/usage_snapshot_claude.json"
+SNAPSHOT_FILE="$HOME/Library/Group Containers/${APP_GROUP}/Library/Application Support/AgentLimitsForked/usage_snapshot_claude.json"
 
 # ANSI color codes
 GRAY='\033[90m'

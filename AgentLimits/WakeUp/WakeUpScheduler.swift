@@ -10,10 +10,16 @@ import OSLog
 
 /// LaunchAgent configuration constants
 enum LaunchAgentConfig {
-    static let labelPrefix = "com.dmng.agentlimit.wakeup"
+    static let labelPrefix = "com.jimboha.agentlimits.macos.wakeup"
     static let launchAgentsPath = "Library/LaunchAgents"
-    static let logDirectoryPath = "Library/Logs/AgentLimits"
+    static let logDirectoryPath = "Library/Logs/AgentLimitsForked"
+    static let logFilePrefix = "agentlimits-forked-wakeup"
+    static let workingDirectoryPath = ".agentlimits-forked"
     static let cliTimeoutSeconds: Int = 30
+
+    static func logFileName(for provider: UsageProvider) -> String {
+        "\(logFilePrefix)-\(provider.rawValue).log"
+    }
 }
 
 struct UnsafeWakeUpLogDirectory: LocalizedError {
@@ -21,6 +27,61 @@ struct UnsafeWakeUpLogDirectory: LocalizedError {
 
     var errorDescription: String? {
         "Wake-up log directory is not a private, user-owned directory: \(path)"
+    }
+}
+
+struct UnsafeWakeUpWorkingDirectory: LocalizedError {
+    let path: String
+
+    var errorDescription: String? {
+        "Wake-up working directory is not a private, user-owned directory: \(path)"
+    }
+}
+
+enum WakeUpWorkingDirectoryResolver {
+    static func workingDirectory(
+        homeDirectory: URL? = nil,
+        fileManager: FileManager = .default
+    ) -> URL {
+        (homeDirectory ?? WakeUpLogPathResolver.realHomeDirectory(
+            fileManager: fileManager
+        )).appendingPathComponent(
+            LaunchAgentConfig.workingDirectoryPath,
+            isDirectory: true
+        )
+    }
+
+    @discardableResult
+    static func ensureSecureWorkingDirectory(
+        homeDirectory: URL? = nil,
+        fileManager: FileManager = .default
+    ) throws -> URL {
+        let directory = workingDirectory(
+            homeDirectory: homeDirectory,
+            fileManager: fileManager
+        )
+        var isDirectory: ObjCBool = false
+        if fileManager.fileExists(atPath: directory.path, isDirectory: &isDirectory) {
+            let values = try directory.resourceValues(forKeys: [.isSymbolicLinkKey])
+            let attributes = try fileManager.attributesOfItem(atPath: directory.path)
+            let ownerID = (attributes[.ownerAccountID] as? NSNumber)?.uint32Value
+            guard isDirectory.boolValue,
+                  values.isSymbolicLink != true,
+                  ownerID == getuid() else {
+                throw UnsafeWakeUpWorkingDirectory(path: directory.path)
+            }
+        } else {
+            try fileManager.createDirectory(
+                at: directory,
+                withIntermediateDirectories: true,
+                attributes: [.posixPermissions: NSNumber(value: 0o700)]
+            )
+        }
+        try fileManager.setAttributes(
+            [.posixPermissions: NSNumber(value: 0o700)],
+            ofItemAtPath: directory.path
+        )
+        return directory
     }
 }
 
@@ -49,7 +110,7 @@ enum WakeUpLogPathResolver {
         fileManager: FileManager = .default
     ) -> URL {
         logDirectory(homeDirectory: homeDirectory, fileManager: fileManager)
-            .appendingPathComponent("agentlimits-wakeup-\(provider.rawValue).log")
+            .appendingPathComponent(LaunchAgentConfig.logFileName(for: provider))
     }
 
     @discardableResult
@@ -331,6 +392,15 @@ final class LaunchAgentManager {
         guard let url = plistURL(for: schedule) else {
             Logger.wakeup.error("LaunchAgentManager: homeDirectoryNotFound")
             throw WakeUpError.homeDirectoryNotFound
+        }
+
+        do {
+            try WakeUpWorkingDirectoryResolver.ensureSecureWorkingDirectory(
+                homeDirectory: realHomeDirectory,
+                fileManager: fileManager
+            )
+        } catch {
+            throw WakeUpError.launchAgentWriteFailed(error)
         }
 
         Logger.wakeup.info("LaunchAgentManager: Installing plist at \(url.path)")
@@ -689,7 +759,9 @@ enum WakeUpCommandBuilder {
         marker: String?
     ) -> String {
         let markerSuffix = marker.map { " \($0)" } ?? ""
-        return "echo \"=== $(date)\(markerSuffix) ===\" && mkdir -p ~/.agentlimits && cd ~/.agentlimits && \(command)"
+        let workingDirectory = "$HOME/\(LaunchAgentConfig.workingDirectoryPath)"
+        let prepareDirectory = "umask 077; working_directory=\"\(workingDirectory)\"; if [ -L \"$working_directory\" ]; then exit 73; fi; mkdir -p \"$working_directory\" && chmod 700 \"$working_directory\" && [ -d \"$working_directory\" ] && [ -O \"$working_directory\" ] && cd \"$working_directory\""
+        return "\(prepareDirectory) && echo \"=== $(date)\(markerSuffix) ===\" && \(command)"
     }
 
     private static func wrapWithTimeout(command: String) -> String {
@@ -730,6 +802,10 @@ final class CLIExecutor {
     func execute(for schedule: WakeUpSchedule) async throws -> String {
         let logDirectory: URL
         do {
+            try WakeUpWorkingDirectoryResolver.ensureSecureWorkingDirectory(
+                homeDirectory: homeDirectoryOverride,
+                fileManager: fileManager
+            )
             logDirectory = try WakeUpLogPathResolver.ensureSecureLogDirectory(
                 homeDirectory: homeDirectoryOverride,
                 fileManager: fileManager
@@ -738,7 +814,9 @@ final class CLIExecutor {
             throw WakeUpError.launchAgentWriteFailed(error)
         }
         let logPath = logDirectory
-            .appendingPathComponent("agentlimits-wakeup-\(schedule.provider.rawValue).log")
+            .appendingPathComponent(
+                LaunchAgentConfig.logFileName(for: schedule.provider)
+            )
             .path
         // Build command with logging (same format as LaunchAgent, with [TEST] marker).
         let invocation: CLICommandInvocation

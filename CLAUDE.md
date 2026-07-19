@@ -166,7 +166,9 @@ xcodebuild test -scheme AgentLimits -destination 'platform=macOS'
 #### Wake Up (LaunchAgent-based CLI Scheduler)
 - Schedules CLI commands (`codex exec --skip-git-repo-check "hello"` / `claude -p "hello"`) at user-defined hours
 - Creates LaunchAgent plist files in `~/Library/LaunchAgents/`
-- Logs CLI output to `/tmp/agentlimit-wakeup-*.log`
+- Uses fork-owned LaunchAgent label prefix `com.jimboha.agentlimits.macos.wakeup`
+- Logs CLI output to `~/Library/Logs/AgentLimitsForked/agentlimits-forked-wakeup-*.log`
+- Runs commands from `~/.agentlimits-forked/`
 - Per-provider schedule with additional CLI arguments support
 - Test execution from settings UI
 
@@ -215,10 +217,10 @@ Monthly-only usage windows:
 - `dailyUsage`: `[DailyUsageEntry]` - Daily usage entries for heatmap (ISO8601 date string + totalTokens)
 - `fetchedAt`: Date
 
-### Storage Paths (App Group: `group.com.dmng.agentlimit`)
+### Storage Paths (App Group: `group.com.jimboha.agentlimits.macos`)
 
 ```
-~/Library/Group Containers/group.com.dmng.agentlimit/Library/Application Support/AgentLimit/
+~/Library/Group Containers/group.com.jimboha.agentlimits.macos/Library/Application Support/AgentLimitsForked/
 ├── usage_snapshot.json           # Codex usage limits
 ├── usage_snapshot_claude.json    # Claude Code usage limits
 ├── usage_snapshot_copilot.json   # GitHub Copilot usage limits
@@ -226,6 +228,8 @@ Monthly-only usage windows:
 ├── token_usage_claude.json       # ccusage Claude
 └── token_usage_copilot.json      # Copilot billing
 ```
+
+Namespace migration is intentionally disabled. Never read or migrate the original app's container or LaunchAgents. Users moving to this fork must sign in again, recreate settings and schedules, and disable old schedules in the app that created them.
 
 ### UserDefaults Keys
 
@@ -305,13 +309,14 @@ Monthly-only usage windows:
 ## Release Process
 
 1. Bump `MARKETING_VERSION` / `CURRENT_PROJECT_VERSION` in project settings
-2. Configure fork-owned bundle identifiers, App Group, Apple Developer Team, and signing profiles
-3. Archive → Developer ID Application signing → notarize → create ZIP (`AgentLimits.zip`)
+2. Put `DEVELOPMENT_TEAM = <YOUR_TEAM_ID>` in the ignored `Configurations/DevelopmentTeam.local.xcconfig`; keep automatic signing enabled
+3. Archive → Developer ID Application signing → notarize → create ZIP (`AgentLimitsForked.zip`)
 4. Create a release in `JimBoHa/AgentLimits-forked` with tag `v{MARKETING_VERSION}` and attach the notarized ZIP
 5. Generate a signed appcast on infrastructure controlled by the fork owner
-6. Add the fork-owned HTTPS `SUFeedURL` and EdDSA public key only to distribution builds
+6. Implement and review an exact fork-owned HTTPS feed trust policy, then deliberately change `ForkUpdatePolicy.allowsAutomaticUpdates`
+7. Add the fork-owned `SUFeedURL` and EdDSA public key only to distribution builds; configuration alone must never enable updates
 
-Until steps 5-6 are complete, Sparkle remains disabled and GitHub Releases is the distribution source.
+Until steps 5-7 are complete, Sparkle remains hard-disabled and GitHub Releases is the distribution source.
 
 ### Sparkle EdDSA Key
 

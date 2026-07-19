@@ -969,7 +969,7 @@ nonisolated private final class ShellChildReaper: @unchecked Sendable {
 
     private let lock = NSLock()
     private let queue = DispatchQueue(
-        label: "com.agentlimits.shell-child-reaper",
+        label: "com.jimboha.agentlimits.macos.shell-child-reaper",
         qos: .utility
     )
     private var sources: [pid_t: DispatchSourceProcess] = [:]

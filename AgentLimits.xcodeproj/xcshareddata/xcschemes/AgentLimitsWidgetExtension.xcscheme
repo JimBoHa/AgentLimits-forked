@@ -31,7 +31,7 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "42D45B892EF649FE00A51EA8"
-               BuildableName = "AgentLimits.app"
+               BuildableName = "AgentLimitsForked.app"
                BlueprintName = "AgentLimits"
                ReferencedContainer = "container:AgentLimits.xcodeproj">
             </BuildableReference>
@@ -73,7 +73,7 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "42D45B892EF649FE00A51EA8"
-            BuildableName = "AgentLimits.app"
+            BuildableName = "AgentLimitsForked.app"
             BlueprintName = "AgentLimits"
             ReferencedContainer = "container:AgentLimits.xcodeproj">
          </BuildableReference>
@@ -109,7 +109,7 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "42D45B892EF649FE00A51EA8"
-            BuildableName = "AgentLimits.app"
+            BuildableName = "AgentLimitsForked.app"
             BlueprintName = "AgentLimits"
             ReferencedContainer = "container:AgentLimits.xcodeproj">
          </BuildableReference>

@@ -62,8 +62,9 @@
 ### Wake Up (CLI Scheduler)
 - Schedules CLI commands at user-defined hours via LaunchAgent
 - Commands: `codex exec --skip-git-repo-check "hello"` / `claude -p "hello"`
-- LaunchAgent plist files: `~/Library/LaunchAgents/com.dmng.agentlimit.wakeup-*.plist`
-- Logs: `/tmp/agentlimit-wakeup-*.log`
+- LaunchAgent plist files: `~/Library/LaunchAgents/com.jimboha.agentlimits.macos.wakeup-*.plist`
+- Logs: `~/Library/Logs/AgentLimitsForked/agentlimits-forked-wakeup-*.log`
+- Working directory: `~/.agentlimits-forked/`
 - Per-provider schedule with additional CLI arguments support
 
 ### Threshold Notification
@@ -88,7 +89,10 @@
 - Requires `jq`
 
 ## Key Decisions
-- App Group ID: `group.com.dmng.agentlimit`
+- App bundle ID: `com.jimboha.agentlimits.macos`
+- Widget bundle ID: `com.jimboha.agentlimits.macos.widget`
+- App Group ID: `group.com.jimboha.agentlimits.macos`
+- Deep-link scheme: `agentlimits-forked`
 - Widget kinds:
   - `AgentLimitWidget` (Codex usage limits)
   - `AgentLimitWidgetClaude` (Claude Code usage limits)
@@ -126,12 +130,14 @@
 
 ### App Group Container
 ```
-~/Library/Group Containers/group.com.dmng.agentlimit/Library/Application Support/AgentLimit/
+~/Library/Group Containers/group.com.jimboha.agentlimits.macos/Library/Application Support/AgentLimitsForked/
 ├── usage_snapshot.json           # Codex usage limits
 ├── usage_snapshot_claude.json    # Claude Code usage limits
 ├── token_usage_codex.json        # ccusage Codex
 └── token_usage_claude.json       # ccusage Claude
 ```
+
+Namespace migration is intentionally disabled. Never read or migrate the original app's container or LaunchAgents. Users moving to this fork must sign in again, recreate settings and schedules, and disable old schedules in the app that created them.
 
 ### UserDefaults Keys
 | Key | Purpose |
