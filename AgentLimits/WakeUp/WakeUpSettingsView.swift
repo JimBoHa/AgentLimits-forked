@@ -112,7 +112,16 @@ struct WakeUpSettingsView: View {
 
     private var lastResultView: some View {
         Group {
-            if let result = scheduler.lastWakeUpResults[selectedProvider] {
+            if let scheduleError = scheduler.scheduleErrors[selectedProvider] {
+                HStack {
+                    Text("wakeUp.lastResult".localized())
+                        .font(.footnote)
+                    Label(scheduleError.localizedDescription, systemImage: "xmark.circle.fill")
+                        .foregroundColor(.red)
+                        .font(.footnote)
+                        .lineLimit(2)
+                }
+            } else if let result = scheduler.lastWakeUpResults[selectedProvider] {
                 HStack {
                     Text("wakeUp.lastResult".localized())
                         .font(.footnote)
@@ -136,6 +145,9 @@ struct WakeUpSettingsView: View {
 
     private func statusLevel(for provider: UsageProvider) -> SettingsStatusLevel {
         // Gray when disabled/no hours, green when installed, orange when pending install.
+        if scheduler.scheduleErrors[provider] != nil {
+            return .error
+        }
         guard let schedule = scheduler.schedules[provider],
               schedule.isEnabled,
               !schedule.enabledHours.isEmpty else {

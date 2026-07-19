@@ -106,18 +106,81 @@ enum WakeUpError: Error, LocalizedError {
     }
 }
 
+struct LaunchCtlResult {
+    let terminationStatus: Int32
+    let standardError: String
+}
+
+struct LaunchCtlCommandFailure: LocalizedError {
+    let operation: String
+    let terminationStatus: Int32
+    let standardError: String
+
+    var errorDescription: String? {
+        let detail = standardError.trimmingCharacters(in: .whitespacesAndNewlines)
+        if detail.isEmpty {
+            return "launchctl \(operation) failed with exit code \(terminationStatus)"
+        }
+        return "launchctl \(operation) failed with exit code \(terminationStatus): \(detail)"
+    }
+}
+
+struct LaunchAgentRollbackFailure: LocalizedError {
+    let originalError: Error
+    let rollbackError: Error
+
+    var errorDescription: String? {
+        "\(originalError.localizedDescription); rollback also failed: \(rollbackError.localizedDescription)"
+    }
+}
+
+private enum LaunchCtlProcessRunner {
+    nonisolated static func run(arguments: [String]) throws -> LaunchCtlResult {
+        let process = Process()
+        let standardError = Pipe()
+        process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+        process.arguments = arguments
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = standardError
+
+        try process.run()
+        // Drain while launchctl runs so its stderr pipe cannot block completion.
+        let errorData = standardError.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        return LaunchCtlResult(
+            terminationStatus: process.terminationStatus,
+            standardError: String(decoding: errorData, as: UTF8.self)
+        )
+    }
+}
+
 // MARK: - LaunchAgent Manager
 
 /// Manages LaunchAgent plist files for scheduled CLI execution
 final class LaunchAgentManager {
     private let fileManager: FileManager
+    private let homeDirectoryOverride: URL?
+    private let launchCtlRunner: ([String]) throws -> LaunchCtlResult
+    private let removeItem: (URL) throws -> Void
+    private var loadedLabels: Set<String> = []
 
-    init(fileManager: FileManager = .default) {
+    init(
+        fileManager: FileManager = .default,
+        homeDirectory: URL? = nil,
+        launchCtlRunner: @escaping ([String]) throws -> LaunchCtlResult = LaunchCtlProcessRunner.run,
+        removeItem: ((URL) throws -> Void)? = nil
+    ) {
         self.fileManager = fileManager
+        self.homeDirectoryOverride = homeDirectory
+        self.launchCtlRunner = launchCtlRunner
+        self.removeItem = removeItem ?? { try fileManager.removeItem(at: $0) }
     }
 
     /// Returns the real user home directory (not sandboxed container)
     private var realHomeDirectory: URL {
+        if let homeDirectoryOverride {
+            return homeDirectoryOverride
+        }
         // Use POSIX API to get real home directory, bypassing sandbox
         if let pw = getpwuid(getuid()), let home = pw.pointee.pw_dir {
             return URL(fileURLWithPath: String(cString: home), isDirectory: true)
@@ -145,6 +208,7 @@ final class LaunchAgentManager {
     func isInstalled(for schedule: WakeUpSchedule) -> Bool {
         guard let url = plistURL(for: schedule) else { return false }
         return fileManager.fileExists(atPath: url.path)
+            && loadedLabels.contains(schedule.launchAgentLabel)
     }
 
     /// Installs or updates a LaunchAgent for the given schedule
@@ -155,15 +219,27 @@ final class LaunchAgentManager {
         }
 
         Logger.wakeup.info("LaunchAgentManager: Installing plist at \(url.path)")
-
-        // Unload existing agent if present
-        if isInstalled(for: schedule) {
-            Logger.wakeup.info("LaunchAgentManager: Unloading existing agent")
-            unload(schedule: schedule)
+        let wasServiceLoaded = try serviceIsLoaded(schedule)
+        updateCachedLoadedState(wasServiceLoaded, for: schedule)
+        let hadPreviousPlist = fileManager.fileExists(atPath: url.path)
+        let previousPlistData: Data?
+        if hadPreviousPlist {
+            do {
+                previousPlistData = try Data(contentsOf: url)
+            } catch {
+                throw WakeUpError.launchAgentWriteFailed(error)
+            }
+        } else {
+            previousPlistData = nil
         }
 
-        // Generate plist content
-        let plistData = try generatePlist(for: schedule)
+        // Generate and stage the new plist before stopping a working service.
+        let plistData: Data
+        do {
+            plistData = try generatePlist(for: schedule)
+        } catch {
+            throw WakeUpError.launchAgentWriteFailed(error)
+        }
         Logger.wakeup.info("LaunchAgentManager: Generated plist data (\(plistData.count) bytes)")
 
         // Ensure directory exists
@@ -174,6 +250,7 @@ final class LaunchAgentManager {
                 Logger.wakeup.info("LaunchAgentManager: Directory ensured at \(directory.path)")
             } catch {
                 Logger.wakeup.error("LaunchAgentManager: Failed to create directory: \(error.localizedDescription)")
+                throw WakeUpError.launchAgentWriteFailed(error)
             }
         }
 
@@ -187,54 +264,218 @@ final class LaunchAgentManager {
             throw WakeUpError.launchAgentWriteFailed(error)
         }
 
-        // Load the agent
-        try load(schedule: schedule)
+        // Only after staging succeeds do we stop the old service and load the
+        // replacement. Any failure restores and verifies the prior state.
+        do {
+            if wasServiceLoaded {
+                Logger.wakeup.info("LaunchAgentManager: Unloading existing agent")
+                try unload(schedule: schedule)
+            }
+            try load(schedule: schedule)
+        } catch {
+            let originalError = error
+            do {
+                try rollbackPlist(
+                    at: url,
+                    previousData: previousPlistData,
+                    schedule: schedule
+                )
+            } catch {
+                let rollbackError = error
+                throw WakeUpError.launchAgentLoadFailed(
+                    LaunchAgentRollbackFailure(
+                        originalError: originalError,
+                        rollbackError: rollbackError
+                    )
+                )
+            }
+            throw originalError
+        }
     }
 
     /// Uninstalls a LaunchAgent for the given schedule
-    func uninstall(schedule: WakeUpSchedule) {
-        guard let url = plistURL(for: schedule) else { return }
+    func uninstall(schedule: WakeUpSchedule) throws {
+        guard let url = plistURL(for: schedule) else {
+            throw WakeUpError.homeDirectoryNotFound
+        }
 
-        // Unload first
-        unload(schedule: schedule)
+        let previousPlistData: Data?
+        if fileManager.fileExists(atPath: url.path) {
+            do {
+                previousPlistData = try Data(contentsOf: url)
+            } catch {
+                throw WakeUpError.launchAgentWriteFailed(error)
+            }
+        } else {
+            previousPlistData = nil
+        }
 
-        // Remove plist file
-        try? fileManager.removeItem(at: url)
+        // Never remove the plist while launchd may still be running the job.
+        try unload(schedule: schedule)
+        if fileManager.fileExists(atPath: url.path) {
+            do {
+                try removeItem(url)
+            } catch {
+                let removalError = WakeUpError.launchAgentWriteFailed(error)
+                do {
+                    if !fileManager.fileExists(atPath: url.path), let previousPlistData {
+                        try previousPlistData.write(to: url, options: .atomic)
+                    }
+                    try load(schedule: schedule)
+                } catch {
+                    throw WakeUpError.launchAgentLoadFailed(
+                        LaunchAgentRollbackFailure(
+                            originalError: removalError,
+                            rollbackError: error
+                        )
+                    )
+                }
+                throw removalError
+            }
+        }
     }
 
     /// Loads a LaunchAgent using launchctl bootstrap (modern API)
     private func load(schedule: WakeUpSchedule) throws {
         guard let url = plistURL(for: schedule) else { return }
 
-        // Use bootstrap for modern macOS
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
-        process.arguments = ["bootstrap", "gui/\(getuid())", url.path]
+        let arguments = ["bootstrap", "gui/\(getuid())", url.path]
+        let result = try runLaunchCtl(arguments, operation: "bootstrap")
+        try requireSuccess(result, operation: "bootstrap")
+        guard try serviceIsLoaded(schedule) else {
+            throw WakeUpError.launchAgentLoadFailed(
+                LaunchCtlCommandFailure(
+                    operation: "bootstrap verification",
+                    terminationStatus: -1,
+                    standardError: "service is not loaded"
+                )
+            )
+        }
+        updateCachedLoadedState(true, for: schedule)
+    }
 
-        do {
-            // Run launchctl and wait for completion.
-            try process.run()
-            process.waitUntilExit()
-            // Exit code 37 means "already loaded", which is fine
-            if process.terminationStatus != 0 && process.terminationStatus != 37 {
-                Logger.wakeup.warning("LaunchAgent load warning: exit code \(process.terminationStatus)")
+    /// Unloads a LaunchAgent using launchctl bootout (modern API)
+    private func unload(schedule: WakeUpSchedule) throws {
+        let result = try runLaunchCtl([
+            "bootout",
+            "gui/\(getuid())/\(schedule.launchAgentLabel)"
+        ], operation: "bootout")
+
+        let remainsLoaded = try serviceIsLoaded(schedule)
+        if result.terminationStatus != 0, remainsLoaded {
+            updateCachedLoadedState(true, for: schedule)
+            throw WakeUpError.launchAgentLoadFailed(
+                commandFailure(for: result, operation: "bootout")
+            )
+        }
+        guard !remainsLoaded else {
+            updateCachedLoadedState(true, for: schedule)
+            throw WakeUpError.launchAgentLoadFailed(
+                LaunchCtlCommandFailure(
+                    operation: "bootout verification",
+                    terminationStatus: result.terminationStatus,
+                    standardError: "service is still loaded"
+                )
+            )
+        }
+        // A nonzero bootout result is acceptable only after print confirms the
+        // service was already absent.
+        updateCachedLoadedState(false, for: schedule)
+    }
+
+    private func rollbackPlist(
+        at url: URL,
+        previousData: Data?,
+        schedule: WakeUpSchedule
+    ) throws {
+        if let previousData {
+            try previousData.write(to: url, options: .atomic)
+            if try serviceIsLoaded(schedule) {
+                // A failed bootstrap can still leave the replacement loaded.
+                // Stop it before loading the restored plist so success means
+                // the original configuration is actually active again.
+                try unload(schedule: schedule)
             }
+            try load(schedule: schedule)
+        } else {
+            if try serviceIsLoaded(schedule) {
+                try unload(schedule: schedule)
+            }
+            if fileManager.fileExists(atPath: url.path) {
+                try removeItem(url)
+            }
+            guard try !serviceIsLoaded(schedule) else {
+                throw WakeUpError.launchAgentLoadFailed(
+                    LaunchCtlCommandFailure(
+                        operation: "rollback verification",
+                        terminationStatus: -1,
+                        standardError: "service is still loaded"
+                    )
+                )
+            }
+            updateCachedLoadedState(false, for: schedule)
+        }
+    }
+
+    private func serviceIsLoaded(_ schedule: WakeUpSchedule) throws -> Bool {
+        let result = try runLaunchCtl([
+            "print",
+            "gui/\(getuid())/\(schedule.launchAgentLabel)"
+        ], operation: "print")
+        switch result.terminationStatus {
+        case 0:
+            return true
+        case 113:
+            return false
+        default:
+            throw WakeUpError.launchAgentLoadFailed(
+                commandFailure(for: result, operation: "print")
+            )
+        }
+    }
+
+    private func updateCachedLoadedState(
+        _ isLoaded: Bool,
+        for schedule: WakeUpSchedule
+    ) {
+        if isLoaded {
+            loadedLabels.insert(schedule.launchAgentLabel)
+        } else {
+            loadedLabels.remove(schedule.launchAgentLabel)
+        }
+    }
+
+    private func runLaunchCtl(
+        _ arguments: [String],
+        operation: String
+    ) throws -> LaunchCtlResult {
+        do {
+            return try launchCtlRunner(arguments)
         } catch {
             throw WakeUpError.launchAgentLoadFailed(error)
         }
     }
 
-    /// Unloads a LaunchAgent using launchctl bootout (modern API)
-    private func unload(schedule: WakeUpSchedule) {
-        // Use bootout with label for modern macOS
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
-        process.arguments = ["bootout", "gui/\(getuid())/\(schedule.launchAgentLabel)"]
+    private func requireSuccess(
+        _ result: LaunchCtlResult,
+        operation: String
+    ) throws {
+        guard result.terminationStatus == 0 else {
+            let failure = commandFailure(for: result, operation: operation)
+            Logger.wakeup.error("LaunchAgent command failed: \(failure.localizedDescription)")
+            throw WakeUpError.launchAgentLoadFailed(failure)
+        }
+    }
 
-        // Best-effort unload; ignore errors if not loaded.
-        try? process.run()
-        process.waitUntilExit()
-        // Ignore errors - service may not be loaded
+    private func commandFailure(
+        for result: LaunchCtlResult,
+        operation: String
+    ) -> LaunchCtlCommandFailure {
+        LaunchCtlCommandFailure(
+            operation: operation,
+            terminationStatus: result.terminationStatus,
+            standardError: result.standardError
+        )
     }
 
     /// Generates plist data for a schedule
@@ -401,15 +642,43 @@ final class WakeUpScheduler: ObservableObject {
     @Published private(set) var schedules: [UsageProvider: WakeUpSchedule]
     @Published private(set) var lastWakeUpResults: [UsageProvider: WakeUpResult] = [:]
     @Published private(set) var isTestRunning: [UsageProvider: Bool] = [:]
+    @Published private(set) var scheduleErrors: [UsageProvider: WakeUpError] = [:]
 
     private let launchAgentManager: LaunchAgentManager
     private let executor: CLIExecutor
     private let store: WakeUpScheduleStore
 
-    private init() {
-        self.launchAgentManager = LaunchAgentManager()
-        self.executor = CLIExecutor()
-        self.store = WakeUpScheduleStore()
+    convenience init() {
+        self.init(
+            launchAgentManager: LaunchAgentManager(),
+            executor: CLIExecutor(),
+            store: WakeUpScheduleStore(),
+            syncOnInit: true
+        )
+    }
+
+    convenience init(
+        launchAgentManager: LaunchAgentManager,
+        store: WakeUpScheduleStore,
+        syncOnInit: Bool = true
+    ) {
+        self.init(
+            launchAgentManager: launchAgentManager,
+            executor: CLIExecutor(),
+            store: store,
+            syncOnInit: syncOnInit
+        )
+    }
+
+    init(
+        launchAgentManager: LaunchAgentManager,
+        executor: CLIExecutor,
+        store: WakeUpScheduleStore,
+        syncOnInit: Bool = true
+    ) {
+        self.launchAgentManager = launchAgentManager
+        self.executor = executor
+        self.store = store
         self.schedules = store.loadSchedules()
 
         // Initialize isTestRunning
@@ -417,8 +686,9 @@ final class WakeUpScheduler: ObservableObject {
             isTestRunning[provider] = false
         }
 
-        // Sync LaunchAgents with saved schedules
-        syncLaunchAgents()
+        if syncOnInit {
+            syncLaunchAgents()
+        }
     }
 
     /// Returns whether a LaunchAgent is installed for a provider
@@ -430,17 +700,19 @@ final class WakeUpScheduler: ObservableObject {
     /// Updates schedule for a provider and syncs LaunchAgent
     func updateSchedule(_ schedule: WakeUpSchedule) {
         Logger.wakeup.debug("WakeUpScheduler: updateSchedule provider=\(schedule.provider.rawValue) isEnabled=\(schedule.isEnabled) hours=\(schedule.enabledHours.count)")
-        schedules[schedule.provider] = schedule
-        store.saveSchedules(schedules)
-
-        if schedule.isEnabled && !schedule.enabledHours.isEmpty {
-            do {
+        do {
+            if schedule.isEnabled && !schedule.enabledHours.isEmpty {
                 try launchAgentManager.install(schedule: schedule)
-            } catch {
-                Logger.wakeup.error("WakeUpScheduler: Failed to install LaunchAgent: \(error.localizedDescription)")
+            } else {
+                try launchAgentManager.uninstall(schedule: schedule)
             }
-        } else {
-            launchAgentManager.uninstall(schedule: schedule)
+            // Commit UI and persistence only after launchd reached the requested state.
+            schedules[schedule.provider] = schedule
+            store.saveSchedules(schedules)
+            scheduleErrors[schedule.provider] = nil
+        } catch {
+            Logger.wakeup.error("WakeUpScheduler: Failed to update LaunchAgent: \(error.localizedDescription)")
+            scheduleErrors[schedule.provider] = makeWakeUpError(error)
         }
     }
 
@@ -473,11 +745,19 @@ final class WakeUpScheduler: ObservableObject {
             if schedule.isEnabled && !schedule.enabledHours.isEmpty {
                 do {
                     try launchAgentManager.install(schedule: schedule)
+                    scheduleErrors[provider] = nil
                 } catch {
                     Logger.wakeup.error("WakeUpScheduler: Failed to sync LaunchAgent for \(provider.displayName): \(error.localizedDescription)")
+                    scheduleErrors[provider] = makeWakeUpError(error)
                 }
             } else {
-                launchAgentManager.uninstall(schedule: schedule)
+                do {
+                    try launchAgentManager.uninstall(schedule: schedule)
+                    scheduleErrors[provider] = nil
+                } catch {
+                    Logger.wakeup.error("WakeUpScheduler: Failed to remove LaunchAgent for \(provider.displayName): \(error.localizedDescription)")
+                    scheduleErrors[provider] = makeWakeUpError(error)
+                }
             }
         }
     }
@@ -486,7 +766,20 @@ final class WakeUpScheduler: ObservableObject {
     func uninstallAllLaunchAgents() {
         for provider in UsageProvider.allCases {
             guard let schedule = schedules[provider] else { continue }
-            launchAgentManager.uninstall(schedule: schedule)
+            do {
+                try launchAgentManager.uninstall(schedule: schedule)
+                scheduleErrors[provider] = nil
+            } catch {
+                Logger.wakeup.error("WakeUpScheduler: Failed to uninstall \(provider.displayName): \(error.localizedDescription)")
+                scheduleErrors[provider] = makeWakeUpError(error)
+            }
         }
+    }
+
+    private func makeWakeUpError(_ error: Error) -> WakeUpError {
+        if let wakeUpError = error as? WakeUpError {
+            return wakeUpError
+        }
+        return .launchAgentLoadFailed(error)
     }
 }
