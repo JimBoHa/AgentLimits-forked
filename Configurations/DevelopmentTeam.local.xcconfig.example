@@ -1,4 +1,4 @@
 // Copy this file to DevelopmentTeam.local.xcconfig and replace the example.
-// The destination file is gitignored. A Team ID is not a secret, but keeping
-// account-specific signing configuration local avoids accidental coupling.
+// Release scripts reject every setting except this one Team assignment. A Team
+// ID is not secret; the local file avoids account-specific source coupling.
 DEVELOPMENT_TEAM = ABCDE12345

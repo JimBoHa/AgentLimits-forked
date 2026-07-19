@@ -17,6 +17,8 @@
   WebView-lifecycle, and snapshot-retirement bugs.
 - Added Apple privacy manifests, distribution automation, unsigned preflight
   packages, signed-disk-image/notarization guidance, and release checklists.
+- Isolated signed builds from ignored local files by validating the Team-only
+  signing config and building from a clean Git snapshot.
 
 Original AgentLimits was created by Nihondo and remains credited under the MIT
 license: https://github.com/Nihondo/AgentLimits
