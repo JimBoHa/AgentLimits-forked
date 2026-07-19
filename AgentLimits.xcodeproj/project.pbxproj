@@ -13,6 +13,8 @@
 		42D45BCC2EF64A5100A51EA8 /* AgentLimitsWidgetExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 42D45BB82EF64A5000A51EA8 /* AgentLimitsWidgetExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		B20000000000000000000006 /* GitHubAgentTaskFetcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000004 /* GitHubAgentTaskFetcher.swift */; };
 		B20000000000000000000007 /* agentlimits.icon in Resources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000005 /* agentlimits.icon */; };
+		D30000000000000000000014 /* AgentLimitsWatch.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = D30000000000000000000001 /* AgentLimitsWatch.app */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		D30000000000000000000016 /* agentlimits.icon in Resources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000005 /* agentlimits.icon */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -44,6 +46,27 @@
 			remoteGlobalIDString = B20000000000000000000016;
 			remoteInfo = AgentLimitsiOS;
 		};
+		D30000000000000000000017 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 42D45B822EF649FD00A51EA8 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = D30000000000000000000008;
+			remoteInfo = AgentLimitsWatch;
+		};
+		D30000000000000000000019 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 42D45B822EF649FD00A51EA8 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = D30000000000000000000008;
+			remoteInfo = AgentLimitsWatch;
+		};
+		D3000000000000000000001B /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 42D45B822EF649FD00A51EA8 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = D30000000000000000000008;
+			remoteInfo = AgentLimitsWatch;
+		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -56,6 +79,17 @@
 				42D45BCC2EF64A5100A51EA8 /* AgentLimitsWidgetExtension.appex in Embed Foundation Extensions */,
 			);
 			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		D30000000000000000000015 /* Embed Watch Content */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "$(CONTENTS_FOLDER_PATH)/Watch";
+			dstSubfolderSpec = 16;
+			files = (
+				D30000000000000000000014 /* AgentLimitsWatch.app in Embed Watch Content */,
+			);
+			name = "Embed Watch Content";
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXCopyFilesBuildPhase section */
@@ -72,6 +106,9 @@
 		B20000000000000000000003 /* AgentLimitsiOSUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AgentLimitsiOSUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		B20000000000000000000004 /* GitHubAgentTaskFetcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentLimits/Activity/GitHubAgentTaskFetcher.swift; sourceTree = SOURCE_ROOT; };
 		B20000000000000000000005 /* agentlimits.icon */ = {isa = PBXFileReference; lastKnownFileType = folder.iconcomposer.icon; path = AgentLimits/agentlimits.icon; sourceTree = SOURCE_ROOT; };
+		D30000000000000000000001 /* AgentLimitsWatch.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = AgentLimitsWatch.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		D30000000000000000000002 /* AgentLimitsWatchTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AgentLimitsWatchTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		D30000000000000000000003 /* AgentLimitsWatchUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AgentLimitsWatchUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -95,6 +132,13 @@
 				Info.plist,
 			);
 			target = B20000000000000000000016 /* AgentLimitsiOS */;
+		};
+		D30000000000000000000026 /* Exceptions for "AgentLimitsWatch" folder in "AgentLimitsWatch" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = D30000000000000000000008 /* AgentLimitsWatch */;
 		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
@@ -141,6 +185,29 @@
 		B20000000000000000000014 /* AgentLimitsiOSUITests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = AgentLimitsiOSUITests;
+			sourceTree = "<group>";
+		};
+		D30000000000000000000004 /* AgentLimitsCompanionShared */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = AgentLimitsCompanionShared;
+			sourceTree = "<group>";
+		};
+		D30000000000000000000005 /* AgentLimitsWatch */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				D30000000000000000000026 /* Exceptions for "AgentLimitsWatch" folder in "AgentLimitsWatch" target */,
+			);
+			path = AgentLimitsWatch;
+			sourceTree = "<group>";
+		};
+		D30000000000000000000006 /* AgentLimitsWatchTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = AgentLimitsWatchTests;
+			sourceTree = "<group>";
+		};
+		D30000000000000000000007 /* AgentLimitsWatchUITests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = AgentLimitsWatchUITests;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -191,6 +258,27 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		D3000000000000000000000C /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		D3000000000000000000000F /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		D30000000000000000000012 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -206,6 +294,10 @@
 				B20000000000000000000013 /* AgentLimitsiOSTests */,
 				B20000000000000000000014 /* AgentLimitsiOSUITests */,
 				B20000000000000000000015 /* Shared Mobile Sources */,
+				D30000000000000000000004 /* AgentLimitsCompanionShared */,
+				D30000000000000000000005 /* AgentLimitsWatch */,
+				D30000000000000000000006 /* AgentLimitsWatchTests */,
+				D30000000000000000000007 /* AgentLimitsWatchUITests */,
 				42D45BB92EF64A5000A51EA8 /* Frameworks */,
 				42D45B8B2EF649FE00A51EA8 /* Products */,
 			);
@@ -220,6 +312,9 @@
 				B20000000000000000000001 /* AgentLimits.app */,
 				B20000000000000000000002 /* AgentLimitsiOSTests.xctest */,
 				B20000000000000000000003 /* AgentLimitsiOSUITests.xctest */,
+				D30000000000000000000001 /* AgentLimitsWatch.app */,
+				D30000000000000000000002 /* AgentLimitsWatchTests.xctest */,
+				D30000000000000000000003 /* AgentLimitsWatchUITests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -332,12 +427,15 @@
 				B20000000000000000000019 /* Sources */,
 				B20000000000000000000020 /* Frameworks */,
 				B20000000000000000000021 /* Resources */,
+				D30000000000000000000015 /* Embed Watch Content */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				D30000000000000000000018 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
+				D30000000000000000000004 /* AgentLimitsCompanionShared */,
 				B20000000000000000000012 /* AgentLimitsiOS */,
 			);
 			name = AgentLimitsiOS;
@@ -393,6 +491,75 @@
 			productReference = B20000000000000000000003 /* AgentLimitsiOSUITests.xctest */;
 			productType = "com.apple.product-type.bundle.ui-testing";
 		};
+		D30000000000000000000008 /* AgentLimitsWatch */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = D3000000000000000000001F /* Build configuration list for PBXNativeTarget "AgentLimitsWatch" */;
+			buildPhases = (
+				D3000000000000000000000B /* Sources */,
+				D3000000000000000000000C /* Frameworks */,
+				D3000000000000000000000D /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				D30000000000000000000004 /* AgentLimitsCompanionShared */,
+				D30000000000000000000005 /* AgentLimitsWatch */,
+			);
+			name = AgentLimitsWatch;
+			packageProductDependencies = (
+			);
+			productName = AgentLimitsWatch;
+			productReference = D30000000000000000000001 /* AgentLimitsWatch.app */;
+			productType = "com.apple.product-type.application";
+		};
+		D30000000000000000000009 /* AgentLimitsWatchTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = D30000000000000000000022 /* Build configuration list for PBXNativeTarget "AgentLimitsWatchTests" */;
+			buildPhases = (
+				D3000000000000000000000E /* Sources */,
+				D3000000000000000000000F /* Frameworks */,
+				D30000000000000000000010 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				D3000000000000000000001A /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				D30000000000000000000006 /* AgentLimitsWatchTests */,
+			);
+			name = AgentLimitsWatchTests;
+			packageProductDependencies = (
+			);
+			productName = AgentLimitsWatchTests;
+			productReference = D30000000000000000000002 /* AgentLimitsWatchTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		D3000000000000000000000A /* AgentLimitsWatchUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = D30000000000000000000025 /* Build configuration list for PBXNativeTarget "AgentLimitsWatchUITests" */;
+			buildPhases = (
+				D30000000000000000000011 /* Sources */,
+				D30000000000000000000012 /* Frameworks */,
+				D30000000000000000000013 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				D3000000000000000000001C /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				D30000000000000000000007 /* AgentLimitsWatchUITests */,
+			);
+			name = AgentLimitsWatchUITests;
+			packageProductDependencies = (
+			);
+			productName = AgentLimitsWatchUITests;
+			productReference = D30000000000000000000003 /* AgentLimitsWatchUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -423,6 +590,17 @@
 					B20000000000000000000018 = {
 						CreatedOnToolsVersion = 26.6;
 						TestTargetID = B20000000000000000000016;
+					};
+					D30000000000000000000008 = {
+						CreatedOnToolsVersion = 26.6;
+					};
+					D30000000000000000000009 = {
+						CreatedOnToolsVersion = 26.6;
+						TestTargetID = D30000000000000000000008;
+					};
+					D3000000000000000000000A = {
+						CreatedOnToolsVersion = 26.6;
+						TestTargetID = D30000000000000000000008;
 					};
 				};
 			};
@@ -462,6 +640,9 @@
 				B20000000000000000000016 /* AgentLimitsiOS */,
 				B20000000000000000000017 /* AgentLimitsiOSTests */,
 				B20000000000000000000018 /* AgentLimitsiOSUITests */,
+				D30000000000000000000008 /* AgentLimitsWatch */,
+				D30000000000000000000009 /* AgentLimitsWatchTests */,
+				D3000000000000000000000A /* AgentLimitsWatchUITests */,
 			);
 		};
 /* End PBXProject section */
@@ -504,6 +685,28 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		B20000000000000000000027 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		D3000000000000000000000D /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				D30000000000000000000016 /* agentlimits.icon in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		D30000000000000000000010 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		D30000000000000000000013 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -556,6 +759,27 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		D3000000000000000000000B /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		D3000000000000000000000E /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		D30000000000000000000011 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -578,6 +802,21 @@
 			isa = PBXTargetDependency;
 			target = B20000000000000000000016 /* AgentLimitsiOS */;
 			targetProxy = B20000000000000000000010 /* PBXContainerItemProxy */;
+		};
+		D30000000000000000000018 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = D30000000000000000000008 /* AgentLimitsWatch */;
+			targetProxy = D30000000000000000000017 /* PBXContainerItemProxy */;
+		};
+		D3000000000000000000001A /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = D30000000000000000000008 /* AgentLimitsWatch */;
+			targetProxy = D30000000000000000000019 /* PBXContainerItemProxy */;
+		};
+		D3000000000000000000001C /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = D30000000000000000000008 /* AgentLimitsWatch */;
+			targetProxy = D3000000000000000000001B /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -1037,6 +1276,155 @@
 			};
 			name = Release;
 		};
+		D3000000000000000000001D /* Debug */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 7A1B2C3D4E5F678901234567 /* Configurations/DevelopmentTeam.xcconfig */;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = agentlimits;
+				CURRENT_PROJECT_VERSION = 16;
+				DEAD_CODE_STRIPPING = YES;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = AgentLimitsWatch/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "AgentLimits Forked";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
+				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = com.jimboha.agentlimits.ios;
+				INFOPLIST_KEY_WKRunsIndependentlyOfCompanionApp = NO;
+				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks";
+				MARKETING_VERSION = 1.1.6;
+				PRODUCT_BUNDLE_IDENTIFIER = com.jimboha.agentlimits.ios.watchkitapp;
+				PRODUCT_MODULE_NAME = AgentLimitsWatch;
+				PRODUCT_NAME = AgentLimitsWatch;
+				SDKROOT = watchos;
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "watchos watchsimulator";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				WATCHOS_DEPLOYMENT_TARGET = 10.0;
+			};
+			name = Debug;
+		};
+		D3000000000000000000001E /* Release */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 7A1B2C3D4E5F678901234567 /* Configurations/DevelopmentTeam.xcconfig */;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = agentlimits;
+				CURRENT_PROJECT_VERSION = 16;
+				DEAD_CODE_STRIPPING = YES;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = AgentLimitsWatch/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "AgentLimits Forked";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
+				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = com.jimboha.agentlimits.ios;
+				INFOPLIST_KEY_WKRunsIndependentlyOfCompanionApp = NO;
+				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks";
+				MARKETING_VERSION = 1.1.6;
+				PRODUCT_BUNDLE_IDENTIFIER = com.jimboha.agentlimits.ios.watchkitapp;
+				PRODUCT_MODULE_NAME = AgentLimitsWatch;
+				PRODUCT_NAME = AgentLimitsWatch;
+				SDKROOT = watchos;
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "watchos watchsimulator";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				VALIDATE_PRODUCT = YES;
+				WATCHOS_DEPLOYMENT_TARGET = 10.0;
+			};
+			name = Release;
+		};
+		D30000000000000000000020 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 7A1B2C3D4E5F678901234567 /* Configurations/DevelopmentTeam.xcconfig */;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.jimboha.agentlimits.ios.watchkitapp.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				SUPPORTED_PLATFORMS = "watchos watchsimulator";
+				SWIFT_DEFAULT_ACTOR_ISOLATION = nonisolated;
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/AgentLimitsWatch.app/AgentLimitsWatch";
+				WATCHOS_DEPLOYMENT_TARGET = 10.0;
+			};
+			name = Debug;
+		};
+		D30000000000000000000021 /* Release */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 7A1B2C3D4E5F678901234567 /* Configurations/DevelopmentTeam.xcconfig */;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.jimboha.agentlimits.ios.watchkitapp.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				SUPPORTED_PLATFORMS = "watchos watchsimulator";
+				SWIFT_DEFAULT_ACTOR_ISOLATION = nonisolated;
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/AgentLimitsWatch.app/AgentLimitsWatch";
+				WATCHOS_DEPLOYMENT_TARGET = 10.0;
+			};
+			name = Release;
+		};
+		D30000000000000000000023 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 7A1B2C3D4E5F678901234567 /* Configurations/DevelopmentTeam.xcconfig */;
+			buildSettings = {
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.jimboha.agentlimits.ios.watchkitapp.uitests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				SUPPORTED_PLATFORMS = "watchos watchsimulator";
+				SWIFT_DEFAULT_ACTOR_ISOLATION = nonisolated;
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				TEST_TARGET_NAME = AgentLimitsWatch;
+				WATCHOS_DEPLOYMENT_TARGET = 10.0;
+			};
+			name = Debug;
+		};
+		D30000000000000000000024 /* Release */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 7A1B2C3D4E5F678901234567 /* Configurations/DevelopmentTeam.xcconfig */;
+			buildSettings = {
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.jimboha.agentlimits.ios.watchkitapp.uitests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				SUPPORTED_PLATFORMS = "watchos watchsimulator";
+				SWIFT_DEFAULT_ACTOR_ISOLATION = nonisolated;
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				TEST_TARGET_NAME = AgentLimitsWatch;
+				WATCHOS_DEPLOYMENT_TARGET = 10.0;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -1099,6 +1487,33 @@
 			buildConfigurations = (
 				B20000000000000000000034 /* Debug */,
 				B20000000000000000000035 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		D3000000000000000000001F /* Build configuration list for PBXNativeTarget "AgentLimitsWatch" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				D3000000000000000000001D /* Debug */,
+				D3000000000000000000001E /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		D30000000000000000000022 /* Build configuration list for PBXNativeTarget "AgentLimitsWatchTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				D30000000000000000000020 /* Debug */,
+				D30000000000000000000021 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		D30000000000000000000025 /* Build configuration list for PBXNativeTarget "AgentLimitsWatchUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				D30000000000000000000023 /* Debug */,
+				D30000000000000000000024 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
