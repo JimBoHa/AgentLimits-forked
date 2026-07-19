@@ -136,7 +136,10 @@ final class ClaudeUsageFetcher {
                 // Look for a valid Claude session cookie scoped to claude.ai.
                 let isValid = cookies.contains { cookie in
                     guard cookie.name == "sessionKey" else { return false }
-                    guard cookie.domain.hasSuffix("claude.ai") else { return false }
+                    guard CookieDomainMatcher.matches(
+                        cookie.domain,
+                        expectedDomain: "claude.ai"
+                    ) else { return false }
                     if let expiresDate = cookie.expiresDate {
                         return expiresDate > now
                     }
