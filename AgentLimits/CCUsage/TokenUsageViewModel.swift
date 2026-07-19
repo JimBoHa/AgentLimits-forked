@@ -15,9 +15,45 @@ protocol TokenUsageSnapshotStoring {
 extension AppGroupSnapshotStore: TokenUsageSnapshotStoring
     where Provider == TokenUsageProvider, Snapshot == TokenUsageSnapshot {}
 
+protocol CCUsageFetching {
+    func fetchSnapshot(for provider: TokenUsageProvider) async throws -> TokenUsageSnapshot
+}
+
+extension CCUsageFetcher: CCUsageFetching {}
+
+struct TokenUsageSnapshotClearFailure {
+    let provider: TokenUsageProvider
+    let reason: String
+}
+
+enum TokenUsageSnapshotClearError: LocalizedError {
+    case clearAlreadyInProgress
+    case invalidClearOperation
+    case deletion(TokenUsageSnapshotClearFailure)
+
+    var errorDescription: String? {
+        switch self {
+        case .clearAlreadyInProgress:
+            return "Another token-usage clear is already active."
+        case .invalidClearOperation:
+            return "The token-usage clear operation is no longer active."
+        case .deletion(let failure):
+            return failure.reason
+        }
+    }
+}
+
 /// ViewModel for managing ccusage token usage data
 @MainActor
 final class TokenUsageViewModel: ObservableObject {
+    struct ExternalSnapshotContext: Equatable {
+        fileprivate let value: UsageOperationGate.Context
+    }
+
+    struct DataClearToken: Equatable {
+        fileprivate let value: UsageOperationGate.ClearToken
+    }
+
     // MARK: - Published Properties
 
     /// Token usage snapshots per provider
@@ -33,17 +69,18 @@ final class TokenUsageViewModel: ObservableObject {
 
     // MARK: - Private Properties
 
-    private let fetcher: CCUsageFetcher
+    private let fetcher: any CCUsageFetching
     private let snapshotStore: any TokenUsageSnapshotStoring
     private let settingsStore: CCUsageSettingsStore
     private let snapshotVisibilityStore: any SnapshotVisibilityControlling
     private var autoRefreshCoordinator: AutoRefreshCoordinator?
     private var suppressedSnapshots: Set<TokenUsageProvider> = []
+    private var operationGate = UsageOperationGate()
 
     // MARK: - Initialization
 
     init(
-        fetcher: CCUsageFetcher? = nil,
+        fetcher: (any CCUsageFetching)? = nil,
         snapshotStore: (any TokenUsageSnapshotStoring)? = nil,
         settingsStore: CCUsageSettingsStore? = nil,
         snapshotVisibilityStore: (any SnapshotVisibilityControlling)? = nil
@@ -136,8 +173,21 @@ final class TokenUsageViewModel: ObservableObject {
 
     // MARK: - Externally Fetched Snapshots
 
+    /// Captures the token-usage generation before external async work starts.
+    func captureExternalSnapshotContext() -> ExternalSnapshotContext? {
+        operationGate.captureContext().map(ExternalSnapshotContext.init(value:))
+    }
+
     /// Persists a WebView-produced snapshot and updates the shared in-memory UI state.
-    func saveExternallyFetchedSnapshot(_ snapshot: TokenUsageSnapshot) throws {
+    @discardableResult
+    func saveExternallyFetchedSnapshot(
+        _ snapshot: TokenUsageSnapshot,
+        context: ExternalSnapshotContext
+    ) throws -> Bool {
+        let operationContext = context.value
+        guard operationGate.isCurrent(operationContext) else {
+            return false
+        }
         do {
             try snapshotStore.saveSnapshot(snapshot)
             snapshotVisibilityStore.setSnapshotSuppressed(
@@ -148,15 +198,72 @@ final class TokenUsageViewModel: ObservableObject {
             snapshots[snapshot.provider] = snapshot
             statusMessages[snapshot.provider] = formatLastUpdated(snapshot.fetchedAt)
             WidgetCenter.shared.reloadTimelines(ofKind: snapshot.provider.widgetKind)
+            return true
         } catch {
+            guard operationGate.isCurrent(operationContext) else { return false }
             statusMessages[snapshot.provider] = error.localizedDescription
             throw error
         }
     }
 
+    /// Invalidates every in-flight token fetch and blocks new work while the
+    /// surrounding Clear Data transaction removes WebKit and snapshot data.
+    func beginDataClear() -> DataClearToken? {
+        guard let token = operationGate.beginClear() else { return nil }
+        for provider in TokenUsageProvider.allCases {
+            isFetching[provider] = false
+        }
+        return DataClearToken(value: token)
+    }
+
+    /// Finishes only the matching token-data clear operation.
+    @discardableResult
+    func finishDataClear(_ token: DataClearToken) -> Bool {
+        operationGate.finishClear(token.value)
+    }
+
+    /// Deletes all token providers while preserving a durable suppression
+    /// marker for every file whose deletion fails.
+    func clearAllSnapshots(
+        during token: DataClearToken
+    ) -> [TokenUsageSnapshotClearFailure] {
+        guard operationGate.isCurrent(token.value) else {
+            return TokenUsageProvider.allCases.map {
+                TokenUsageSnapshotClearFailure(
+                    provider: $0,
+                    reason: TokenUsageSnapshotClearError.invalidClearOperation.localizedDescription
+                )
+            }
+        }
+        return clearSnapshots(for: TokenUsageProvider.allCases)
+    }
+
     /// Clears both persisted and in-memory state. Memory is cleared even when
     /// disk deletion fails so Clear Data cannot leave stale data on screen.
     func clearSnapshot(for provider: TokenUsageProvider) throws {
+        guard let clearToken = beginDataClear() else {
+            throw TokenUsageSnapshotClearError.clearAlreadyInProgress
+        }
+        defer { _ = finishDataClear(clearToken) }
+        guard let failure = clearSnapshots(for: [provider]).first else { return }
+        throw TokenUsageSnapshotClearError.deletion(failure)
+    }
+
+    private func clearSnapshots(
+        for providers: [TokenUsageProvider]
+    ) -> [TokenUsageSnapshotClearFailure] {
+        var failures: [TokenUsageSnapshotClearFailure] = []
+        for provider in providers {
+            if let failure = clearSnapshotStorage(for: provider) {
+                failures.append(failure)
+            }
+        }
+        return failures
+    }
+
+    private func clearSnapshotStorage(
+        for provider: TokenUsageProvider
+    ) -> TokenUsageSnapshotClearFailure? {
         // Prevent a cached disk read from restoring this snapshot while the
         // surrounding WebKit clear is still completing (or after delete fails).
         suppressedSnapshots.insert(provider)
@@ -177,13 +284,27 @@ final class TokenUsageViewModel: ObservableObject {
         WidgetCenter.shared.reloadTimelines(ofKind: provider.widgetKind)
 
         if let deletionError {
-            throw deletionError
+            return TokenUsageSnapshotClearFailure(
+                provider: provider,
+                reason: deletionError.localizedDescription
+            )
         }
+        return nil
     }
 
     // MARK: - Private Methods
 
     private func refresh(for provider: TokenUsageProvider) async {
+        guard let fetchToken = operationGate.beginFetch(for: provider.usageProvider) else {
+            return
+        }
+        isFetching[provider] = true
+        defer {
+            if operationGate.finishFetch(fetchToken) {
+                isFetching[provider] = false
+            }
+        }
+
         // Copilot billing is fetched via UsageViewModel (WebView-based).
         // Only reload the cached snapshot here.
         guard provider.isCLIBased else {
@@ -191,31 +312,31 @@ final class TokenUsageViewModel: ObservableObject {
             guard !snapshotVisibilityStore.isSnapshotSuppressed(fileName: provider.snapshotFileName) else {
                 return
             }
+            guard operationGate.isCurrent(fetchToken) else { return }
             if let cached = snapshotStore.loadSnapshot(for: provider) {
+                guard operationGate.isCurrent(fetchToken) else { return }
                 snapshots[provider] = cached
                 statusMessages[provider] = formatLastUpdated(cached.fetchedAt)
             }
             return
         }
 
-        // Prevent overlapping fetches per provider.
-        guard isFetching[provider] != true else { return }
-        isFetching[provider] = true
-        defer { isFetching[provider] = false }
-
         do {
             // Fetch snapshot via CLI and persist to App Group store.
             let snapshot = try await fetcher.fetchSnapshot(for: provider)
+            guard operationGate.isCurrent(fetchToken) else { return }
             try snapshotStore.saveSnapshot(snapshot)
             snapshotVisibilityStore.setSnapshotSuppressed(
                 false,
                 fileName: snapshot.provider.snapshotFileName
             )
+            suppressedSnapshots.remove(snapshot.provider)
             snapshots[provider] = snapshot
             statusMessages[provider] = formatLastUpdated(snapshot.fetchedAt)
             // Notify widgets to update with latest data.
             WidgetCenter.shared.reloadTimelines(ofKind: provider.widgetKind)
         } catch {
+            guard operationGate.isCurrent(fetchToken) else { return }
             // Report error to UI.
             statusMessages[provider] = error.localizedDescription
         }
