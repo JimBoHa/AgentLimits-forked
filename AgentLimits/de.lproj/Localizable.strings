@@ -142,6 +142,7 @@
 "tokenUsage.notFetched" = "Nicht abgerufen";
 "tokenUsage.updated" = "Aktualisiert: ";
 "ccusage.provider" = "Dienst";
+"ccusage.providerAccountFormat" = "%@ — %@";
 "ccusage.disabled" = "Deaktiviert";
 "ccusage.credits.title" = "Danksagung";
 "ccusage.credits.body" = "Besonderer Dank an ryoppippi, den Ersteller von ccusage.";
@@ -233,3 +234,9 @@
 "accounts.label" = "Kontoname";
 "accounts.save" = "Speichern";
 "accounts.disabledFormat" = "%@ (Deaktiviert)";
+"accounts.cliDataRoot" = "CLI-Datenverzeichnis";
+"accounts.cliDataRootPlaceholder" = "Standardverzeichnis des Anbieters";
+"accounts.cliDataRootHelp" = "Legen Sie für jedes weitere CLI-Konto ein eigenes lokales Datenverzeichnis fest. AgentLimits liest dieses Verzeichnis, löscht es aber nie.";
+"accounts.chooseFolder" = "Auswählen…";
+"accounts.cliDataRootDefault" = "Standardeinstellung des Anbieters";
+"accounts.cliDataRootFormat" = "CLI-Daten: %@";

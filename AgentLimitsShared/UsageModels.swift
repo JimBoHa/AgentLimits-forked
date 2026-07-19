@@ -903,6 +903,52 @@ protocol SnapshotData: Codable {
     var provider: Provider { get }
 }
 
+/// External markers survive removal of an account snapshot namespace.
+enum AccountSnapshotMigrationKey {
+    static func usage(for account: ProviderAccount) -> String {
+        "usage_snapshot_account_migration_v1."
+            + account.provider.rawValue
+            + "."
+            + account.snapshotNamespace
+    }
+
+    static func tokenUsage(for account: ProviderAccount) -> String {
+        "token_usage_snapshot_account_migration_v1."
+            + account.provider.rawValue
+            + "."
+            + account.snapshotNamespace
+    }
+}
+
+/// UserDefaults reports whether a forced persistence attempt succeeded. Keep
+/// the prior in-process values when it does not, so a retry cannot mistake an
+/// uncommitted retirement marker for durable state.
+enum DurableDefaultsFlags {
+    static func persistTrue(
+        _ keys: [String],
+        in defaults: UserDefaults
+    ) -> Bool {
+        let priorValues = keys.map { key in
+            (key: key, value: defaults.object(forKey: key))
+        }
+        for key in keys {
+            defaults.set(true, forKey: key)
+        }
+        guard defaults.synchronize() else {
+            for prior in priorValues {
+                if let value = prior.value {
+                    defaults.set(value, forKey: prior.key)
+                } else {
+                    defaults.removeObject(forKey: prior.key)
+                }
+            }
+            _ = defaults.synchronize()
+            return false
+        }
+        return true
+    }
+}
+
 /// Shared visibility boundary for snapshots whose physical deletion failed.
 ///
 /// Clear Data writes a durable suppression marker before deleting a file. App
@@ -1056,14 +1102,78 @@ struct AppGroupSnapshotStore<Provider: SnapshotFileNaming, Snapshot: SnapshotDat
         return "accounts/\(accountNamespace)/\(provider.snapshotFileName)"
     }
 
+    /// Atomically hides a provider-only projection from app and widget readers
+    /// without changing the deletion marker used by legacy migration.
+    func setProjectionDisplaySuppressed(
+        _ isSuppressed: Bool,
+        for provider: Provider
+    ) throws {
+        guard accountID == nil,
+              let markerURL = projectionDisplaySuppressionMarkerURL(
+                for: provider
+              ) else {
+            throw UsageSnapshotStoreError.appGroupUnavailable
+        }
+        if isSuppressed {
+            guard try hasExistingSnapshotRoot() else { return }
+            try withSecurityScopedAccess(markerURL) {
+                try Data().write(to: markerURL, options: .atomic)
+            }
+        } else {
+            try withSecurityScopedAccess(markerURL) {
+                if fileManager.fileExists(atPath: markerURL.path) {
+                    try fileManager.removeItem(at: markerURL)
+                }
+            }
+        }
+    }
+
+    func isProjectionDisplaySuppressed(for provider: Provider) -> Bool {
+        guard accountID == nil,
+              let markerURL = projectionDisplaySuppressionMarkerURL(
+                for: provider
+              ) else {
+            return false
+        }
+        return fileManager.fileExists(atPath: markerURL.path)
+    }
+
+    /// Durable account/provider suppression survives failure to delete a
+    /// snapshot namespace and is stored outside that removable namespace.
+    func setSnapshotSuppressed(
+        _ isSuppressed: Bool,
+        for provider: Provider
+    ) throws {
+        guard let markerURL = snapshotSuppressionMarkerURL(for: provider) else {
+            throw UsageSnapshotStoreError.appGroupUnavailable
+        }
+        if isSuppressed {
+            guard try hasExistingSnapshotRoot() else { return }
+            try withSecurityScopedAccess(markerURL) {
+                try Data().write(to: markerURL, options: .atomic)
+            }
+        } else {
+            try withSecurityScopedAccess(markerURL) {
+                if fileManager.fileExists(atPath: markerURL.path) {
+                    try fileManager.removeItem(at: markerURL)
+                }
+            }
+        }
+    }
+
+    func isSnapshotFileSuppressed(for provider: Provider) -> Bool {
+        guard let markerURL = snapshotSuppressionMarkerURL(for: provider) else {
+            return false
+        }
+        return fileManager.fileExists(atPath: markerURL.path)
+    }
+
     /// Loads a snapshot for the specified provider from disk.
     /// Returns nil if loading fails for any reason.
     /// - Parameter provider: The provider to load snapshot for
     /// - Returns: The loaded snapshot, or nil if not found or failed to load
     func loadSnapshot(for provider: Provider) -> Snapshot? {
-        guard !visibilityStore.isSnapshotSuppressed(
-            fileName: snapshotVisibilityKey(for: provider)
-        ) else {
+        guard !isSnapshotSuppressedForRead(provider) else {
             return nil
         }
         // Ignore errors for a non-throwing convenience path.
@@ -1076,8 +1186,7 @@ struct AppGroupSnapshotStore<Provider: SnapshotFileNaming, Snapshot: SnapshotDat
     /// - Returns: The loaded snapshot
     /// - Throws: `UsageSnapshotStoreError` if loading fails
     func tryLoadSnapshot(for provider: Provider) throws -> Snapshot {
-        let visibilityKey = snapshotVisibilityKey(for: provider)
-        guard !visibilityStore.isSnapshotSuppressed(fileName: visibilityKey) else {
+        guard !isSnapshotSuppressedForRead(provider) else {
             // Suppression intentionally gives callers the same semantics as a
             // missing snapshot while preserving the failed file for retry.
             throw CocoaError(.fileReadNoSuchFile)
@@ -1087,7 +1196,7 @@ struct AppGroupSnapshotStore<Provider: SnapshotFileNaming, Snapshot: SnapshotDat
         } catch {
             throw UsageSnapshotStoreError.readFailed(underlying: error)
         }
-        guard !visibilityStore.isSnapshotSuppressed(fileName: visibilityKey) else {
+        guard !isSnapshotSuppressedForRead(provider) else {
             throw CocoaError(.fileReadNoSuchFile)
         }
         // Resolve the storage path in the App Group container.
@@ -1124,6 +1233,7 @@ struct AppGroupSnapshotStore<Provider: SnapshotFileNaming, Snapshot: SnapshotDat
             try data.write(to: url, options: .atomic)
         }
         try retireLegacyMigrationIfNeeded(for: snapshot.provider)
+        try setSnapshotSuppressed(false, for: snapshot.provider)
         visibilityStore.setSnapshotSuppressed(
             false,
             fileName: snapshotVisibilityKey(for: snapshot.provider)
@@ -1198,6 +1308,61 @@ struct AppGroupSnapshotStore<Provider: SnapshotFileNaming, Snapshot: SnapshotDat
         accountID?.uuidString.lowercased()
     }
 
+    /// The display-only key is intentionally independent from the legacy
+    /// deletion key. One durable write can therefore hide a widget without
+    /// making the only migration source look explicitly deleted after a crash.
+    private func isSnapshotSuppressedForRead(_ provider: Provider) -> Bool {
+        if visibilityStore.isSnapshotSuppressed(
+            fileName: snapshotVisibilityKey(for: provider)
+        ) || isSnapshotFileSuppressed(for: provider) {
+            return true
+        }
+        return isProjectionDisplaySuppressed(for: provider)
+    }
+
+    private func projectionDisplaySuppressionMarkerURL(
+        for provider: Provider
+    ) -> URL? {
+        snapshotDirectoryURL(accountID: nil)?.appendingPathComponent(
+            ".projection-display-suppressed-\(provider.snapshotFileName)"
+        )
+    }
+
+    private func snapshotSuppressionMarkerURL(
+        for provider: Provider
+    ) -> URL? {
+        let scope = accountNamespace ?? "legacy"
+        return snapshotDirectoryURL(accountID: nil)?
+            .appendingPathComponent(
+                ".snapshot-suppressed-\(scope)-"
+                    + provider.snapshotFileName
+            )
+    }
+
+    private func hasExistingSnapshotRoot() throws -> Bool {
+        guard let rootURL = snapshotDirectoryURL(accountID: nil) else {
+            throw UsageSnapshotStoreError.appGroupUnavailable
+        }
+        do {
+            let values = try rootURL.resourceValues(forKeys: [
+                .isDirectoryKey,
+                .isSymbolicLinkKey
+            ])
+            guard values.isDirectory == true,
+                  values.isSymbolicLink != true else {
+                throw CocoaError(.fileReadNoPermission)
+            }
+            return true
+        } catch {
+            let cocoaError = error as NSError
+            if cocoaError.domain == NSCocoaErrorDomain,
+               cocoaError.code == CocoaError.fileReadNoSuchFile.rawValue {
+                return false
+            }
+            throw error
+        }
+    }
+
     private var resolvedContainerURL: URL? {
         containerURLOverride ?? fileManager.containerURL(
             forSecurityApplicationGroupIdentifier: AppGroupConfig.groupId
@@ -1235,7 +1400,10 @@ struct AppGroupSnapshotStore<Provider: SnapshotFileNaming, Snapshot: SnapshotDat
         guard !fileManager.fileExists(atPath: migrationMarkerURL.path) else { return }
         let legacyURL = legacyDirectoryURL.appendingPathComponent(provider.snapshotFileName)
 
-        if visibilityStore.isSnapshotSuppressed(fileName: provider.snapshotFileName) {
+        let projectionIsSuppressed = visibilityStore.isSnapshotSuppressed(
+            fileName: provider.snapshotFileName
+        )
+        if projectionIsSuppressed {
             try fileManager.createDirectory(
                 at: targetDirectoryURL,
                 withIntermediateDirectories: true

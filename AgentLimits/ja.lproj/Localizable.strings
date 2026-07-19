@@ -142,6 +142,7 @@
 "tokenUsage.notFetched" = "未取得";
 "tokenUsage.updated" = "更新: ";
 "ccusage.provider" = "サービス";
+"ccusage.providerAccountFormat" = "%@ — %@";
 "ccusage.disabled" = "無効";
 "ccusage.credits.title" = "謝辞";
 "ccusage.credits.body" = "ccusage の作者 ryoppippi さんへの感謝を込めて。";
@@ -232,3 +233,9 @@
 "accounts.label" = "アカウント名";
 "accounts.save" = "保存";
 "accounts.disabledFormat" = "%@（無効）";
+"accounts.cliDataRoot" = "CLIデータディレクトリ";
+"accounts.cliDataRootPlaceholder" = "プロバイダーのデフォルトディレクトリ";
+"accounts.cliDataRootHelp" = "追加のCLIアカウントごとに異なるローカルデータディレクトリを設定します。AgentLimitsはこのディレクトリを読み取りますが、削除することはありません。";
+"accounts.chooseFolder" = "選択…";
+"accounts.cliDataRootDefault" = "プロバイダーのデフォルト";
+"accounts.cliDataRootFormat" = "CLIデータ: %@";

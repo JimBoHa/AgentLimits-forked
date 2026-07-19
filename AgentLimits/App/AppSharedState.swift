@@ -34,7 +34,7 @@ final class AppSharedState: ObservableObject {
             accountStore: accountStore,
             webViewPool: pool
         )
-        let tokenViewModel = TokenUsageViewModel()
+        let tokenViewModel = TokenUsageViewModel(accountStore: accountStore)
         self.webViewPool = pool
         self.accountRemovalManager = removalManager
         self.tokenUsageViewModel = tokenViewModel

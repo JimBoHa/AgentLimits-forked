@@ -141,6 +141,7 @@
 "tokenUsage.notFetched" = "Niet opgehaald";
 "tokenUsage.updated" = "Bijgewerkt: ";
 "ccusage.provider" = "Service";
+"ccusage.providerAccountFormat" = "%@ — %@";
 "ccusage.disabled" = "Uitgeschakeld";
 "ccusage.credits.title" = "Credits";
 "ccusage.credits.body" = "Speciale dank aan ryoppippi, de maker van ccusage.";
@@ -233,3 +234,9 @@
 "accounts.label" = "Accountnaam";
 "accounts.save" = "Opslaan";
 "accounts.disabledFormat" = "%@ (Uitgeschakeld)";
+"accounts.cliDataRoot" = "CLI-gegevensmap";
+"accounts.cliDataRootPlaceholder" = "Standaardmap van provider";
+"accounts.cliDataRootHelp" = "Stel voor elk extra CLI-account een andere lokale gegevensmap in. AgentLimits leest deze map, maar verwijdert deze nooit.";
+"accounts.chooseFolder" = "Kiezen…";
+"accounts.cliDataRootDefault" = "Standaardinstelling van provider";
+"accounts.cliDataRootFormat" = "CLI-gegevens: %@";

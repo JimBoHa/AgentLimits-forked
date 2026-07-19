@@ -141,6 +141,7 @@
 "tokenUsage.notFetched" = "가져오지 못함";
 "tokenUsage.updated" = "업데이트: ";
 "ccusage.provider" = "서비스";
+"ccusage.providerAccountFormat" = "%@ — %@";
 "ccusage.disabled" = "비활성화";
 "ccusage.credits.title" = "크레딧";
 "ccusage.credits.body" = "ccusage 제작자 ryoppippi에게 특별한 감사를 전합니다.";
@@ -233,3 +234,9 @@
 "accounts.label" = "계정 이름";
 "accounts.save" = "저장";
 "accounts.disabledFormat" = "%@ (비활성화됨)";
+"accounts.cliDataRoot" = "CLI 데이터 디렉터리";
+"accounts.cliDataRootPlaceholder" = "서비스 기본 디렉터리";
+"accounts.cliDataRootHelp" = "추가 CLI 계정마다 서로 다른 로컬 데이터 디렉터리를 설정합니다. AgentLimits는 이 디렉터리를 읽지만 삭제하지는 않습니다.";
+"accounts.chooseFolder" = "선택…";
+"accounts.cliDataRootDefault" = "서비스 기본값";
+"accounts.cliDataRootFormat" = "CLI 데이터: %@";

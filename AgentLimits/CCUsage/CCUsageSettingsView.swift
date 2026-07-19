@@ -11,14 +11,20 @@ import WidgetKit
 @MainActor
 struct CCUsageSettingsView: View {
     @ObservedObject private var viewModel: TokenUsageViewModel
+    @ObservedObject private var usageViewModel: UsageViewModel
     @State private var selectedProvider: TokenUsageProvider = .codex
+    @State private var accountErrorMessage: String?
     @AppStorage(
         AppGroupConfig.tokenUsageRefreshIntervalMinutesKey,
         store: AppGroupDefaults.shared
     ) private var refreshIntervalMinutes: Int = RefreshIntervalConfig.defaultMinutes
 
-    init(viewModel: TokenUsageViewModel) {
+    init(
+        viewModel: TokenUsageViewModel,
+        usageViewModel: UsageViewModel
+    ) {
         self.viewModel = viewModel
+        self.usageViewModel = usageViewModel
     }
 
     var body: some View {
@@ -26,6 +32,9 @@ struct CCUsageSettingsView: View {
             SettingsFormSection {
                 LabeledContent("ccusage.provider".localized()) {
                     providerPicker
+                }
+                LabeledContent("content.account".localized()) {
+                    accountPicker
                 }
                 LabeledContent("refreshInterval.label".localized()) {
                     RefreshIntervalPickerRow(showsLabel: false, refreshIntervalMinutes: $refreshIntervalMinutes)
@@ -50,6 +59,24 @@ struct CCUsageSettingsView: View {
             viewModel.restartAutoRefresh()
             WidgetCenter.shared.reloadAllTimelines()
         }
+        .onAppear {
+            viewModel.reloadAccounts()
+        }
+        .alert(
+            "accounts.title".localized(),
+            isPresented: Binding(
+                get: { accountErrorMessage != nil },
+                set: { isPresented in
+                    if !isPresented { accountErrorMessage = nil }
+                }
+            )
+        ) {
+            Button("accounts.ok".localized(), role: .cancel) {
+                accountErrorMessage = nil
+            }
+        } message: {
+            Text(accountErrorMessage ?? "")
+        }
     }
 
     // MARK: - Provider Picker
@@ -66,6 +93,43 @@ struct CCUsageSettingsView: View {
         .accessibilityLabel(Text("ccusage.provider".localized()))
     }
 
+    private var accountPicker: some View {
+        Picker(
+            "",
+            selection: Binding(
+                get: { selectedAccount.id },
+                set: { accountID in
+                    do {
+                        _ = try usageViewModel.selectAccount(id: accountID)
+                    } catch {
+                        accountErrorMessage = error.localizedDescription
+                    }
+                }
+            )
+        ) {
+            ForEach(
+                usageViewModel.accounts(for: selectedProvider.usageProvider)
+            ) { account in
+                Text(
+                    account.isEnabled
+                        ? account.label
+                        : "accounts.disabledFormat".localized(account.label)
+                )
+                .tag(account.id)
+            }
+        }
+        .frame(maxWidth: 260)
+        .labelsHidden()
+        .disabled(!usageViewModel.webSessionsCanBeManaged)
+        .accessibilityLabel(Text("content.account".localized()))
+    }
+
+    private var selectedAccount: ProviderAccount {
+        usageViewModel.selectedAccount(
+            for: selectedProvider.usageProvider
+        )
+    }
+
     // MARK: - Settings Section
 
     private var settingsSection: some View {
@@ -74,6 +138,7 @@ struct CCUsageSettingsView: View {
                 if selectedProvider.isCLIBased {
                     ProviderSettingsView(
                         settings: settings,
+                        cliDataRoot: selectedAccount.cliDataRoot,
                         isFetching: viewModel.isFetching[selectedProvider] ?? false,
                         onEnabledChange: { newEnabled in
                             var updated = settings
@@ -84,8 +149,9 @@ struct CCUsageSettingsView: View {
                             viewModel.updateSettings(updatedSettings)
                         },
                         onTest: {
+                            let account = selectedAccount
                             Task {
-                                await viewModel.refreshNow(for: selectedProvider)
+                                await viewModel.refreshNow(for: account)
                             }
                         }
                     )
@@ -144,7 +210,12 @@ struct CCUsageSettingsView: View {
     private func providerStatusRow(for provider: TokenUsageProvider) -> some View {
         HStack(spacing: DesignTokens.Spacing.small) {
             SettingsStatusIndicator(
-                text: provider.displayName,
+                text: "ccusage.providerAccountFormat".localized(
+                    provider.displayName,
+                    usageViewModel.selectedAccount(
+                        for: provider.usageProvider
+                    ).label
+                ),
                 level: statusLevel(for: provider)
             )
             Spacer()
@@ -205,6 +276,7 @@ struct CCUsageSettingsView: View {
 /// Settings configuration for a single provider
 private struct ProviderSettingsView: View {
     let settings: CCUsageSettings
+    let cliDataRoot: String?
     let isFetching: Bool
     let onEnabledChange: (Bool) -> Void
     let onUpdate: (CCUsageSettings) -> Void
@@ -215,6 +287,14 @@ private struct ProviderSettingsView: View {
             Toggle("ccusage.enabled".localized(), isOn: enabledBinding)
 
             if settings.isEnabled {
+                LabeledContent("accounts.cliDataRoot".localized()) {
+                    Text(
+                        cliDataRoot
+                            ?? "accounts.cliDataRootDefault".localized()
+                    )
+                    .font(.system(.footnote, design: .monospaced))
+                    .textSelection(.enabled)
+                }
                 LabeledContent("ccusage.command".localized()) {
                     Text(settings.displayCommand)
                         .font(.system(.footnote, design: .monospaced))
@@ -306,5 +386,14 @@ private struct CopilotBillingSettingsView: View {
 // MARK: - Preview
 
 #Preview {
-    CCUsageSettingsView(viewModel: TokenUsageViewModel())
+    let accountStore = ProviderAccountStore()
+    let pool = UsageWebViewPool(accountStore: accountStore)
+    let tokenViewModel = TokenUsageViewModel(accountStore: accountStore)
+    CCUsageSettingsView(
+        viewModel: tokenViewModel,
+        usageViewModel: UsageViewModel(
+            webViewPool: pool,
+            tokenUsageViewModel: tokenViewModel
+        )
+    )
 }

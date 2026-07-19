@@ -141,6 +141,7 @@
 "tokenUsage.notFetched" = "尚未取得";
 "tokenUsage.updated" = "更新： ";
 "ccusage.provider" = "服務";
+"ccusage.providerAccountFormat" = "%@ — %@";
 "ccusage.disabled" = "已停用";
 "ccusage.credits.title" = "致謝";
 "ccusage.credits.body" = "特別感謝 ccusage 作者 ryoppippi。";
@@ -233,3 +234,9 @@
 "accounts.label" = "帳號名稱";
 "accounts.save" = "儲存";
 "accounts.disabledFormat" = "%@（已停用）";
+"accounts.cliDataRoot" = "CLI 資料目錄";
+"accounts.cliDataRootPlaceholder" = "服務預設目錄";
+"accounts.cliDataRootHelp" = "為每個額外的 CLI 帳號設定不同的本機資料目錄。AgentLimits 會讀取此目錄，但絕不會刪除它。";
+"accounts.chooseFolder" = "選擇…";
+"accounts.cliDataRootDefault" = "服務預設值";
+"accounts.cliDataRootFormat" = "CLI 資料：%@";

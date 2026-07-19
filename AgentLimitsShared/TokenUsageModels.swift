@@ -132,6 +132,119 @@ enum TokenUsageProvider: String, Codable, CaseIterable, Identifiable, SnapshotFi
             return .githubCopilot
         }
     }
+
+    /// Provider-specific profile root consumed by ccusage's child process.
+    var cliDataRootEnvironmentVariable: String? {
+        switch self {
+        case .codex:
+            return "CODEX_HOME"
+        case .claude:
+            return "CLAUDE_CONFIG_DIR"
+        case .copilot:
+            return nil
+        }
+    }
+
+    /// Resolves one optional account root into a child-only environment edit.
+    /// A nil/blank root deliberately unsets the provider variable instead of
+    /// inheriting a profile selected in AgentLimits' parent environment.
+    func resolveCLIDataRootEnvironment(
+        _ rawValue: String?,
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
+    ) throws -> CLIDataRootEnvironment? {
+        let trimmed = rawValue?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let variableName = cliDataRootEnvironmentVariable else {
+            guard trimmed?.isEmpty != false else {
+                throw CLIDataRootError.unsupportedProvider(self)
+            }
+            return nil
+        }
+        guard let trimmed, !trimmed.isEmpty else {
+            return CLIDataRootEnvironment(
+                variableName: variableName,
+                value: nil
+            )
+        }
+        guard !trimmed.contains("\0") else {
+            throw CLIDataRootError.nullByte
+        }
+        guard !trimmed.contains(",") else {
+            throw CLIDataRootError.multipleRoots
+        }
+        guard !trimmed.unicodeScalars.contains(where: {
+            CharacterSet.controlCharacters.contains($0)
+        }) else {
+            throw CLIDataRootError.controlCharacter
+        }
+
+        let absolutePath: String
+        if trimmed == "~" {
+            absolutePath = homeDirectory.path
+        } else if trimmed.hasPrefix("~/") {
+            absolutePath = homeDirectory
+                .appendingPathComponent(String(trimmed.dropFirst(2)))
+                .path
+        } else if trimmed.hasPrefix("~") {
+            throw CLIDataRootError.unsupportedTilde
+        } else {
+            guard trimmed.hasPrefix("/") else {
+                throw CLIDataRootError.relativePath
+            }
+            absolutePath = trimmed
+        }
+
+        let standardizedPath = URL(
+            fileURLWithPath: absolutePath,
+            isDirectory: true
+        ).standardizedFileURL.path
+        guard standardizedPath.hasPrefix("/") else {
+            throw CLIDataRootError.relativePath
+        }
+        return CLIDataRootEnvironment(
+            variableName: variableName,
+            value: standardizedPath
+        )
+    }
+}
+
+/// One provider-root edit, kept separate from rendered shell command text.
+struct CLIDataRootEnvironment: Equatable, Sendable {
+    let variableName: String
+    /// Nil means explicitly remove this variable from the child environment.
+    let value: String?
+}
+
+enum CLIDataRootError: LocalizedError, Equatable {
+    case unsupportedProvider(TokenUsageProvider)
+    case nullByte
+    case controlCharacter
+    case relativePath
+    case multipleRoots
+    case unsupportedTilde
+
+    var errorDescription: String? {
+        switch self {
+        case .unsupportedProvider(let provider):
+            return "\(provider.displayName) does not support a CLI data root."
+        case .nullByte:
+            return "CLI data root contains an unsupported null byte."
+        case .controlCharacter:
+            return "CLI data root contains an unsupported control character."
+        case .relativePath:
+            return "CLI data root must be an absolute path or start with ~/."
+        case .multipleRoots:
+            return "CLI data root must contain exactly one directory."
+        case .unsupportedTilde:
+            return "CLI data root supports only ~ or ~/ paths."
+        }
+    }
+}
+
+/// Complete ccusage execution request. Environment never becomes shell text.
+struct CCUsageCLIExecution: Equatable {
+    let invocation: CLICommandInvocation
+    let dataRootEnvironment: CLIDataRootEnvironment?
 }
 
 // MARK: - Token Usage Period
@@ -280,19 +393,50 @@ struct CCUsageSettings: Codable, Equatable {
     /// - Parameter startDate: Start date in YYYYMMDD format.
     /// - Returns: CLI command string with date and JSON arguments.
     func makeCLICommand(startDate: String) -> String {
-        guard let invocation = try? makeCLIInvocation(startDate: startDate) else {
+        makeCLICommand(startDate: startDate, cliDataRoot: nil)
+    }
+
+    /// Root-aware display helper. Root remains absent from rendered command.
+    func makeCLICommand(
+        startDate: String,
+        cliDataRoot: String?,
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
+    ) -> String {
+        guard let execution = try? makeCLIExecution(
+            startDate: startDate,
+            cliDataRoot: cliDataRoot,
+            homeDirectory: homeDirectory
+        ) else {
             return cliCommand
         }
-        return invocation.shellCommand
+        return execution.invocation.shellCommand
     }
 
     /// Builds literal argv without evaluating the additional-arguments field.
     func makeCLIInvocation(startDate: String) throws -> CLICommandInvocation {
+        try makeCLIExecution(
+            startDate: startDate,
+            cliDataRoot: nil
+        ).invocation
+    }
+
+    /// Builds argv plus an isolated provider-root environment edit.
+    func makeCLIExecution(
+        startDate: String,
+        cliDataRoot: String?,
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
+    ) throws -> CCUsageCLIExecution {
         let additionalArguments = try CLIArgumentParser.parse(additionalArgs)
         let base = try provider.makeCLIInvocationBase()
-        return CLICommandInvocation(
-            executable: base.executable,
-            arguments: base.arguments + additionalArguments + ["--since", startDate, "-j"]
+        return CCUsageCLIExecution(
+            invocation: CLICommandInvocation(
+                executable: base.executable,
+                arguments: base.arguments + additionalArguments + ["--since", startDate, "-j"]
+            ),
+            dataRootEnvironment: try provider.resolveCLIDataRootEnvironment(
+                cliDataRoot,
+                homeDirectory: homeDirectory
+            )
         )
     }
 

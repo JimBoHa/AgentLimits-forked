@@ -141,6 +141,7 @@
 "tokenUsage.notFetched" = "Не отримано";
 "tokenUsage.updated" = "Оновлено: ";
 "ccusage.provider" = "Сервіс";
+"ccusage.providerAccountFormat" = "%@ — %@";
 "ccusage.disabled" = "Вимкнено";
 "ccusage.credits.title" = "Подяки";
 "ccusage.credits.body" = "Особлива подяка ryoppippi, творцю ccusage.";
@@ -233,3 +234,9 @@
 "accounts.label" = "Назва облікового запису";
 "accounts.save" = "Зберегти";
 "accounts.disabledFormat" = "%@ (Вимкнено)";
+"accounts.cliDataRoot" = "Каталог даних CLI";
+"accounts.cliDataRootPlaceholder" = "Стандартний каталог провайдера";
+"accounts.cliDataRootHelp" = "Установіть окремий локальний каталог даних для кожного додаткового облікового запису CLI. AgentLimits читає цей каталог, але ніколи його не видаляє.";
+"accounts.chooseFolder" = "Вибрати…";
+"accounts.cliDataRootDefault" = "Типове значення провайдера";
+"accounts.cliDataRootFormat" = "Дані CLI: %@";

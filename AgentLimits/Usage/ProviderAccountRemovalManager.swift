@@ -21,26 +21,52 @@ struct DefaultIdentifiedWebsiteDataStoreRemover:
 
 @MainActor
 protocol ProviderAccountLocalDataRemoving {
+    func prepareLocalDataRetirement(for account: ProviderAccount) throws
     func removeLocalData(for account: ProviderAccount) throws
+}
+
+extension ProviderAccountLocalDataRemoving {
+    func prepareLocalDataRetirement(for account: ProviderAccount) throws {}
+}
+
+enum ProviderAccountLocalDataRemovalError: LocalizedError, Equatable {
+    case migrationRetirementFailed
+
+    var errorDescription: String? {
+        "Could not durably retire account snapshot migration."
+    }
 }
 
 struct DefaultProviderAccountLocalDataRemover:
     ProviderAccountLocalDataRemoving {
     private let visibilityStore: any SnapshotVisibilityControlling
+    private let migrationDefaults: UserDefaults
     private let makeUsageSnapshotStore: (UUID) -> UsageSnapshotStore
 
     init(
         visibilityStore: any SnapshotVisibilityControlling =
             SnapshotVisibilityStore.shared,
+        migrationDefaults: UserDefaults = .standard,
         makeUsageSnapshotStore: @escaping (UUID) -> UsageSnapshotStore = {
             UsageSnapshotStore(accountID: $0)
         }
     ) {
         self.visibilityStore = visibilityStore
+        self.migrationDefaults = migrationDefaults
         self.makeUsageSnapshotStore = makeUsageSnapshotStore
     }
 
+    func prepareLocalDataRetirement(
+        for account: ProviderAccount
+    ) throws {
+        try persistMigrationRetirement(for: account)
+    }
+
     func removeLocalData(for account: ProviderAccount) throws {
+        // These markers live outside the namespace removed below. Persist both
+        // before deletion so a failed registry commit cannot make the still-
+        // registered legacy account import a replacement's projection.
+        try persistMigrationRetirement(for: account)
         try makeUsageSnapshotStore(account.id).deleteAccountNamespace()
 
         let prefix = "accounts/\(account.snapshotNamespace)/"
@@ -53,6 +79,22 @@ struct DefaultProviderAccountLocalDataRemover:
             )
         }
     }
+
+    private func persistMigrationRetirement(
+        for account: ProviderAccount
+    ) throws {
+        guard DurableDefaultsFlags.persistTrue(
+            [
+                AccountSnapshotMigrationKey.usage(for: account),
+                AccountSnapshotMigrationKey.tokenUsage(for: account)
+            ],
+            in: migrationDefaults
+        ) else {
+            throw ProviderAccountLocalDataRemovalError
+                .migrationRetirementFailed
+        }
+    }
+
 }
 
 enum ProviderAccountRemovalOutcome: Equatable {
@@ -110,6 +152,12 @@ final class ProviderAccountRemovalManager {
         isOperationInProgress = true
         defer { isOperationInProgress = false }
 
+        guard let target = accountStore.account(id: id) else {
+            throw ProviderAccountStoreError.accountNotFound
+        }
+        // Retire both legacy import paths before prepareRemoval changes shared
+        // selection and can publish a sibling's provider projection.
+        try localDataRemover.prepareLocalDataRetirement(for: target)
         let plan = try accountStore.prepareRemoval(id: id)
         let token = try webViewPool.beginAccountRetirement(plan)
         var registryCommitted = false

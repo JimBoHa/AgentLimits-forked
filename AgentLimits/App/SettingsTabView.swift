@@ -99,7 +99,10 @@ struct SettingsTabView: View {
         case .pacemaker:
             PacemakerSettingsView()
         case .ccusage:
-            CCUsageSettingsView(viewModel: tokenUsageViewModel)
+            CCUsageSettingsView(
+                viewModel: tokenUsageViewModel,
+                usageViewModel: viewModel
+            )
         case .update:
             UpdateSettingsView(releasesURL: URL(string: "https://github.com/JimBoHa/AgentLimits-forked/releases")!)
         case .advanced:

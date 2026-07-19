@@ -16,6 +16,80 @@ final class ShellExecutorTests: XCTestCase {
         XCTAssertEqual(output, "fixed-zsh\n")
     }
 
+    func testChildEnvironmentOverrideDoesNotMutateParent() async throws {
+        let name = "AGENTLIMITS_CHILD_"
+            + UUID().uuidString.replacingOccurrences(of: "-", with: "")
+        XCTAssertNil(ProcessInfo.processInfo.environment[name])
+
+        let output = try await makeExecutor(timeout: 1).executeString(
+            command: "print -r -- \"$\(name)\"",
+            environment: ShellExecutionEnvironment(
+                overrides: [name: "child-only"]
+            )
+        )
+
+        XCTAssertEqual(output, "child-only\n")
+        XCTAssertNil(ProcessInfo.processInfo.environment[name])
+    }
+
+    func testChildEnvironmentCanExplicitlyUnsetInheritedValue() async throws {
+        let variableName = "AGENTLIMITS_INHERITED_ONLY"
+        let executor = ShellExecutor(
+            timeout: 1,
+            inheritedEnvironment: [variableName: "parent"]
+        )
+
+        let output = try await executor.executeString(
+            command: "if [[ -v \(variableName) ]]; then print inherited; else print unset; fi",
+            environment: ShellExecutionEnvironment(unsets: [variableName])
+        )
+
+        XCTAssertEqual(output, "unset\n")
+        XCTAssertNil(ProcessInfo.processInfo.environment[variableName])
+    }
+
+    func testConcurrentChildEnvironmentOverridesStayIsolated() async throws {
+        let executor = makeExecutor(timeout: 2)
+        let name = "AGENTLIMITS_CONCURRENT_ROOT"
+        let command = "/bin/sleep 0.05; print -r -- \"$\(name)\""
+
+        async let personal = executor.executeString(
+            command: command,
+            environment: ShellExecutionEnvironment(
+                overrides: [name: "/profiles/personal"]
+            )
+        )
+        async let work = executor.executeString(
+            command: command,
+            environment: ShellExecutionEnvironment(
+                overrides: [name: "/profiles/work"]
+            )
+        )
+
+        let outputs = try await (personal, work)
+        XCTAssertEqual(outputs.0, "/profiles/personal\n")
+        XCTAssertEqual(outputs.1, "/profiles/work\n")
+        XCTAssertNil(ProcessInfo.processInfo.environment[name])
+    }
+
+    func testInvalidChildEnvironmentFailsBeforeLaunch() async throws {
+        for invalidName in ["BAD=NAME", "BAD NAME", "9BAD", "BAD-NAME", ""] {
+            do {
+                _ = try await makeExecutor(timeout: 1).executeString(
+                    command: "true",
+                    environment: ShellExecutionEnvironment(
+                        overrides: [invalidName: "value"]
+                    )
+                )
+                XCTFail("Expected invalid environment failure")
+            } catch let error as ShellExecutionEnvironmentError {
+                XCTAssertEqual(error, .invalidVariableName)
+            } catch {
+                XCTFail("Expected invalid environment failure, got \(error)")
+            }
+        }
+    }
+
     func testDrainsLargeConcurrentStandardOutputAndError() async throws {
         let byteCount = 2_500_000
         let executor = makeExecutor(timeout: 5)

@@ -97,8 +97,12 @@ final class CCUsageFetcher {
     /// - Parameters:
     ///   - timeout: Maximum time to wait for CLI completion (default: 60 seconds)
     ///   - settingsStore: Store for ccusage settings (default: shared instance)
-    init(timeout: TimeInterval = 60, settingsStore: CCUsageSettingsStore = .shared) {
-        self.shellExecutor = ShellExecutor(timeout: timeout)
+    init(
+        timeout: TimeInterval = 60,
+        settingsStore: CCUsageSettingsStore = .shared,
+        shellExecutor: ShellExecutor? = nil
+    ) {
+        self.shellExecutor = shellExecutor ?? ShellExecutor(timeout: timeout)
         self.settingsStore = settingsStore
     }
 
@@ -107,20 +111,88 @@ final class CCUsageFetcher {
     /// - Returns: A snapshot containing today/week/month usage data
     /// - Throws: `CCUsageFetcherError` if CLI execution or parsing fails
     func fetchSnapshot(for provider: TokenUsageProvider) async throws -> TokenUsageSnapshot {
+        try await fetchSnapshot(for: provider, cliDataRoot: nil)
+    }
+
+    /// Fetches one account using its provider-specific ccusage data root.
+    func fetchSnapshot(for account: ProviderAccount) async throws -> TokenUsageSnapshot {
+        guard let provider = account.provider.tokenUsageProvider,
+              provider.isCLIBased else {
+            throw CCUsageFetcherError.invalidArguments(
+                "\(account.provider.displayName) does not use ccusage."
+            )
+        }
+        return try await fetchSnapshot(
+            for: provider,
+            cliDataRoot: account.cliDataRoot
+        )
+    }
+
+    /// Fetches a provider using one explicit account root. Nil explicitly
+    /// removes the relevant inherited variable from the ccusage child.
+    func fetchSnapshot(
+        for provider: TokenUsageProvider,
+        cliDataRoot: String?
+    ) async throws -> TokenUsageSnapshot {
+        guard provider.isCLIBased else {
+            throw CCUsageFetcherError.invalidArguments(
+                "\(provider.displayName) does not use ccusage."
+            )
+        }
         // Load per-provider settings and build CLI command for this month.
-        let settings = settingsStore.loadSettings()[provider] ?? .defaultSettings(for: provider)
         let startOfMonth = calculateStartOfMonth()
-        let invocation: CLICommandInvocation
+        let execution: CCUsageCLIExecution
         do {
-            invocation = try settings.makeCLIInvocation(startDate: startOfMonth)
+            execution = try makeCLIExecution(
+                for: provider,
+                cliDataRoot: cliDataRoot,
+                startDate: startOfMonth
+            )
         } catch let error as CLICommandPathResolverError {
             throw CCUsageFetcherError.invalidExecutable(error.localizedDescription)
         } catch {
             throw CCUsageFetcherError.invalidArguments(error.localizedDescription)
         }
         // Execute CLI and parse JSON response into snapshot.
-        let jsonData = try await executeCLI(invocation: invocation)
+        let jsonData = try await executeCLI(execution: execution)
         return try parseResponse(jsonData: jsonData, provider: provider)
+    }
+
+    /// Builds a testable structured request without launching ccusage.
+    func makeCLIExecution(
+        for provider: TokenUsageProvider,
+        cliDataRoot: String?,
+        startDate: String
+    ) throws -> CCUsageCLIExecution {
+        guard provider.isCLIBased else {
+            throw CCUsageFetcherError.invalidArguments(
+                "\(provider.displayName) does not use ccusage."
+            )
+        }
+        let settings = settingsStore.loadSettings()[provider]
+            ?? .defaultSettings(for: provider)
+        return try settings.makeCLIExecution(
+            startDate: startDate,
+            cliDataRoot: cliDataRoot
+        )
+    }
+
+    /// Builds an account-scoped request without launching ccusage.
+    func makeCLIExecution(
+        for account: ProviderAccount,
+        startDate: String
+    ) throws -> CCUsageCLIExecution {
+        guard let provider = account.provider.tokenUsageProvider,
+              provider.isCLIBased else {
+            throw CCUsageFetcherError.invalidArguments(
+                "\(account.provider.displayName) does not use ccusage."
+            )
+        }
+        return try makeCLIExecution(
+            for: provider,
+            cliDataRoot: account.cliDataRoot,
+            startDate: startDate
+        )
     }
 
     // MARK: - Private Methods
@@ -135,17 +207,37 @@ final class CCUsageFetcher {
 
     /// Executes the CLI command and returns the JSON output.
     /// Uses ShellExecutor for command execution and maps errors to CCUsageFetcherError.
-    /// - Parameter invocation: The executable and literal arguments to execute
+    /// - Parameter execution: Literal argv and separate child environment edit
     /// - Returns: The stdout data (JSON)
     /// - Throws: `CCUsageFetcherError` mapped from `ShellExecutorError`
-    private func executeCLI(invocation: CLICommandInvocation) async throws -> Data {
+    private func executeCLI(execution: CCUsageCLIExecution) async throws -> Data {
         do {
             // Run only the shell-quoted rendering of structured argv.
-            return try await shellExecutor.execute(command: invocation.shellCommand)
+            return try await shellExecutor.execute(
+                command: execution.invocation.shellCommand,
+                environment: Self.shellEnvironment(
+                    for: execution.dataRootEnvironment
+                )
+            )
         } catch let error as ShellExecutorError {
             // Map shell execution errors into domain errors.
-            throw mapShellError(error, command: invocation.executable)
+            throw mapShellError(
+                error,
+                command: execution.invocation.executable
+            )
         }
+    }
+
+    private static func shellEnvironment(
+        for dataRoot: CLIDataRootEnvironment?
+    ) -> ShellExecutionEnvironment {
+        guard let dataRoot else { return .inherited }
+        if let value = dataRoot.value {
+            return ShellExecutionEnvironment(
+                overrides: [dataRoot.variableName: value]
+            )
+        }
+        return ShellExecutionEnvironment(unsets: [dataRoot.variableName])
     }
 
     /// Maps ShellExecutorError to CCUsageFetcherError for domain-specific error messages.

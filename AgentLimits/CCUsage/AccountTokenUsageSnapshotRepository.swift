@@ -1,32 +1,33 @@
 import Foundation
 import OSLog
 
-enum AccountUsageSnapshotRepositoryError: LocalizedError, Equatable {
+enum AccountTokenUsageSnapshotRepositoryError: LocalizedError, Equatable {
     case providerMismatch
     case migrationRetirementFailed
-    case indeterminateSnapshot(provider: UsageProvider, accountLabel: String)
-    case legacyProjectionSourceIndeterminate(UsageProvider)
+    case legacyProjectionSourceIndeterminate(TokenUsageProvider)
+    case snapshotReadIndeterminate(TokenUsageProvider)
 
     var errorDescription: String? {
         switch self {
         case .providerMismatch:
-            return "Usage snapshot provider does not match the account."
+            return "Token snapshot provider does not match the account."
         case .migrationRetirementFailed:
-            return "Could not durably retire legacy usage snapshot migration."
-        case .indeterminateSnapshot(let provider, let accountLabel):
-            return "Could not safely read \(accountLabel)'s \(provider.displayName) usage. Try again before changing accounts."
+            return "Could not durably retire legacy token snapshot migration."
         case .legacyProjectionSourceIndeterminate(let provider):
-            return "Could not safely replace the preserved \(provider.displayName) usage source. Try again."
+            return "Could not safely replace the preserved \(provider.displayName) token-usage source. Try again."
+        case .snapshotReadIndeterminate(let provider):
+            return "Could not safely read the selected \(provider.displayName) token-usage snapshot. Try again."
         }
     }
 }
 
-/// Account identity is mandatory at the production persistence boundary.
-/// Provider-only files remain only as a selected-account projection for the
-/// existing widgets while their account-aware timeline migration is pending.
+/// Account UUID is mandatory for token-usage persistence. Provider-only files
+/// remain a selected-account projection for existing static widgets.
 @MainActor
-protocol AccountUsageSnapshotRepository {
-    func loadSnapshot(for account: ProviderAccount) -> UsageSnapshot?
+protocol AccountTokenUsageSnapshotRepository {
+    func loadSnapshot(for account: ProviderAccount) -> TokenUsageSnapshot?
+    /// False means a read failed for a retryable reason. Automatic startup
+    /// projection must then preserve the last known provider file.
     func canSafelyPublishMissingSnapshot(
         for account: ProviderAccount
     ) -> Bool
@@ -34,7 +35,7 @@ protocol AccountUsageSnapshotRepository {
         for account: ProviderAccount
     ) -> Bool
     func saveSnapshot(
-        _ snapshot: UsageSnapshot,
+        _ snapshot: TokenUsageSnapshot,
         for account: ProviderAccount
     ) throws
     func deleteSnapshot(for account: ProviderAccount) throws
@@ -47,12 +48,12 @@ protocol AccountUsageSnapshotRepository {
         for account: ProviderAccount
     ) throws
     func publishSelectedSnapshot(
-        _ snapshot: UsageSnapshot?,
+        _ snapshot: TokenUsageSnapshot?,
         for account: ProviderAccount
     ) throws
 }
 
-extension AccountUsageSnapshotRepository {
+extension AccountTokenUsageSnapshotRepository {
     func canSafelyPublishMissingSnapshot(
         for account: ProviderAccount
     ) -> Bool {
@@ -72,17 +73,18 @@ extension AccountUsageSnapshotRepository {
 }
 
 @MainActor
-final class DefaultAccountUsageSnapshotRepository:
-    AccountUsageSnapshotRepository {
+final class DefaultAccountTokenUsageSnapshotRepository:
+    AccountTokenUsageSnapshotRepository {
     private struct SnapshotIdentity: Hashable {
         let accountID: UUID
-        let provider: UsageProvider
+        let provider: TokenUsageProvider
     }
 
     private let visibilityStore: any SnapshotVisibilityControlling
     private let migrationDefaults: UserDefaults
-    private let makeAccountStore: (ProviderAccount, Bool) -> UsageSnapshotStore
-    private let projectionStore: UsageSnapshotStore
+    private let makeAccountStore:
+        (ProviderAccount, Bool) -> TokenUsageSnapshotStore
+    private let projectionStore: TokenUsageSnapshotStore
     private var indeterminateLoadIdentities: Set<SnapshotIdentity> = []
     private var indeterminateLegacySourceIdentities:
         Set<SnapshotIdentity> = []
@@ -91,8 +93,8 @@ final class DefaultAccountUsageSnapshotRepository:
         visibilityStore: (any SnapshotVisibilityControlling)? = nil,
         migrationDefaults: UserDefaults = .standard,
         makeAccountStore:
-            ((ProviderAccount, Bool) -> UsageSnapshotStore)? = nil,
-        projectionStore: UsageSnapshotStore? = nil
+            ((ProviderAccount, Bool) -> TokenUsageSnapshotStore)? = nil,
+        projectionStore: TokenUsageSnapshotStore? = nil
     ) {
         let resolvedVisibilityStore = visibilityStore
             ?? SnapshotVisibilityStore.shared
@@ -100,7 +102,7 @@ final class DefaultAccountUsageSnapshotRepository:
         self.migrationDefaults = migrationDefaults
         self.makeAccountStore = makeAccountStore ?? {
             account, migratesLegacySnapshot in
-            UsageSnapshotStore(
+            TokenUsageSnapshotStore(
                 visibilityStore: resolvedVisibilityStore,
                 accountID: account.id,
                 migratesLegacySnapshot: migratesLegacySnapshot
@@ -109,10 +111,11 @@ final class DefaultAccountUsageSnapshotRepository:
         self.projectionStore = projectionStore ?? .shared
     }
 
-    func loadSnapshot(for account: ProviderAccount) -> UsageSnapshot? {
+    func loadSnapshot(for account: ProviderAccount) -> TokenUsageSnapshot? {
+        let provider = tokenProvider(for: account)
         let identity = SnapshotIdentity(
             accountID: account.id,
-            provider: account.provider
+            provider: provider
         )
         indeterminateLoadIdentities.remove(identity)
         indeterminateLegacySourceIdentities.remove(identity)
@@ -120,11 +123,11 @@ final class DefaultAccountUsageSnapshotRepository:
         let shouldMigrate = account.webKitStorage == .legacyDefault
             && !migrationDefaults.bool(forKey: migrationKey)
         let store = makeAccountStore(account, shouldMigrate)
-        let snapshot: UsageSnapshot?
+        let snapshot: TokenUsageSnapshot?
         let migrationReachedDurableTerminalState: Bool
         let loadWasIndeterminate: Bool
         do {
-            snapshot = try store.tryLoadSnapshot(for: account.provider)
+            snapshot = try store.tryLoadSnapshot(for: provider)
             migrationReachedDurableTerminalState = true
             loadWasIndeterminate = false
         } catch let error as UsageSnapshotStoreError {
@@ -135,8 +138,8 @@ final class DefaultAccountUsageSnapshotRepository:
                 migrationReachedDurableTerminalState = true
                 loadWasIndeterminate = false
             case .readFailed(let underlying):
-                // A missing scoped file is a completed "nothing to migrate"
-                // result. Other I/O failures must remain retryable.
+                // A missing scoped file completes a "nothing to migrate"
+                // result. Other I/O failures remain retryable.
                 let isMissing = Self.isMissingFile(underlying)
                 migrationReachedDurableTerminalState = isMissing
                 loadWasIndeterminate = !isMissing
@@ -146,8 +149,8 @@ final class DefaultAccountUsageSnapshotRepository:
             }
         } catch {
             snapshot = nil
-            // Suppression deliberately presents as a missing file after its
-            // account-scoped marker has been persisted.
+            // Suppression presents as a missing file after the account-scoped
+            // migration marker has been persisted.
             let isMissing = Self.isMissingFile(error)
             migrationReachedDurableTerminalState = isMissing
             loadWasIndeterminate = !isMissing
@@ -161,30 +164,29 @@ final class DefaultAccountUsageSnapshotRepository:
         }
 
         if shouldMigrate, migrationReachedDurableTerminalState {
-            // This marker deliberately lives outside the account namespace.
-            // A failed account-removal commit may delete that namespace; it
-            // must never make a sibling projection eligible for re-import.
+            // Keep this marker outside the removable account namespace. A
+            // failed removal must never make another projection importable.
             if !DurableDefaultsFlags.persistTrue(
                 [migrationKey],
                 in: migrationDefaults
             ) {
                 indeterminateLoadIdentities.insert(identity)
                 indeterminateLegacySourceIdentities.insert(identity)
-                Logger.usage.error(
-                    "Could not durably finish legacy snapshot migration"
+                Logger.ccusage.error(
+                    "Could not durably finish legacy token snapshot migration"
                 )
             }
         }
         guard let snapshot else { return nil }
-        guard snapshot.provider == account.provider else {
-            // A corrupt or misplaced payload must never be displayed as this
-            // account. Keep it suppressed for forensic/recovery purposes.
+        guard snapshot.provider == provider else {
+            // Preserve corrupt/misplaced data for recovery, but never expose it
+            // as another account's usage.
             visibilityStore.setSnapshotSuppressed(
                 true,
-                fileName: store.snapshotVisibilityKey(for: account.provider)
+                fileName: store.snapshotVisibilityKey(for: provider)
             )
-            Logger.usage.error(
-                "Rejected account snapshot with mismatched provider"
+            Logger.ccusage.error(
+                "Rejected account token snapshot with mismatched provider"
             )
             return nil
         }
@@ -197,7 +199,7 @@ final class DefaultAccountUsageSnapshotRepository:
         !indeterminateLoadIdentities.contains(
             SnapshotIdentity(
                 accountID: account.id,
-                provider: account.provider
+                provider: tokenProvider(for: account)
             )
         )
     }
@@ -206,46 +208,50 @@ final class DefaultAccountUsageSnapshotRepository:
         for account: ProviderAccount
     ) -> Bool {
         canSafelyPublishMissingSnapshot(for: account)
-            && !hasIndeterminateLegacySource(for: account.provider)
+            && !hasIndeterminateLegacySource(
+                for: tokenProvider(for: account)
+            )
     }
 
     func saveSnapshot(
-        _ snapshot: UsageSnapshot,
+        _ snapshot: TokenUsageSnapshot,
         for account: ProviderAccount
     ) throws {
-        guard snapshot.provider == account.provider else {
-            throw AccountUsageSnapshotRepositoryError.providerMismatch
+        let provider = tokenProvider(for: account)
+        guard snapshot.provider == provider else {
+            throw AccountTokenUsageSnapshotRepositoryError.providerMismatch
         }
         try makeAccountStore(account, false).saveSnapshot(snapshot)
         indeterminateLoadIdentities.remove(
             SnapshotIdentity(
                 accountID: account.id,
-                provider: account.provider
+                provider: provider
             )
         )
         indeterminateLegacySourceIdentities.remove(
             SnapshotIdentity(
                 accountID: account.id,
-                provider: account.provider
+                provider: provider
             )
         )
     }
 
     func deleteSnapshot(for account: ProviderAccount) throws {
+        let provider = tokenProvider(for: account)
         try retireLegacyMigration(for: account)
         try makeAccountStore(account, false).deleteSnapshot(
-            for: account.provider
+            for: provider
         )
         indeterminateLoadIdentities.remove(
             SnapshotIdentity(
                 accountID: account.id,
-                provider: account.provider
+                provider: provider
             )
         )
         indeterminateLegacySourceIdentities.remove(
             SnapshotIdentity(
                 accountID: account.id,
-                provider: account.provider
+                provider: provider
             )
         )
     }
@@ -254,14 +260,12 @@ final class DefaultAccountUsageSnapshotRepository:
         _ isSuppressed: Bool,
         for account: ProviderAccount
     ) throws {
+        let provider = tokenProvider(for: account)
         let store = makeAccountStore(account, false)
-        try store.setSnapshotSuppressed(
-            isSuppressed,
-            for: account.provider
-        )
+        try store.setSnapshotSuppressed(isSuppressed, for: provider)
         visibilityStore.setSnapshotSuppressed(
             isSuppressed,
-            fileName: store.snapshotVisibilityKey(for: account.provider)
+            fileName: store.snapshotVisibilityKey(for: provider)
         )
     }
 
@@ -269,76 +273,89 @@ final class DefaultAccountUsageSnapshotRepository:
         _ isSuppressed: Bool,
         for account: ProviderAccount
     ) throws {
+        let provider = tokenProvider(for: account)
         try projectionStore.setProjectionDisplaySuppressed(
             isSuppressed,
-            for: account.provider
+            for: provider
         )
     }
 
     func publishSelectedSnapshot(
-        _ snapshot: UsageSnapshot?,
+        _ snapshot: TokenUsageSnapshot?,
         for account: ProviderAccount
     ) throws {
-        let projectionKey = account.provider.snapshotFileName
+        let provider = tokenProvider(for: account)
+        let projectionKey = provider.snapshotFileName
         let exactAccountIsSafe = canSafelyPublishMissingSnapshot(
             for: account
         )
         let legacySourceIsIndeterminate =
-            hasIndeterminateLegacySource(for: account.provider)
+            hasIndeterminateLegacySource(for: provider)
         guard exactAccountIsSafe, !legacySourceIsIndeterminate else {
             try projectionStore.setProjectionDisplaySuppressed(
                 true,
-                for: account.provider
+                for: provider
             )
             if legacySourceIsIndeterminate {
-                throw AccountUsageSnapshotRepositoryError
-                    .legacyProjectionSourceIndeterminate(account.provider)
+                throw AccountTokenUsageSnapshotRepositoryError
+                    .legacyProjectionSourceIndeterminate(provider)
             }
-            throw AccountUsageSnapshotRepositoryError.indeterminateSnapshot(
-                provider: account.provider,
-                accountLabel: account.label
-            )
+            throw AccountTokenUsageSnapshotRepositoryError
+                .snapshotReadIndeterminate(provider)
         }
-        // Hide the prior selected account before an overwrite/delete attempt.
-        // A disk failure therefore shows no widget data, never a sibling's.
+        // Hide the prior account before overwrite/delete. Failure therefore
+        // yields no widget data instead of exposing a sibling's snapshot.
         try projectionStore.setProjectionDisplaySuppressed(
             true,
-            for: account.provider
+            for: provider
         )
         do {
             if let snapshot {
-                guard snapshot.provider == account.provider else {
-                    throw AccountUsageSnapshotRepositoryError.providerMismatch
+                guard snapshot.provider == provider else {
+                    throw AccountTokenUsageSnapshotRepositoryError
+                        .providerMismatch
                 }
                 try projectionStore.saveSnapshot(snapshot)
             } else {
-                try projectionStore.deleteSnapshot(for: account.provider)
+                try projectionStore.deleteSnapshot(for: provider)
             }
-            visibilityStore.setSnapshotSuppressed(false, fileName: projectionKey)
+            visibilityStore.setSnapshotSuppressed(
+                false,
+                fileName: projectionKey
+            )
             try projectionStore.setProjectionDisplaySuppressed(
                 false,
-                for: account.provider
+                for: provider
             )
         } catch {
             throw error
         }
     }
 
+    private func tokenProvider(
+        for account: ProviderAccount
+    ) -> TokenUsageProvider {
+        guard let provider = account.provider.tokenUsageProvider else {
+            preconditionFailure("Usage provider has no token-usage mapping")
+        }
+        return provider
+    }
+
     private func legacyMigrationKey(for account: ProviderAccount) -> String {
-        AccountSnapshotMigrationKey.usage(for: account)
+        AccountSnapshotMigrationKey.tokenUsage(for: account)
     }
 
     private func legacyMigrationKey(
         for identity: SnapshotIdentity
     ) -> String {
-        "usage_snapshot_account_migration_v1."
-            + identity.provider.rawValue
+        "token_usage_snapshot_account_migration_v1."
+            + identity.provider.usageProvider.rawValue
             + "."
             + identity.accountID.uuidString.lowercased()
     }
 
     private func hasIndeterminateLegacySource(
-        for provider: UsageProvider
+        for provider: TokenUsageProvider
     ) -> Bool {
         indeterminateLegacySourceIdentities = Set(
             indeterminateLegacySourceIdentities.filter {
@@ -352,6 +369,8 @@ final class DefaultAccountUsageSnapshotRepository:
         }
     }
 
+    /// Explicit deletion must be terminal before the scoped file disappears;
+    /// otherwise a crash could later import a sibling/provider projection.
     private func retireLegacyMigration(
         for account: ProviderAccount
     ) throws {
@@ -359,13 +378,13 @@ final class DefaultAccountUsageSnapshotRepository:
             [legacyMigrationKey(for: account)],
             in: migrationDefaults
         ) else {
-            throw AccountUsageSnapshotRepositoryError
+            throw AccountTokenUsageSnapshotRepositoryError
                 .migrationRetirementFailed
         }
         indeterminateLegacySourceIdentities.remove(
             SnapshotIdentity(
                 accountID: account.id,
-                provider: account.provider
+                provider: tokenProvider(for: account)
             )
         )
     }
