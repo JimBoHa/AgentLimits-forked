@@ -45,6 +45,11 @@ enum ClearDataError: LocalizedError {
 /// Uses ProviderStateManager for per-provider state management.
 @MainActor
 final class UsageViewModel: ObservableObject {
+    private struct RecoveryState: Equatable {
+        let accountID: UUID
+        let context: UsageOperationGate.Context
+    }
+
     @Published var snapshot: UsageSnapshot?
     @Published var statusMessage: String
     @Published var isFetching: Bool
@@ -66,9 +71,9 @@ final class UsageViewModel: ObservableObject {
     private let snapshotVisibilityStore: any SnapshotVisibilityControlling
     private var autoRefreshCoordinator: AutoRefreshCoordinator?
     private var displayMode: UsageDisplayMode = .used
-    private var manualRefreshRequests: Set<UsageProvider> = []
-    private var autoRecoveryInFlight: [UsageProvider: UsageOperationGate.Context] = [:]
-    private var lastLoginRedirectAt: [UsageProvider: Date] = [:]
+    private var manualRefreshAccountIDByProvider: [UsageProvider: UUID] = [:]
+    private var autoRecoveryInFlight: [UsageProvider: RecoveryState] = [:]
+    private var lastLoginRedirectAt: [UUID: Date] = [:]
     private var operationGate = UsageOperationGate()
 
     init(
@@ -144,10 +149,21 @@ final class UsageViewModel: ObservableObject {
     /// Checks if user is logged in for the specified provider.
     /// Used by popup auto-close to detect OAuth completion.
     func checkLoginStatus(for provider: UsageProvider) async -> Bool {
-        guard let context = operationGate.captureContext() else { return false }
         let webViewStore = webViewPool.getWebViewStore(for: provider)
-        let isLoggedIn = await checkLoginStatus(for: provider, using: webViewStore.webView)
-        guard operationGate.isCurrent(context) else { return false }
+        return await checkLoginStatus(using: webViewStore)
+    }
+
+    /// Checks login state in the exact account session that originated the
+    /// request. Account switches invalidate the result before it can act.
+    func checkLoginStatus(using webViewStore: WebViewStore) async -> Bool {
+        guard let context = operationGate.captureContext(),
+              isCurrentSelectedStore(webViewStore) else { return false }
+        let isLoggedIn = await checkLoginStatus(
+            for: webViewStore.provider,
+            using: webViewStore.webView
+        )
+        guard operationGate.isCurrent(context),
+              isCurrentSelectedStore(webViewStore) else { return false }
         return isLoggedIn
     }
 
@@ -182,25 +198,28 @@ final class UsageViewModel: ObservableObject {
 
     /// Triggers an immediate refresh for the specified provider (for widget tap)
     func refreshNow(for provider: UsageProvider) async {
-        await refreshSnapshot(for: provider)
+        let webViewStore = webViewPool.getWebViewStore(for: provider)
+        await refreshSnapshot(for: provider, using: webViewStore)
     }
 
     /// Triggers an immediate refresh for the current provider
     func fetchNow() {
         guard let context = operationGate.captureContext() else { return }
         let provider = selectedProvider
+        let webViewStore = webViewPool.getWebViewStore(for: provider)
+        guard isCurrentSelectedStore(webViewStore) else { return }
         // Record manual refresh intent to allow fetch on page-ready callback.
-        manualRefreshRequests.insert(provider)
-        let store = webViewPool.getWebViewStore(for: provider)
-        if isUsageURL(store.webView.url, provider: provider) && store.isPageReady {
+        manualRefreshAccountIDByProvider[provider] = webViewStore.account.id
+        if isUsageURL(webViewStore.webView.url, provider: provider),
+           webViewStore.isPageReady {
             // If already on the usage page, proceed directly to fetch.
-            _ = consumeManualRefreshRequest(for: provider)
+            _ = consumeManualRefreshRequest(for: webViewStore)
             Task {
-                await handleLoginAndFetch(for: provider, context: context)
+                await handleLoginAndFetch(using: webViewStore, context: context)
             }
         } else {
             // Otherwise reload to reach the usage page (login flow).
-            webViewPool.reloadFromOrigin(provider)
+            webViewPool.reloadFromOrigin(webViewStore.account)
         }
     }
 
@@ -233,22 +252,25 @@ final class UsageViewModel: ObservableObject {
             throw ClearDataError.websiteData("Another website-data clear is already active.")
         }
         guard let tokenDataClearToken = tokenUsageViewModel.beginDataClear() else {
-            _ = webViewPool.finishDataClear(webViewClearToken)
+            _ = webViewPool.cancelDataClear(webViewClearToken)
             _ = operationGate.finishClear(clearToken)
             throw ClearDataError.websiteData("Another token-data clear is already active.")
         }
+        var didFinishWebsiteDataClear = false
         defer {
+            if !didFinishWebsiteDataClear {
+                _ = webViewPool.cancelDataClear(webViewClearToken)
+            }
             _ = tokenUsageViewModel.finishDataClear(tokenDataClearToken)
-            _ = webViewPool.finishDataClear(webViewClearToken)
             _ = operationGate.finishClear(clearToken)
         }
 
-        manualRefreshRequests.removeAll()
+        manualRefreshAccountIDByProvider.removeAll()
         autoRecoveryInFlight.removeAll()
         lastLoginRedirectAt.removeAll()
 
         do {
-            try await webViewPool.clearWebsiteData(webViewClearToken)
+            try await ensureWebsiteDataClearCoverage(webViewClearToken)
         } catch {
             throw ClearDataError.websiteData(error.localizedDescription)
         }
@@ -296,6 +318,20 @@ final class UsageViewModel: ObservableObject {
         // retains any current foreground settings-window request.
         webViewPool.applyBackgroundPolicy(activeProviders: Set(backgroundActiveProviders))
 
+        // Revalidate after all synchronous deletion hooks. If any account was
+        // registered meanwhile, clear its store before releasing navigation.
+        do {
+            try await ensureWebsiteDataClearCoverage(webViewClearToken)
+        } catch {
+            throw ClearDataError.websiteData(error.localizedDescription)
+        }
+        guard webViewPool.finishDataClear(webViewClearToken) else {
+            throw ClearDataError.websiteData(
+                "Website-data coverage changed before the clear could finish."
+            )
+        }
+        didFinishWebsiteDataClear = true
+
         if !deletionFailures.isEmpty {
             let error = ClearDataError.snapshotDeletion(deletionFailures)
             let message = error.localizedDescription
@@ -304,39 +340,58 @@ final class UsageViewModel: ObservableObject {
         }
     }
 
+    private func ensureWebsiteDataClearCoverage(
+        _ token: UsageWebViewPool.DataClearToken
+    ) async throws {
+        while !webViewPool.isWebsiteDataClearComplete(token) {
+            try await webViewPool.clearWebsiteData(token)
+        }
+    }
+
     // MARK: - Page Ready Handling
 
-    /// Called when WebView page finishes loading; triggers fetch if logged in
-    func handlePageReadyChange(for provider: UsageProvider, isReady: Bool) {
-        guard isReady else { return }
+    /// Called when one account WebView finishes loading; triggers fetch only
+    /// while that same account remains selected.
+    func handlePageReadyChange(for webViewStore: WebViewStore, isReady: Bool) {
+        guard isReady, isCurrentSelectedStore(webViewStore) else { return }
+        let provider = webViewStore.provider
         guard let context = operationGate.captureContext() else { return }
         // Recovery Task が SPA 初期化待機を担うため、recovery 中は page-ready 経由の fetch をスキップ。
-        guard !isRecoveryInFlight(for: provider) else { return }
+        guard !isRecoveryInFlight(
+            for: provider,
+            accountID: webViewStore.account.id
+        ) else { return }
         // Manual refresh has priority; otherwise honor auto-refresh eligibility.
-        let isManualRefresh = consumeManualRefreshRequest(for: provider)
+        let isManualRefresh = consumeManualRefreshRequest(for: webViewStore)
         let state = stateManager.getState(for: provider)
         if !isManualRefresh {
             guard state.isAutoRefreshEnabled != true else { return }
         }
         guard !state.isFetching else { return }
         Task {
-            await handleLoginAndFetch(for: provider, context: context)
+            await handleLoginAndFetch(using: webViewStore, context: context)
         }
     }
 
-    /// Called when cookies change; triggers login-based navigation for Claude
-    func handleCookieChange(for provider: UsageProvider) {
+    /// Called when one account's cookies change; any redirect stays in that
+    /// account's immutable WebKit session.
+    func handleCookieChange(for webViewStore: WebViewStore) {
+        guard isCurrentSelectedStore(webViewStore) else { return }
+        let provider = webViewStore.provider
         guard provider == .claudeCode || provider == .githubCopilot else { return }
         guard let context = operationGate.captureContext() else { return }
-        let store = webViewPool.getWebViewStore(for: provider)
         Task {
             // Only redirect when a valid session is detected and cooldown allows it.
-            let isLoggedIn = await checkLoginStatus(for: provider, using: store.webView)
-            guard operationGate.isCurrent(context) else { return }
+            let isLoggedIn = await checkLoginStatus(
+                for: provider,
+                using: webViewStore.webView
+            )
+            guard operationGate.isCurrent(context),
+                  isCurrentSelectedStore(webViewStore) else { return }
             guard isLoggedIn else { return }
-            guard !isUsageURL(store.webView.url, provider: provider) else { return }
-            guard canRedirectLogin(for: provider) else { return }
-            webViewPool.reloadFromOrigin(provider)
+            guard !isUsageURL(webViewStore.webView.url, provider: provider) else { return }
+            guard canRedirectLogin(for: webViewStore.account.id) else { return }
+            webViewPool.reloadFromOrigin(webViewStore.account)
         }
     }
 
@@ -347,19 +402,30 @@ final class UsageViewModel: ObservableObject {
         for provider in eligibleProviders {
             // Never let a loop captured before Clear Data resume in its new generation.
             guard operationGate.isCurrent(context) else { return }
+            let webViewStore = webViewPool.getWebViewStore(for: provider)
+            guard isCurrentSelectedStore(webViewStore) else { continue }
             // Recovery Task が進行中のプロバイダは auto refresh をスキップ。
-            guard !isRecoveryInFlight(for: provider) else { continue }
-            await refreshSnapshot(for: provider, context: context)
+            guard !isRecoveryInFlight(
+                for: provider,
+                accountID: webViewStore.account.id
+            ) else { continue }
+            await refreshSnapshot(
+                for: provider,
+                using: webViewStore,
+                context: context
+            )
         }
     }
 
     private func refreshSnapshot(
         for provider: UsageProvider,
+        using webViewStore: WebViewStore,
         context: UsageOperationGate.Context? = nil
     ) async {
         guard let operationContext = context ?? operationGate.captureContext() else { return }
-        guard operationGate.isCurrent(operationContext) else { return }
-        let webViewStore = webViewPool.getWebViewStore(for: provider)
+        guard operationGate.isCurrent(operationContext),
+              webViewStore.provider == provider,
+              isCurrentSelectedStore(webViewStore) else { return }
         guard webViewStore.isPageReady else {
             // Update status while waiting for login page to load.
             stateManager.setStatusMessage("status.loadingLogin".localized(), for: provider)
@@ -388,7 +454,8 @@ final class UsageViewModel: ObservableObject {
         do {
             // Fetch latest snapshot from provider and persist with display-mode marker.
             let fetchedSnapshot = try await fetchSnapshot(for: provider, using: webViewStore.webView)
-            guard operationGate.isCurrent(fetchToken) else { return }
+            guard operationGate.isCurrent(fetchToken),
+                  isCurrentSelectedStore(webViewStore) else { return }
             let snapshotToSave = fetchedSnapshot.makeSnapshot(for: displayMode)
             try store.saveSnapshot(snapshotToSave)
             snapshotVisibilityStore.setSnapshotSuppressed(
@@ -397,7 +464,11 @@ final class UsageViewModel: ObservableObject {
             )
             displayModeStore.saveCachedDisplayMode(displayMode)
             stateManager.updateAfterSuccessfulFetch(snapshot: snapshotToSave, for: provider)
-            clearRecovery(for: provider, context: operationContext)
+            clearRecovery(
+                for: provider,
+                accountID: webViewStore.account.id,
+                context: operationContext
+            )
             stateManager.setStatusMessage("status.updated".localized(), for: provider)
             if provider == selectedProvider {
                 self.snapshot = snapshotToSave
@@ -410,10 +481,13 @@ final class UsageViewModel: ObservableObject {
             await ThresholdNotificationManager.shared.checkThresholdsIfNeeded(
                 for: fetchedSnapshot,
                 isCurrent: { [weak self] in
-                    self?.operationGate.isCurrent(fetchToken) == true
+                    guard let self else { return false }
+                    return self.operationGate.isCurrent(fetchToken)
+                        && self.isCurrentSelectedStore(webViewStore)
                 }
             )
-            guard operationGate.isCurrent(fetchToken) else { return }
+            guard operationGate.isCurrent(fetchToken),
+                  isCurrentSelectedStore(webViewStore) else { return }
 
             // Fetch Copilot billing data alongside usage limits
             if provider == .githubCopilot,
@@ -423,27 +497,50 @@ final class UsageViewModel: ObservableObject {
                ) {
                 Task {
                     await fetchCopilotBilling(
-                        using: webViewStore.webView,
+                        using: webViewStore,
                         context: billingContext,
                         tokenUsageContext: tokenUsageContext
                     )
                 }
             }
         } catch {
-            guard operationGate.isCurrent(fetchToken) else { return }
+            guard operationGate.isCurrent(fetchToken),
+                  isCurrentSelectedStore(webViewStore) else { return }
             if shouldDisableAutoRefresh(for: provider, error: error) {
-                if isRecoveryInFlight(for: provider) {
+                if isRecoveryInFlight(
+                    for: provider,
+                    accountID: webViewStore.account.id
+                ) {
                     // reload 後の再 fetch でも失敗 → 復旧不能と判定して auto refresh を無効化
-                    clearRecovery(for: provider, context: operationContext)
+                    clearRecovery(
+                        for: provider,
+                        accountID: webViewStore.account.id,
+                        context: operationContext
+                    )
                     stateManager.setAutoRefreshEnabled(false, for: provider)
                 } else {
                     // 初回失敗: stale な lastActiveOrg Cookie を削除してからリロードし orgId を再取得する。
                     // page-ready 直後ではなく SPA が API コールを完了した後に fetch するため delayed Task を使う。
-                    autoRecoveryInFlight[provider] = operationContext
-                    await clearOrgIdCookie(for: provider, context: operationContext)
+                    let recoveryState = RecoveryState(
+                        accountID: webViewStore.account.id,
+                        context: operationContext
+                    )
+                    autoRecoveryInFlight[provider] = recoveryState
+                    await clearOrgIdCookie(
+                        in: webViewStore,
+                        context: operationContext
+                    )
                     guard operationGate.isCurrent(fetchToken),
-                          autoRecoveryInFlight[provider] == operationContext else { return }
-                    webViewPool.reloadFromOrigin(provider)
+                          isCurrentSelectedStore(webViewStore),
+                          autoRecoveryInFlight[provider] == recoveryState else {
+                        clearRecovery(
+                            for: provider,
+                            accountID: webViewStore.account.id,
+                            context: operationContext
+                        )
+                        return
+                    }
+                    webViewPool.reloadFromOrigin(webViewStore.account)
                     stateManager.setStatusMessage("status.loadingLogin".localized(), for: provider)
                     if provider == selectedProvider {
                         statusMessage = "status.loadingLogin".localized()
@@ -452,6 +549,7 @@ final class UsageViewModel: ObservableObject {
                         guard let self else { return }
                         await self.waitForRecoveryFetch(
                             for: provider,
+                            using: webViewStore,
                             context: operationContext
                         )
                     }
@@ -467,14 +565,19 @@ final class UsageViewModel: ObservableObject {
     }
 
     private func handleLoginAndFetch(
-        for provider: UsageProvider,
+        using webViewStore: WebViewStore,
         context: UsageOperationGate.Context
     ) async {
-        guard operationGate.isCurrent(context) else { return }
-        let store = webViewPool.getWebViewStore(for: provider)
+        let provider = webViewStore.provider
+        guard operationGate.isCurrent(context),
+              isCurrentSelectedStore(webViewStore) else { return }
         // Verify login status before attempting API fetch.
-        let isLoggedIn = await checkLoginStatus(for: provider, using: store.webView)
-        guard operationGate.isCurrent(context) else { return }
+        let isLoggedIn = await checkLoginStatus(
+            for: provider,
+            using: webViewStore.webView
+        )
+        guard operationGate.isCurrent(context),
+              isCurrentSelectedStore(webViewStore) else { return }
         guard isLoggedIn else {
             stateManager.setStatusMessage("status.loadingLogin".localized(), for: provider)
             if provider == selectedProvider {
@@ -483,13 +586,17 @@ final class UsageViewModel: ObservableObject {
             return
         }
 
-        if !isUsageURL(store.webView.url, provider: provider) {
+        if !isUsageURL(webViewStore.webView.url, provider: provider) {
             // Navigate to the usage page when logged in but not on target URL.
-            webViewPool.reloadFromOrigin(provider)
+            webViewPool.reloadFromOrigin(webViewStore.account)
             return
         }
 
-        await refreshSnapshot(for: provider, context: context)
+        await refreshSnapshot(
+            for: provider,
+            using: webViewStore,
+            context: context
+        )
     }
 
     private func checkLoginStatus(for provider: UsageProvider, using webView: WKWebView) async -> Bool {
@@ -513,9 +620,22 @@ final class UsageViewModel: ObservableObject {
             && url.path == usageURL.path
     }
 
-    private func consumeManualRefreshRequest(for provider: UsageProvider) -> Bool {
-        // Consume and clear manual refresh flag for the provider.
-        manualRefreshRequests.remove(provider) != nil
+    private func isCurrentSelectedStore(_ webViewStore: WebViewStore) -> Bool {
+        webViewPool.isSelectedAccount(
+            webViewStore.account.id,
+            for: webViewStore.provider
+        )
+    }
+
+    private func consumeManualRefreshRequest(
+        for webViewStore: WebViewStore
+    ) -> Bool {
+        let provider = webViewStore.provider
+        guard let requestedAccountID = manualRefreshAccountIDByProvider[provider]
+        else { return false }
+        guard requestedAccountID == webViewStore.account.id else { return false }
+        manualRefreshAccountIDByProvider.removeValue(forKey: provider)
+        return true
     }
 
     private func fetchSnapshot(for provider: UsageProvider, using webView: WKWebView) async throws -> UsageSnapshot {
@@ -576,71 +696,122 @@ final class UsageViewModel: ObservableObject {
     /// handlePageReadyChange は autoRecoveryInFlight によりスキップされるため、ここで直接呼ぶ。
     private func waitForRecoveryFetch(
         for provider: UsageProvider,
+        using webViewStore: WebViewStore,
         context: UsageOperationGate.Context
     ) async {
+        let recoveryState = RecoveryState(
+            accountID: webViewStore.account.id,
+            context: context
+        )
         guard operationGate.isCurrent(context),
-              autoRecoveryInFlight[provider] == context else { return }
-        let webViewStore = webViewPool.getWebViewStore(for: provider)
+              isCurrentSelectedStore(webViewStore),
+              autoRecoveryInFlight[provider] == recoveryState else {
+            clearRecovery(
+                for: provider,
+                accountID: webViewStore.account.id,
+                context: context
+            )
+            return
+        }
         // ページロード完了を最大 15 秒待機
         let deadline = Date().addingTimeInterval(15)
         while !webViewStore.isPageReady && Date() < deadline {
             try? await Task.sleep(for: .milliseconds(500))
             guard operationGate.isCurrent(context),
-                  autoRecoveryInFlight[provider] == context else { return }
+                  isCurrentSelectedStore(webViewStore),
+                  autoRecoveryInFlight[provider] == recoveryState else {
+                clearRecovery(
+                    for: provider,
+                    accountID: webViewStore.account.id,
+                    context: context
+                )
+                return
+            }
         }
         guard webViewStore.isPageReady else {
             // タイムアウト: recovery フラグを解除して通常の auto refresh に戻す
-            clearRecovery(for: provider, context: context)
+            clearRecovery(
+                for: provider,
+                accountID: webViewStore.account.id,
+                context: context
+            )
             return
         }
         // SPA が初期 API コールを performance.getEntriesByType("resource") に登録するまで待機
         try? await Task.sleep(for: .seconds(3))
         guard operationGate.isCurrent(context),
-              autoRecoveryInFlight[provider] == context else { return }
-        await handleLoginAndFetch(for: provider, context: context)
+              isCurrentSelectedStore(webViewStore),
+              autoRecoveryInFlight[provider] == recoveryState else {
+            clearRecovery(
+                for: provider,
+                accountID: webViewStore.account.id,
+                context: context
+            )
+            return
+        }
+        await handleLoginAndFetch(using: webViewStore, context: context)
         // handleLoginAndFetch → refreshSnapshot が早期リターンした場合 (ページ未準備等) にフラグが残る可能性があるため解除
-        clearRecovery(for: provider, context: context)
+        clearRecovery(
+            for: provider,
+            accountID: webViewStore.account.id,
+            context: context
+        )
     }
 
     /// missingOrganization エラー後の自動復旧用。stale な lastActiveOrg Cookie を削除し、
     /// リロード後の JS が resource / HTML フォールバックで最新 orgId を取得できるようにする。
     private func clearOrgIdCookie(
-        for provider: UsageProvider,
+        in webViewStore: WebViewStore,
         context: UsageOperationGate.Context
     ) async {
-        guard provider == .claudeCode else { return }
-        guard operationGate.isCurrent(context) else { return }
-        let cookieStore = WKWebsiteDataStore.default().httpCookieStore
+        guard webViewStore.provider == .claudeCode else { return }
+        guard operationGate.isCurrent(context),
+              isCurrentSelectedStore(webViewStore) else { return }
+        let cookieStore = webViewStore.websiteDataStore.httpCookieStore
         let cookies = await cookieStore.allCookies()
-        guard operationGate.isCurrent(context) else { return }
+        guard operationGate.isCurrent(context),
+              isCurrentSelectedStore(webViewStore) else { return }
         for cookie in cookies where cookie.name == "lastActiveOrg" {
             await cookieStore.deleteCookie(cookie)
-            guard operationGate.isCurrent(context) else { return }
+            guard operationGate.isCurrent(context),
+                  isCurrentSelectedStore(webViewStore) else { return }
         }
     }
 
-    private func isRecoveryInFlight(for provider: UsageProvider) -> Bool {
-        guard let context = autoRecoveryInFlight[provider] else { return false }
-        return operationGate.isCurrent(context)
+    private func isRecoveryInFlight(
+        for provider: UsageProvider,
+        accountID: UUID
+    ) -> Bool {
+        guard let state = autoRecoveryInFlight[provider] else { return false }
+        guard operationGate.isCurrent(state.context),
+              webViewPool.isSelectedAccount(state.accountID, for: provider) else {
+            if autoRecoveryInFlight[provider] == state {
+                autoRecoveryInFlight.removeValue(forKey: provider)
+            }
+            return false
+        }
+        return state.accountID == accountID
     }
 
     private func clearRecovery(
         for provider: UsageProvider,
+        accountID: UUID,
         context: UsageOperationGate.Context
     ) {
-        guard autoRecoveryInFlight[provider] == context else { return }
+        let expectedState = RecoveryState(accountID: accountID, context: context)
+        guard autoRecoveryInFlight[provider] == expectedState else { return }
         autoRecoveryInFlight.removeValue(forKey: provider)
     }
 
-    private func canRedirectLogin(for provider: UsageProvider) -> Bool {
+    private func canRedirectLogin(for accountID: UUID) -> Bool {
         // Throttle redirects to avoid excessive reloads.
         let now = Date()
         let cooldown: TimeInterval = 5
-        if let lastRedirectAt = lastLoginRedirectAt[provider],
+        if let lastRedirectAt = lastLoginRedirectAt[accountID],
            now.timeIntervalSince(lastRedirectAt) < cooldown {
             return false
         }
-        lastLoginRedirectAt[provider] = now
+        lastLoginRedirectAt[accountID] = now
         return true
     }
 
@@ -649,20 +820,25 @@ final class UsageViewModel: ObservableObject {
     /// Fetches Copilot billing data and saves to token usage snapshot store.
     /// Fire-and-forget: errors are logged but do not affect usage limits UI.
     private func fetchCopilotBilling(
-        using webView: WKWebView,
+        using webViewStore: WebViewStore,
         context: UsageOperationGate.Context,
         tokenUsageContext: TokenUsageViewModel.ExternalSnapshotContext
     ) async {
-        guard operationGate.isCurrent(context) else { return }
+        guard operationGate.isCurrent(context),
+              isCurrentSelectedStore(webViewStore) else { return }
         do {
-            let snapshot = try await copilotBillingFetcher.fetchBillingSnapshot(using: webView)
-            guard operationGate.isCurrent(context) else { return }
+            let snapshot = try await copilotBillingFetcher.fetchBillingSnapshot(
+                using: webViewStore.webView
+            )
+            guard operationGate.isCurrent(context),
+                  isCurrentSelectedStore(webViewStore) else { return }
             try tokenUsageViewModel.saveExternallyFetchedSnapshot(
                 snapshot,
                 context: tokenUsageContext
             )
         } catch {
-            guard operationGate.isCurrent(context) else { return }
+            guard operationGate.isCurrent(context),
+                  isCurrentSelectedStore(webViewStore) else { return }
             Logger.usage.error("Copilot billing fetch failed: \(error.localizedDescription)")
         }
     }

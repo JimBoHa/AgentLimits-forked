@@ -115,6 +115,16 @@ struct ProviderAccount: Codable, Equatable, Hashable, Identifiable {
         id.uuidString.lowercased()
     }
 
+    /// Identifier for an account's persistent WebKit store. Legacy accounts
+    /// deliberately return nil because they use WKWebsiteDataStore.default().
+    var isolatedWebKitDataStoreIdentifier: UUID? {
+        guard webKitStorage == .isolated,
+              Self.isUsableWebKitIdentifier(id) else {
+            return nil
+        }
+        return id
+    }
+
     func updating(
         label: String,
         isEnabled: Bool,
@@ -195,6 +205,13 @@ struct ProviderAccountStore {
     ) {
         self.userDefaults = userDefaults ?? AppGroupDefaults.shared ?? .standard
         self.key = key
+    }
+
+    /// Persistent web sessions are safe only when this app understands the
+    /// stored registry identities. Downgrades use ephemeral WebKit sessions so
+    /// placeholder IDs cannot strand credentials after a compatible relaunch.
+    var supportsPersistentWebSessions: Bool {
+        unsupportedStoredVersion() == nil
     }
 
     func loadAccounts() -> [ProviderAccount] {
@@ -322,6 +339,11 @@ struct ProviderAccountStore {
         try persist(sanitize(accounts))
     }
 
+    #if DEBUG
+    /// Registry-only test seam. Production account removal must first retire
+    /// every WKWebView and delete or durably queue its identified data store.
+    /// The account lifecycle manager supplies that orchestration in a later
+    /// feature; Release builds cannot orphan credentials through this store.
     func removeAccount(id: UUID) throws {
         try requireSupportedMutationVersion()
         var accounts = loadAccounts()
@@ -350,6 +372,7 @@ struct ProviderAccountStore {
             }
         }
     }
+    #endif
 
     private func makeDefaultAccounts(
         webKitStorage: ProviderAccountWebKitStorage

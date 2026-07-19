@@ -1,3 +1,4 @@
+import WebKit
 import XCTest
 @testable import AgentLimits
 
@@ -28,7 +29,10 @@ final class UsageViewModelClearOrchestrationTests: XCTestCase {
             store: tokenStore,
             visibilityStore: visibilityStore
         )
-        let pool = UsageWebViewPool(websiteDataClearer: websiteDataClearer)
+        let pool = UsageWebViewPool(
+            accountStore: makeProviderAccountStore(),
+            websiteDataClearer: websiteDataClearer
+        )
         let viewModel = makeUsageViewModel(
             pool: pool,
             usageStore: usageStore,
@@ -64,6 +68,48 @@ final class UsageViewModelClearOrchestrationTests: XCTestCase {
         }
     }
 
+    func testClearRetriesForAccountRegisteredDuringSnapshotDeletion() async throws {
+        let accountStore = makeProviderAccountStore()
+        let usageStore = OrchestrationUsageSnapshotStore(
+            snapshots: [.chatgptCodex: makeUsageSnapshot(.chatgptCodex)]
+        )
+        let visibilityStore = OrchestrationSnapshotVisibilityStore()
+        let websiteDataClearer = RecordingWebsiteDataClearer()
+        let tokenViewModel = makeTokenViewModel(
+            store: OrchestrationTokenSnapshotStore(),
+            visibilityStore: visibilityStore
+        )
+        let pool = UsageWebViewPool(
+            accountStore: accountStore,
+            websiteDataClearer: websiteDataClearer,
+            websiteDataStoreProvider: { _ in .nonPersistent() }
+        )
+        var addedAccount: ProviderAccount?
+        usageStore.onDelete = {
+            guard addedAccount == nil else { return }
+            do {
+                addedAccount = try accountStore.addAccount(
+                    provider: .chatgptCodex,
+                    label: "Added During Deletion"
+                )
+            } catch {
+                XCTFail("Could not add account during deletion: \(error)")
+            }
+        }
+        let viewModel = makeUsageViewModel(
+            pool: pool,
+            usageStore: usageStore,
+            tokenViewModel: tokenViewModel,
+            visibilityStore: visibilityStore
+        )
+
+        try await viewModel.clearData()
+
+        let account = try XCTUnwrap(addedAccount)
+        XCTAssertEqual(websiteDataClearer.clearCount, 3)
+        XCTAssertFalse(pool.getWebViewStore(for: account).isDataClearInProgress)
+    }
+
     func testDeletionFailuresStaySuppressedAcrossRelaunchAndReturnStructuredError() async throws {
         let claudeSnapshot = makeUsageSnapshot(.claudeCode)
         let copilotTokenSnapshot = makeTokenSnapshot(.copilot)
@@ -80,7 +126,10 @@ final class UsageViewModelClearOrchestrationTests: XCTestCase {
             store: tokenStore,
             visibilityStore: visibilityStore
         )
-        let pool = UsageWebViewPool(websiteDataClearer: RecordingWebsiteDataClearer())
+        let pool = UsageWebViewPool(
+            accountStore: makeProviderAccountStore(),
+            websiteDataClearer: RecordingWebsiteDataClearer()
+        )
         let viewModel = makeUsageViewModel(
             pool: pool,
             usageStore: usageStore,
@@ -154,7 +203,10 @@ final class UsageViewModelClearOrchestrationTests: XCTestCase {
             store: tokenStore,
             visibilityStore: visibilityStore
         )
-        let pool = UsageWebViewPool(websiteDataClearer: websiteDataClearer)
+        let pool = UsageWebViewPool(
+            accountStore: makeProviderAccountStore(),
+            websiteDataClearer: websiteDataClearer
+        )
         let viewModel = makeUsageViewModel(
             pool: pool,
             usageStore: usageStore,
@@ -199,7 +251,10 @@ final class UsageViewModelClearOrchestrationTests: XCTestCase {
             fetcher: fetcher
         )
         let viewModel = makeUsageViewModel(
-            pool: UsageWebViewPool(websiteDataClearer: websiteDataClearer),
+            pool: UsageWebViewPool(
+                accountStore: makeProviderAccountStore(),
+                websiteDataClearer: websiteDataClearer
+            ),
             usageStore: OrchestrationUsageSnapshotStore(),
             tokenViewModel: tokenViewModel,
             visibilityStore: visibilityStore
@@ -235,6 +290,16 @@ final class UsageViewModelClearOrchestrationTests: XCTestCase {
             ),
             snapshotVisibilityStore: visibilityStore,
             selectedProvider: selectedProvider
+        )
+    }
+
+    private func makeProviderAccountStore() -> ProviderAccountStore {
+        let defaults = UserDefaults(
+            suiteName: "UsageViewModelClearAccounts-\(UUID().uuidString)"
+        )!
+        return ProviderAccountStore(
+            userDefaults: defaults,
+            key: "test_accounts"
         )
     }
 
@@ -355,14 +420,16 @@ private final class OrchestrationSnapshotVisibilityStore: SnapshotVisibilityCont
 private final class RecordingWebsiteDataClearer: WebsiteDataClearing {
     private(set) var clearCount = 0
     private(set) var didClear = false
+    private(set) var identifiers: [UUID?] = []
     private let error: Error?
 
     init(error: Error? = nil) {
         self.error = error
     }
 
-    func clearAllWebsiteData() async throws {
+    func clearAllWebsiteData(in dataStore: WKWebsiteDataStore) async throws {
         clearCount += 1
+        identifiers.append(dataStore.identifier)
         if let error {
             throw error
         }
@@ -376,7 +443,7 @@ private final class OrchestrationSuspendingWebsiteDataClearer: WebsiteDataCleari
     private var startWaiters: [CheckedContinuation<Void, Never>] = []
     private var finishContinuation: CheckedContinuation<Void, Never>?
 
-    func clearAllWebsiteData() async throws {
+    func clearAllWebsiteData(in dataStore: WKWebsiteDataStore) async throws {
         hasStarted = true
         let waiters = startWaiters
         startWaiters.removeAll()
