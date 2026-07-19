@@ -170,7 +170,8 @@ final class UsageWebViewPool: ObservableObject {
         let plan: ProviderAccountRemovalPlan
         let webViewStore: WebViewStore
         let replacedActiveAccount: Bool
-        var globalDataClearToken: DataClearToken?
+        let legacySharedWebViewStores: [WebViewStore]
+        var isWebsiteDataRemovalInProgress: Bool
     }
 
     private var webViewStoreByAccountID: [UUID: WebViewStore] = [:]
@@ -181,6 +182,7 @@ final class UsageWebViewPool: ObservableObject {
     private var activeDataClearPhase: DataClearPhase?
     private var nextDataClearIdentifier: UInt64 = 0
     private var activeAccountRetirement: ActiveAccountRetirement?
+    private var isPreparingAccountRetirement = false
     private var nextAccountRetirementIdentifier: UInt64 = 0
     private var retiringOrRemovedAccountIDs: Set<UUID>
     let accountStore: ProviderAccountStore
@@ -354,15 +356,42 @@ final class UsageWebViewPool: ObservableObject {
         guard activeAccountRetirement == nil else {
             throw AccountRetirementError.anotherRetirementInProgress
         }
+        guard !isPreparingAccountRetirement else {
+            throw AccountRetirementError.anotherRetirementInProgress
+        }
         guard !retiringOrRemovedAccountIDs.contains(plan.target.id),
               accountStore.account(id: plan.target.id) != nil else {
             throw AccountRetirementError.accountUnavailable
         }
+        isPreparingAccountRetirement = true
+        defer { isPreparingAccountRetirement = false }
 
         let store = getWebViewStore(for: plan.target)
-        if plan.target.webKitStorage == .isolated,
-           !store.beginRetirement() {
-            throw AccountRetirementError.accountUnavailable
+        let legacySharedStores: [WebViewStore]
+        switch plan.target.webKitStorage {
+        case .isolated:
+            guard store.beginRetirement() else {
+                throw AccountRetirementError.accountUnavailable
+            }
+            legacySharedStores = []
+        case .legacyDefault:
+            // Every legacy account shares one default data store even when
+            // this pool was initially configured for a provider subset.
+            registerAllLegacyAccounts()
+            legacySharedStores = webViewStoreByAccountID.values
+                .filter { $0.account.webKitStorage == .legacyDefault }
+                .sorted { $0.account.id.uuidString < $1.account.id.uuidString }
+            guard legacySharedStores.contains(where: { $0 === store }),
+                  legacySharedStores.allSatisfy({
+                    !$0.isDataClearInProgress
+                        && !$0.isRetirementInProgress
+                        && !$0.isRetired
+                  }) else {
+                throw AccountRetirementError.accountUnavailable
+            }
+            for sharedStore in legacySharedStores {
+                sharedStore.beginDataClear()
+            }
         }
 
         nextAccountRetirementIdentifier &+= 1
@@ -371,7 +400,6 @@ final class UsageWebViewPool: ObservableObject {
             accountID: plan.target.id
         )
         retiringOrRemovedAccountIDs.insert(plan.target.id)
-        webViewStoreRetirementDidBegin.send(plan.target.id)
         let replacedActiveAccount = activationPolicy.replaceAccountID(
             plan.target.id,
             with: plan.replacement.id,
@@ -382,8 +410,17 @@ final class UsageWebViewPool: ObservableObject {
             plan: plan,
             webViewStore: store,
             replacedActiveAccount: replacedActiveAccount,
-            globalDataClearToken: nil
+            legacySharedWebViewStores: legacySharedStores,
+            isWebsiteDataRemovalInProgress: false
         )
+        // Reserve exclusivity before synchronous Combine delivery. A subscriber
+        // must not be able to start a global clear reentrantly.
+        let invalidatedAccountIDs = legacySharedStores.isEmpty
+            ? [plan.target.id]
+            : legacySharedStores.map { $0.account.id }
+        for accountID in invalidatedAccountIDs {
+            webViewStoreRetirementDidBegin.send(accountID)
+        }
         objectWillChange.send()
         reconcileActiveStores()
         return token
@@ -394,7 +431,7 @@ final class UsageWebViewPool: ObservableObject {
     func quiesceAccountForRetirement(
         _ token: AccountRetirementToken
     ) async throws {
-        guard var retirement = activeAccountRetirement,
+        guard let retirement = activeAccountRetirement,
               retirement.token == token else {
             throw AccountRetirementError.invalidToken
         }
@@ -412,19 +449,44 @@ final class UsageWebViewPool: ObservableObject {
             }
 
         case .legacyDefault:
-            let clearToken = startDataClear()
-            retirement.globalDataClearToken = clearToken
-            activeAccountRetirement = retirement
-            do {
-                while !isWebsiteDataClearComplete(clearToken) {
-                    try await clearWebsiteData(clearToken)
+            for sharedStore in retirement.legacySharedWebViewStores {
+                let didQuiesce = await sharedStore.quiesceForDataClear(
+                    timeout: quiescenceTimeout
+                )
+                guard activeAccountRetirement?.token == token else {
+                    throw AccountRetirementError.invalidToken
                 }
+                guard didQuiesce else {
+                    throw AccountRetirementError.webViewDidNotQuiesce
+                }
+            }
+            guard hasCompleteLegacyCoverage(retirement) else {
+                throw AccountRetirementError.accountUnavailable
+            }
+            var clearingRetirement = retirement
+            clearingRetirement.isWebsiteDataRemovalInProgress = true
+            activeAccountRetirement = clearingRetirement
+            do {
+                try await websiteDataClearer.clearAllWebsiteData(
+                    in: retirement.webViewStore.websiteDataStore
+                )
             } catch {
+                if var current = activeAccountRetirement,
+                   current.token == token {
+                    current.isWebsiteDataRemovalInProgress = false
+                    activeAccountRetirement = current
+                }
                 throw error
             }
-            guard activeAccountRetirement?.token == token,
-                  retirement.webViewStore.beginRetirementDuringDataClear() else {
+            guard var current = activeAccountRetirement,
+                  current.token == token else {
                 throw AccountRetirementError.invalidToken
+            }
+            current.isWebsiteDataRemovalInProgress = false
+            activeAccountRetirement = current
+            guard hasCompleteLegacyCoverage(current),
+                  current.webViewStore.beginRetirementDuringDataClear() else {
+                throw AccountRetirementError.accountUnavailable
             }
         }
     }
@@ -438,6 +500,7 @@ final class UsageWebViewPool: ObservableObject {
     ) throws {
         guard let retirement = activeAccountRetirement,
               retirement.token == token,
+              !retirement.isWebsiteDataRemovalInProgress,
               retirement.plan.target.id == commit.removed.id else {
             throw AccountRetirementError.invalidToken
         }
@@ -446,6 +509,10 @@ final class UsageWebViewPool: ObservableObject {
         webViewStoreWillRetire.send(accountID)
         objectWillChange.send()
         retirement.webViewStore.finalizeRetirement()
+        for sharedStore in retirement.legacySharedWebViewStores
+            where sharedStore !== retirement.webViewStore {
+            sharedStore.finishDataClear()
+        }
         webViewStoreByAccountID.removeValue(forKey: accountID)
         if let identifier = commit.removed.isolatedWebKitDataStoreIdentifier {
             dataStoreByKey.removeValue(forKey: .isolated(identifier))
@@ -461,10 +528,6 @@ final class UsageWebViewPool: ObservableObject {
         }
 
         activeAccountRetirement = nil
-        if let clearToken = retirement.globalDataClearToken,
-           !finishDataClear(clearToken) {
-            _ = cancelDataClear(clearToken)
-        }
         reconcileActiveStores()
     }
 
@@ -473,12 +536,16 @@ final class UsageWebViewPool: ObservableObject {
     @discardableResult
     func cancelAccountRetirement(_ token: AccountRetirementToken) -> Bool {
         guard let retirement = activeAccountRetirement,
-              retirement.token == token else { return false }
-        if let clearToken = retirement.globalDataClearToken {
-            guard cancelDataClear(clearToken) else { return false }
+              retirement.token == token,
+              !retirement.isWebsiteDataRemovalInProgress else { return false }
+        if retirement.webViewStore.isRetirementInProgress {
             retirement.webViewStore.cancelRetirement()
         } else {
-            retirement.webViewStore.cancelRetirement()
+            retirement.webViewStore.finishDataClear()
+        }
+        for sharedStore in retirement.legacySharedWebViewStores
+            where sharedStore !== retirement.webViewStore {
+            sharedStore.finishDataClear()
         }
         activeAccountRetirement = nil
         retiringOrRemovedAccountIDs.remove(token.accountID)
@@ -491,7 +558,8 @@ final class UsageWebViewPool: ObservableObject {
     /// provider navigation and popup.
     func beginDataClear() -> DataClearToken? {
         guard activeDataClear == nil,
-              activeAccountRetirement == nil else { return nil }
+              activeAccountRetirement == nil,
+              !isPreparingAccountRetirement else { return nil }
         return startDataClear()
     }
 
@@ -639,6 +707,28 @@ final class UsageWebViewPool: ObservableObject {
                 && !retiringOrRemovedAccountIDs.contains(account.id) {
             _ = getWebViewStore(for: account)
         }
+    }
+
+    private func registerAllLegacyAccounts() {
+        for account in accountStore.loadAccounts()
+            where account.webKitStorage == .legacyDefault
+                && !retiringOrRemovedAccountIDs.contains(account.id) {
+            _ = getWebViewStore(for: account)
+        }
+    }
+
+    private func hasCompleteLegacyCoverage(
+        _ retirement: ActiveAccountRetirement
+    ) -> Bool {
+        let coveredAccountIDs = Set(
+            retirement.legacySharedWebViewStores.map { $0.account.id }
+        )
+        let currentLegacyAccountIDs = Set(
+            accountStore.loadAccounts()
+                .filter { $0.webKitStorage == .legacyDefault }
+                .map(\.id)
+        )
+        return currentLegacyAccountIDs.isSubset(of: coveredAccountIDs)
     }
 
     private func websiteDataStore(for account: ProviderAccount) -> WKWebsiteDataStore {

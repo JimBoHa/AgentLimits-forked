@@ -64,9 +64,13 @@ final class ProviderAccountRemovalLifecycleTests: XCTestCase {
         let staticRemover = RecordingIdentifiedDataStoreRemover()
         let pool = makePool(
             accountStore: fixture.store,
-            websiteDataClearer: clearer
+            websiteDataClearer: clearer,
+            providers: UsageProvider.allCases
         )
         let targetStore = pool.getWebViewStore(for: target)
+        let claudeStore = pool.getWebViewStore(
+            for: fixture.store.primaryAccount(for: .claudeCode)
+        )
         let manager = makeManager(
             accountStore: fixture.store,
             pool: pool,
@@ -81,13 +85,77 @@ final class ProviderAccountRemovalLifecycleTests: XCTestCase {
             XCTAssertEqual(error as? LifecycleTestError, .localData)
         }
 
-        XCTAssertEqual(clearer.dataStoreIdentifiers.count, 2)
-        XCTAssertEqual(Set(clearer.dataStoreIdentifiers).count, 2)
+        XCTAssertEqual(
+            clearer.dataStoreIdentifiers,
+            [ObjectIdentifier(targetStore.websiteDataStore)]
+        )
         XCTAssertTrue(staticRemover.removalCalls.isEmpty)
         XCTAssertEqual(fixture.store.account(id: target.id), target)
         XCTAssertFalse(targetStore.isRetirementInProgress)
         XCTAssertFalse(targetStore.isDataClearInProgress)
         XCTAssertFalse(targetStore.isRetired)
+        XCTAssertFalse(claudeStore.isDataClearInProgress)
+
+        let clearToken = try XCTUnwrap(pool.beginDataClear())
+        XCTAssertTrue(pool.cancelDataClear(clearToken))
+    }
+
+    func testLegacyWebsiteDataCleanupFailureRestoresWholePool() async throws {
+        let fixture = makeFixture()
+        defer { fixture.defaults.removePersistentDomain(forName: fixture.suiteName) }
+        let target = fixture.store.primaryAccount(for: .chatgptCodex)
+        let expectedLegacyAccountIDs = Set(
+            fixture.store.loadAccounts()
+                .filter { $0.webKitStorage == .legacyDefault }
+                .map(\.id)
+        )
+        let replacement = try fixture.store.addAccount(
+            provider: .chatgptCodex,
+            label: "Replacement"
+        )
+        let clearer = RecordingLifecycleWebsiteDataClearer(
+            error: .websiteData
+        )
+        let localRemover = RecordingLocalDataRemover()
+        let staticRemover = RecordingIdentifiedDataStoreRemover()
+        let pool = makePool(
+            accountStore: fixture.store,
+            websiteDataClearer: clearer
+        )
+        let targetStore = pool.getWebViewStore(for: target)
+        let replacementStore = pool.getWebViewStore(for: replacement)
+        let manager = makeManager(
+            accountStore: fixture.store,
+            pool: pool,
+            localRemover: localRemover,
+            staticRemover: staticRemover
+        )
+
+        do {
+            _ = try await manager.removeAccount(id: target.id)
+            XCTFail("Expected website-data deletion to fail")
+        } catch {
+            XCTAssertEqual(error as? LifecycleTestError, .websiteData)
+        }
+
+        let legacyStores = pool.webViewStores.filter {
+            $0.account.webKitStorage == .legacyDefault
+        }
+        XCTAssertEqual(
+            Set(legacyStores.map { $0.account.id }),
+            expectedLegacyAccountIDs
+        )
+        XCTAssertTrue(
+            legacyStores.allSatisfy { !$0.isDataClearInProgress }
+        )
+        XCTAssertEqual(
+            clearer.dataStoreIdentifiers,
+            [ObjectIdentifier(targetStore.websiteDataStore)]
+        )
+        XCTAssertTrue(localRemover.removedAccountIDs.isEmpty)
+        XCTAssertTrue(staticRemover.removalCalls.isEmpty)
+        XCTAssertEqual(fixture.store.account(id: target.id), target)
+        XCTAssertFalse(replacementStore.isDataClearInProgress)
 
         let clearToken = try XCTUnwrap(pool.beginDataClear())
         XCTAssertTrue(pool.cancelDataClear(clearToken))
@@ -185,6 +253,13 @@ final class ProviderAccountRemovalLifecycleTests: XCTestCase {
         let fixture = makeFixture()
         defer { fixture.defaults.removePersistentDomain(forName: fixture.suiteName) }
         let target = fixture.store.primaryAccount(for: .chatgptCodex)
+        let legacySiblingAccountIDs = Set(
+            fixture.store.loadAccounts()
+                .filter {
+                    $0.webKitStorage == .legacyDefault && $0.id != target.id
+                }
+                .map(\.id)
+        )
         let replacement = try fixture.store.addAccount(
             provider: .chatgptCodex,
             label: "Replacement"
@@ -198,7 +273,31 @@ final class ProviderAccountRemovalLifecycleTests: XCTestCase {
             accountStore: fixture.store,
             websiteDataClearer: clearer
         )
+        let targetStore = pool.getWebViewStore(for: target)
         let replacementStore = pool.getWebViewStore(for: replacement)
+        var legacySiblingStores: [WebViewStore] = []
+        localRemover.onRemove = { _ in
+            XCTAssertTrue(targetStore.isDataClearInProgress)
+            legacySiblingStores = pool.webViewStores.filter {
+                $0.account.webKitStorage == .legacyDefault
+            }
+            XCTAssertEqual(
+                Set(legacySiblingStores.map { $0.account.id }),
+                legacySiblingAccountIDs
+            )
+            XCTAssertTrue(
+                legacySiblingStores.allSatisfy(\.isDataClearInProgress)
+            )
+            XCTAssertFalse(replacementStore.isDataClearInProgress)
+        }
+        var invalidatedAccountIDs: Set<UUID> = []
+        var didStartReentrantClear = false
+        let invalidationObservation = pool.webViewStoreRetirementDidBegin.sink {
+            invalidatedAccountIDs.insert($0)
+            if pool.beginDataClear() != nil {
+                didStartReentrantClear = true
+            }
+        }
         let manager = makeManager(
             accountStore: fixture.store,
             pool: pool,
@@ -217,11 +316,110 @@ final class ProviderAccountRemovalLifecycleTests: XCTestCase {
         XCTAssertTrue(fixture.store.pendingWebKitDataStoreDeletionIDs.isEmpty)
         XCTAssertEqual(localRemover.removedAccountIDs, [target.id])
         XCTAssertTrue(staticRemover.removalCalls.isEmpty)
-        XCTAssertEqual(clearer.dataStoreIdentifiers.count, 2)
-        XCTAssertEqual(Set(clearer.dataStoreIdentifiers).count, 2)
+        XCTAssertEqual(
+            clearer.dataStoreIdentifiers,
+            [ObjectIdentifier(targetStore.websiteDataStore)]
+        )
+        XCTAssertNotEqual(
+            ObjectIdentifier(targetStore.websiteDataStore),
+            ObjectIdentifier(replacementStore.websiteDataStore)
+        )
+        XCTAssertEqual(
+            invalidatedAccountIDs,
+            legacySiblingAccountIDs.union([target.id])
+        )
+        XCTAssertFalse(didStartReentrantClear)
         XCTAssertFalse(replacementStore.isDataClearInProgress)
         XCTAssertFalse(replacementStore.isRetired)
+        XCTAssertTrue(
+            legacySiblingStores.allSatisfy { !$0.isDataClearInProgress }
+        )
 
+        let clearToken = try XCTUnwrap(pool.beginDataClear())
+        XCTAssertTrue(pool.cancelDataClear(clearToken))
+        withExtendedLifetime(invalidationObservation) {}
+    }
+
+    func testLegacyRemovalCannotBeCancelledDuringWebsiteDataDeletion() async throws {
+        let fixture = makeFixture()
+        defer { fixture.defaults.removePersistentDomain(forName: fixture.suiteName) }
+        let target = fixture.store.primaryAccount(for: .chatgptCodex)
+        _ = try fixture.store.addAccount(
+            provider: .chatgptCodex,
+            label: "Replacement"
+        )
+        let clearer = SuspendingLifecycleWebsiteDataClearer()
+        let pool = makePool(
+            accountStore: fixture.store,
+            websiteDataClearer: clearer
+        )
+        let targetStore = pool.getWebViewStore(for: target)
+        let plan = try fixture.store.prepareRemoval(id: target.id)
+        let token = try pool.beginAccountRetirement(plan)
+        let clearTask = Task {
+            try await pool.quiesceAccountForRetirement(token)
+        }
+
+        await clearer.waitUntilStarted()
+
+        let legacySiblingStores = pool.webViewStores.filter {
+            $0.account.webKitStorage == .legacyDefault
+        }
+        XCTAssertFalse(pool.cancelAccountRetirement(token))
+        XCTAssertNil(pool.beginDataClear())
+        XCTAssertTrue(targetStore.isDataClearInProgress)
+        XCTAssertFalse(legacySiblingStores.isEmpty)
+        XCTAssertTrue(
+            legacySiblingStores.allSatisfy(\.isDataClearInProgress)
+        )
+        for store in legacySiblingStores {
+            XCTAssertFalse(
+                store.shouldAllowNavigation(
+                    in: store.webView,
+                    to: store.account.provider.usageURL
+                )
+            )
+        }
+
+        clearer.finish()
+        try await clearTask.value
+
+        XCTAssertTrue(targetStore.isRetirementInProgress)
+        XCTAssertTrue(pool.cancelAccountRetirement(token))
+        XCTAssertFalse(targetStore.isRetirementInProgress)
+        XCTAssertFalse(targetStore.isDataClearInProgress)
+        XCTAssertTrue(
+            legacySiblingStores.allSatisfy { !$0.isDataClearInProgress }
+        )
+        let clearToken = try XCTUnwrap(pool.beginDataClear())
+        XCTAssertTrue(pool.cancelDataClear(clearToken))
+    }
+
+    func testRetirementReservesExclusivityBeforeStoreCreationCallbacks() throws {
+        let fixture = makeFixture()
+        defer { fixture.defaults.removePersistentDomain(forName: fixture.suiteName) }
+        let target = fixture.store.primaryAccount(for: .chatgptCodex)
+        _ = try fixture.store.addAccount(
+            provider: .chatgptCodex,
+            label: "Replacement"
+        )
+        let pool = makePool(
+            accountStore: fixture.store,
+            providers: []
+        )
+        var didStartReentrantClear = false
+        pool.onWebViewStoreCreated = { _ in
+            if pool.beginDataClear() != nil {
+                didStartReentrantClear = true
+            }
+        }
+        let plan = try fixture.store.prepareRemoval(id: target.id)
+
+        let token = try pool.beginAccountRetirement(plan)
+
+        XCTAssertFalse(didStartReentrantClear)
+        XCTAssertTrue(pool.cancelAccountRetirement(token))
+        pool.onWebViewStoreCreated = nil
         let clearToken = try XCTUnwrap(pool.beginDataClear())
         XCTAssertTrue(pool.cancelDataClear(clearToken))
     }
@@ -249,10 +447,11 @@ final class ProviderAccountRemovalLifecycleTests: XCTestCase {
     private func makePool(
         accountStore: ProviderAccountStore,
         websiteDataClearer: (any WebsiteDataClearing)? = nil,
-        onDataStoreCreation: ((ProviderAccount) -> Void)? = nil
+        onDataStoreCreation: ((ProviderAccount) -> Void)? = nil,
+        providers: [UsageProvider] = [.chatgptCodex]
     ) -> UsageWebViewPool {
         UsageWebViewPool(
-            providers: [.chatgptCodex],
+            providers: providers,
             accountStore: accountStore,
             websiteDataClearer: websiteDataClearer,
             websiteDataStoreProvider: { account in
@@ -290,6 +489,7 @@ private final class RecordingLocalDataRemover:
     ProviderAccountLocalDataRemoving {
     private(set) var removedAccountIDs: [UUID] = []
     var error: LifecycleTestError?
+    var onRemove: ((ProviderAccount) -> Void)?
 
     init(error: LifecycleTestError? = nil) {
         self.error = error
@@ -297,6 +497,7 @@ private final class RecordingLocalDataRemover:
 
     func removeLocalData(for account: ProviderAccount) throws {
         removedAccountIDs.append(account.id)
+        onRemove?(account)
         if let error {
             throw error
         }
@@ -336,8 +537,47 @@ private final class RecordingIdentifiedDataStoreRemover:
 @MainActor
 private final class RecordingLifecycleWebsiteDataClearer: WebsiteDataClearing {
     private(set) var dataStoreIdentifiers: [ObjectIdentifier] = []
+    var error: LifecycleTestError?
+
+    init(error: LifecycleTestError? = nil) {
+        self.error = error
+    }
 
     func clearAllWebsiteData(in dataStore: WKWebsiteDataStore) async throws {
         dataStoreIdentifiers.append(ObjectIdentifier(dataStore))
+        if let error {
+            throw error
+        }
+    }
+}
+
+@MainActor
+private final class SuspendingLifecycleWebsiteDataClearer: WebsiteDataClearing {
+    private var hasStarted = false
+    private var startWaiters: [CheckedContinuation<Void, Never>] = []
+    private var finishContinuation: CheckedContinuation<Void, Never>?
+
+    func clearAllWebsiteData(in dataStore: WKWebsiteDataStore) async throws {
+        hasStarted = true
+        let waiters = startWaiters
+        startWaiters.removeAll()
+        for waiter in waiters {
+            waiter.resume()
+        }
+        await withCheckedContinuation { continuation in
+            finishContinuation = continuation
+        }
+    }
+
+    func waitUntilStarted() async {
+        guard !hasStarted else { return }
+        await withCheckedContinuation { continuation in
+            startWaiters.append(continuation)
+        }
+    }
+
+    func finish() {
+        finishContinuation?.resume()
+        finishContinuation = nil
     }
 }
