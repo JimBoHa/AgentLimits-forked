@@ -232,7 +232,13 @@ final class UsageViewModel: ObservableObject {
             _ = operationGate.finishClear(clearToken)
             throw ClearDataError.websiteData("Another website-data clear is already active.")
         }
+        guard let tokenDataClearToken = tokenUsageViewModel.beginDataClear() else {
+            _ = webViewPool.finishDataClear(webViewClearToken)
+            _ = operationGate.finishClear(clearToken)
+            throw ClearDataError.websiteData("Another token-data clear is already active.")
+        }
         defer {
+            _ = tokenUsageViewModel.finishDataClear(tokenDataClearToken)
             _ = webViewPool.finishDataClear(webViewClearToken)
             _ = operationGate.finishClear(clearToken)
         }
@@ -271,13 +277,16 @@ final class UsageViewModel: ObservableObject {
             stateManager.clearLoginHistory(for: provider)
             WidgetCenter.shared.reloadTimelines(ofKind: provider.widgetKind)
         }
-        do {
-            try tokenUsageViewModel.clearSnapshot(for: .copilot)
-        } catch {
+        for failure in tokenUsageViewModel.clearAllSnapshots(
+            during: tokenDataClearToken
+        ) {
+            let target = failure.provider == .copilot
+                ? "Copilot billing"
+                : "\(failure.provider.displayName) token usage"
             deletionFailures.append(
                 ClearDataDeletionFailure(
-                    target: "Copilot billing",
-                    reason: error.localizedDescription
+                    target: target,
+                    reason: failure.reason
                 )
             )
         }
@@ -408,11 +417,13 @@ final class UsageViewModel: ObservableObject {
 
             // Fetch Copilot billing data alongside usage limits
             if provider == .githubCopilot,
-               let billingContext = operationGate.captureContext() {
+               let billingContext = operationGate.captureContext(),
+               let tokenUsageContext = tokenUsageViewModel.captureExternalSnapshotContext() {
                 Task {
                     await fetchCopilotBilling(
                         using: webViewStore.webView,
-                        context: billingContext
+                        context: billingContext,
+                        tokenUsageContext: tokenUsageContext
                     )
                 }
             }
@@ -637,13 +648,17 @@ final class UsageViewModel: ObservableObject {
     /// Fire-and-forget: errors are logged but do not affect usage limits UI.
     private func fetchCopilotBilling(
         using webView: WKWebView,
-        context: UsageOperationGate.Context
+        context: UsageOperationGate.Context,
+        tokenUsageContext: TokenUsageViewModel.ExternalSnapshotContext
     ) async {
         guard operationGate.isCurrent(context) else { return }
         do {
             let snapshot = try await copilotBillingFetcher.fetchBillingSnapshot(using: webView)
             guard operationGate.isCurrent(context) else { return }
-            try tokenUsageViewModel.saveExternallyFetchedSnapshot(snapshot)
+            try tokenUsageViewModel.saveExternallyFetchedSnapshot(
+                snapshot,
+                context: tokenUsageContext
+            )
         } catch {
             guard operationGate.isCurrent(context) else { return }
             Logger.usage.error("Copilot billing fetch failed: \(error.localizedDescription)")

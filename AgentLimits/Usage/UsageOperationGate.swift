@@ -84,6 +84,11 @@ struct UsageOperationGate {
         return ClearToken(generation: generation)
     }
 
+    /// Returns whether this exact clear still owns the exclusive interval.
+    func isCurrent(_ token: ClearToken) -> Bool {
+        isClearing && token.generation == generation
+    }
+
     /// Ends the clear interval only for the matching clear operation.
     mutating func finishClear(_ token: ClearToken) -> Bool {
         guard isClearing, token.generation == generation else { return false }

@@ -10,7 +10,11 @@ final class UsageViewModelClearOrchestrationTests: XCTestCase {
             )
         )
         let tokenStore = OrchestrationTokenSnapshotStore(
-            snapshots: [.copilot: makeTokenSnapshot()]
+            snapshots: Dictionary(
+                uniqueKeysWithValues: TokenUsageProvider.allCases.map {
+                    ($0, makeTokenSnapshot($0))
+                }
+            )
         )
         let visibilityStore = OrchestrationSnapshotVisibilityStore()
         let websiteDataClearer = RecordingWebsiteDataClearer()
@@ -37,26 +41,32 @@ final class UsageViewModelClearOrchestrationTests: XCTestCase {
 
         XCTAssertEqual(websiteDataClearer.clearCount, 1)
         XCTAssertTrue(usageStore.snapshots.isEmpty)
-        XCTAssertNil(tokenStore.snapshots[.copilot])
+        XCTAssertTrue(tokenStore.snapshots.isEmpty)
+        XCTAssertEqual(
+            Set(tokenStore.deletionAttempts),
+            Set(TokenUsageProvider.allCases)
+        )
         XCTAssertNil(viewModel.snapshot)
         XCTAssertTrue(viewModel.backgroundActiveProviders.isEmpty)
-        XCTAssertNil(tokenViewModel.snapshots[.copilot])
+        XCTAssertTrue(tokenViewModel.snapshots.isEmpty)
         for provider in UsageProvider.allCases {
             XCTAssertFalse(
                 visibilityStore.isSnapshotSuppressed(fileName: provider.snapshotFileName)
             )
             XCTAssertTrue(pool.getWebViewStore(for: provider).isSuspended)
         }
-        XCTAssertFalse(
-            visibilityStore.isSnapshotSuppressed(
-                fileName: TokenUsageProvider.copilot.snapshotFileName
+        for provider in TokenUsageProvider.allCases {
+            XCTAssertFalse(
+                visibilityStore.isSnapshotSuppressed(
+                    fileName: provider.snapshotFileName
+                )
             )
-        )
+        }
     }
 
     func testDeletionFailuresStaySuppressedAcrossRelaunchAndReturnStructuredError() async throws {
         let claudeSnapshot = makeUsageSnapshot(.claudeCode)
-        let copilotTokenSnapshot = makeTokenSnapshot()
+        let copilotTokenSnapshot = makeTokenSnapshot(.copilot)
         let usageStore = OrchestrationUsageSnapshotStore(
             snapshots: [.claudeCode: claudeSnapshot]
         )
@@ -96,6 +106,10 @@ final class UsageViewModelClearOrchestrationTests: XCTestCase {
             tokenStore.snapshots[.copilot]?.fetchedAt,
             copilotTokenSnapshot.fetchedAt
         )
+        XCTAssertEqual(
+            Set(tokenStore.deletionAttempts),
+            Set(TokenUsageProvider.allCases)
+        )
         XCTAssertTrue(
             visibilityStore.isSnapshotSuppressed(
                 fileName: UsageProvider.claudeCode.snapshotFileName
@@ -130,8 +144,14 @@ final class UsageViewModelClearOrchestrationTests: XCTestCase {
         let websiteDataClearer = RecordingWebsiteDataClearer(
             error: OrchestrationError.websiteDataFailed
         )
+        let tokenSnapshots = Dictionary(
+            uniqueKeysWithValues: TokenUsageProvider.allCases.map {
+                ($0, makeTokenSnapshot($0))
+            }
+        )
+        let tokenStore = OrchestrationTokenSnapshotStore(snapshots: tokenSnapshots)
         let tokenViewModel = makeTokenViewModel(
-            store: OrchestrationTokenSnapshotStore(),
+            store: tokenStore,
             visibilityStore: visibilityStore
         )
         let pool = UsageWebViewPool(websiteDataClearer: websiteDataClearer)
@@ -152,6 +172,8 @@ final class UsageViewModelClearOrchestrationTests: XCTestCase {
         }
 
         XCTAssertEqual(usageStore.snapshots[.chatgptCodex]?.fetchedAt, snapshot.fetchedAt)
+        XCTAssertEqual(tokenStore.snapshots.count, TokenUsageProvider.allCases.count)
+        XCTAssertEqual(tokenViewModel.snapshots.count, TokenUsageProvider.allCases.count)
         XCTAssertNotNil(viewModel.snapshot)
         XCTAssertFalse(
             visibilityStore.isSnapshotSuppressed(
@@ -159,6 +181,38 @@ final class UsageViewModelClearOrchestrationTests: XCTestCase {
             )
         )
         XCTAssertFalse(pool.getWebViewStore(for: .chatgptCodex).isDataClearInProgress)
+        for provider in TokenUsageProvider.allCases {
+            XCTAssertFalse(
+                visibilityStore.isSnapshotSuppressed(fileName: provider.snapshotFileName)
+            )
+        }
+    }
+
+    func testTokenRefreshRemainsBlockedThroughoutWebsiteDataClear() async throws {
+        let websiteDataClearer = OrchestrationSuspendingWebsiteDataClearer()
+        let tokenStore = OrchestrationTokenSnapshotStore()
+        let visibilityStore = OrchestrationSnapshotVisibilityStore()
+        let fetcher = OrchestrationRecordingCCUsageFetcher()
+        let tokenViewModel = makeTokenViewModel(
+            store: tokenStore,
+            visibilityStore: visibilityStore,
+            fetcher: fetcher
+        )
+        let viewModel = makeUsageViewModel(
+            pool: UsageWebViewPool(websiteDataClearer: websiteDataClearer),
+            usageStore: OrchestrationUsageSnapshotStore(),
+            tokenViewModel: tokenViewModel,
+            visibilityStore: visibilityStore
+        )
+
+        let clearTask = Task { try await viewModel.clearData() }
+        await websiteDataClearer.waitUntilStarted()
+
+        await tokenViewModel.refreshNow(for: .codex)
+        XCTAssertEqual(fetcher.requestCount, 0)
+
+        websiteDataClearer.finish()
+        try await clearTask.value
     }
 
     private func makeUsageViewModel(
@@ -186,12 +240,14 @@ final class UsageViewModelClearOrchestrationTests: XCTestCase {
 
     private func makeTokenViewModel(
         store: OrchestrationTokenSnapshotStore,
-        visibilityStore: OrchestrationSnapshotVisibilityStore
+        visibilityStore: OrchestrationSnapshotVisibilityStore,
+        fetcher: (any CCUsageFetching)? = nil
     ) -> TokenUsageViewModel {
         let defaults = UserDefaults(
             suiteName: "UsageViewModelClearTokenTests-\(UUID().uuidString)"
         )!
         return TokenUsageViewModel(
+            fetcher: fetcher,
             snapshotStore: store,
             settingsStore: CCUsageSettingsStore(userDefaults: defaults),
             snapshotVisibilityStore: visibilityStore
@@ -212,10 +268,10 @@ final class UsageViewModelClearOrchestrationTests: XCTestCase {
         )
     }
 
-    private func makeTokenSnapshot() -> TokenUsageSnapshot {
+    private func makeTokenSnapshot(_ provider: TokenUsageProvider) -> TokenUsageSnapshot {
         TokenUsageSnapshot(
-            provider: .copilot,
-            fetchedAt: Date(timeIntervalSince1970: 9_000),
+            provider: provider,
+            fetchedAt: Date(timeIntervalSince1970: Double(9_000 + provider.rawValue.count)),
             today: TokenUsagePeriod(costUSD: 1, totalTokens: 10),
             thisWeek: TokenUsagePeriod(costUSD: 2, totalTokens: 20),
             thisMonth: TokenUsagePeriod(costUSD: 3, totalTokens: 30)
@@ -255,6 +311,7 @@ private final class OrchestrationTokenSnapshotStore: TokenUsageSnapshotStoring {
     var snapshots: [TokenUsageProvider: TokenUsageSnapshot]
     var deletionErrors: [TokenUsageProvider: Error] = [:]
     var onDelete: (() -> Void)?
+    private(set) var deletionAttempts: [TokenUsageProvider] = []
 
     init(snapshots: [TokenUsageProvider: TokenUsageSnapshot] = [:]) {
         self.snapshots = snapshots
@@ -270,6 +327,7 @@ private final class OrchestrationTokenSnapshotStore: TokenUsageSnapshotStoring {
 
     func deleteSnapshot(for provider: TokenUsageProvider) throws {
         onDelete?()
+        deletionAttempts.append(provider)
         if let error = deletionErrors[provider] {
             throw error
         }
@@ -309,6 +367,53 @@ private final class RecordingWebsiteDataClearer: WebsiteDataClearing {
             throw error
         }
         didClear = true
+    }
+}
+
+@MainActor
+private final class OrchestrationSuspendingWebsiteDataClearer: WebsiteDataClearing {
+    private var hasStarted = false
+    private var startWaiters: [CheckedContinuation<Void, Never>] = []
+    private var finishContinuation: CheckedContinuation<Void, Never>?
+
+    func clearAllWebsiteData() async throws {
+        hasStarted = true
+        let waiters = startWaiters
+        startWaiters.removeAll()
+        for waiter in waiters {
+            waiter.resume()
+        }
+        await withCheckedContinuation { continuation in
+            finishContinuation = continuation
+        }
+    }
+
+    func waitUntilStarted() async {
+        guard !hasStarted else { return }
+        await withCheckedContinuation { continuation in
+            startWaiters.append(continuation)
+        }
+    }
+
+    func finish() {
+        finishContinuation?.resume()
+        finishContinuation = nil
+    }
+}
+
+@MainActor
+private final class OrchestrationRecordingCCUsageFetcher: CCUsageFetching {
+    private(set) var requestCount = 0
+
+    func fetchSnapshot(for provider: TokenUsageProvider) async throws -> TokenUsageSnapshot {
+        requestCount += 1
+        return TokenUsageSnapshot(
+            provider: provider,
+            fetchedAt: Date(timeIntervalSince1970: 12_000),
+            today: TokenUsagePeriod(costUSD: 1, totalTokens: 10),
+            thisWeek: TokenUsagePeriod(costUSD: 2, totalTokens: 20),
+            thisMonth: TokenUsagePeriod(costUSD: 3, totalTokens: 30)
+        )
     }
 }
 
