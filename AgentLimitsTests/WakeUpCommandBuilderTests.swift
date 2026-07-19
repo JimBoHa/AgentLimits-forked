@@ -19,14 +19,41 @@ final class WakeUpCommandBuilderTests: XCTestCase {
         XCTAssertEqual(result.log, "ok\n")
     }
 
-    private func runLoggedCommand(_ command: String) throws -> (
+    func testLoggedPipelineQuotesPathsContainingApostrophes() throws {
+        let result = try runLoggedCommand(
+            "printf 'quoted\\n'",
+            directoryName: "AgentLimitsWakeUpTests-'quoted'"
+        )
+
+        XCTAssertEqual(result.status, 0)
+        XCTAssertEqual(result.log, "quoted\n")
+    }
+
+    func testLaunchAgentLogHeaderDoesNotEchoCommandArguments() {
+        let schedule = WakeUpSchedule(
+            provider: .claudeCode,
+            enabledHours: [9],
+            isEnabled: true,
+            additionalArgs: "--api-key sensitive-value"
+        )
+
+        let command = WakeUpCommandBuilder.buildLaunchAgentCommand(for: schedule)
+
+        XCTAssertFalse(command.contains("Command:"))
+        XCTAssertFalse(command.contains("echo \"--api-key"))
+    }
+
+    private func runLoggedCommand(
+        _ command: String,
+        directoryName: String = "AgentLimitsWakeUpTests-\(UUID().uuidString)"
+    ) throws -> (
         status: Int32,
         output: String,
         log: String
     ) {
         let fileManager = FileManager.default
         let temporaryDirectory = fileManager.temporaryDirectory
-            .appendingPathComponent("AgentLimitsWakeUpTests-(UUID().uuidString)")
+            .appendingPathComponent(directoryName)
         try fileManager.createDirectory(
             at: temporaryDirectory,
             withIntermediateDirectories: true
