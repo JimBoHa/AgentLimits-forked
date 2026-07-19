@@ -55,6 +55,74 @@ nonisolated struct ShellExecutionResult {
     }
 }
 
+/// Per-child environment changes. The parent process environment is never
+/// mutated, so concurrent commands cannot observe one another's overrides.
+nonisolated enum ShellExecutionEnvironmentError: LocalizedError, Equatable {
+    case invalidVariableName
+    case nullByteInValue(variableName: String)
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidVariableName:
+            return "Invalid environment variable name"
+        case .nullByteInValue(let variableName):
+            return "Environment value for \(variableName) contains a null byte"
+        }
+    }
+}
+
+nonisolated struct ShellExecutionEnvironment: Sendable, Equatable {
+    static let inherited = ShellExecutionEnvironment()
+
+    let overrides: [String: String]
+    let unsets: Set<String>
+
+    init(
+        overrides: [String: String] = [:],
+        unsets: Set<String> = []
+    ) {
+        self.overrides = overrides
+        self.unsets = unsets.subtracting(overrides.keys)
+    }
+
+    fileprivate func applying(
+        to inherited: [String: String]
+    ) throws -> [String: String] {
+        var environment = inherited
+        for name in unsets {
+            try Self.validateName(name)
+            environment.removeValue(forKey: name)
+        }
+        for (name, value) in overrides {
+            try Self.validateName(name)
+            guard !value.contains("\0") else {
+                throw ShellExecutionEnvironmentError.nullByteInValue(
+                    variableName: name
+                )
+            }
+            environment[name] = value
+        }
+        return environment
+    }
+
+    private static func validateName(_ name: String) throws {
+        guard let first = name.utf8.first,
+              isVariableNameStart(first),
+              name.utf8.dropFirst().allSatisfy(isVariableNameContinuation)
+        else {
+            throw ShellExecutionEnvironmentError.invalidVariableName
+        }
+    }
+
+    private static func isVariableNameStart(_ byte: UInt8) -> Bool {
+        byte == 95 || (65...90).contains(byte) || (97...122).contains(byte)
+    }
+
+    private static func isVariableNameContinuation(_ byte: UInt8) -> Bool {
+        isVariableNameStart(byte) || (48...57).contains(byte)
+    }
+}
+
 // MARK: - Shell Executor Errors
 
 /// Errors that can occur during shell command execution.
@@ -113,6 +181,9 @@ nonisolated final class ShellExecutor: Sendable {
     /// Working directory for command execution.
     private let workingDirectory: URL
 
+    /// Environment inherited by each child before per-call edits.
+    private let inheritedEnvironment: [String: String]
+
     /// Creates a new shell executor with the specified configuration.
     /// - Parameters:
     ///   - timeout: Maximum time to wait for command completion (default: 60 seconds).
@@ -125,13 +196,15 @@ nonisolated final class ShellExecutor: Sendable {
         shellPath: String = defaultShellPath,
         workingDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
         terminationGracePeriod: TimeInterval = 1,
-        maximumOutputBytes: Int = defaultMaximumOutputBytes
+        maximumOutputBytes: Int = defaultMaximumOutputBytes,
+        inheritedEnvironment: [String: String] = ProcessInfo.processInfo.environment
     ) {
         self.timeout = timeout
         self.shellPath = shellPath
         self.workingDirectory = workingDirectory
         self.terminationGracePeriod = terminationGracePeriod
         self.maximumOutputBytes = max(0, maximumOutputBytes)
+        self.inheritedEnvironment = inheritedEnvironment
     }
 
     // MARK: - Public API
@@ -141,8 +214,14 @@ nonisolated final class ShellExecutor: Sendable {
     /// - Parameter command: The shell command to execute.
     /// - Returns: The stdout data from the command.
     /// - Throws: `ShellExecutorError` if execution fails.
-    func execute(command: String) async throws -> Data {
-        let result = try await executeWithResult(command: command)
+    func execute(
+        command: String,
+        environment: ShellExecutionEnvironment = .inherited
+    ) async throws -> Data {
+        let result = try await executeWithResult(
+            command: command,
+            environment: environment
+        )
         if !result.isSuccess {
             throw ShellExecutorError.executionFailed(
                 exitCode: result.exitCode,
@@ -157,8 +236,14 @@ nonisolated final class ShellExecutor: Sendable {
     /// - Parameter command: The shell command to execute.
     /// - Returns: The stdout output as a UTF-8 string.
     /// - Throws: `ShellExecutorError` if execution fails.
-    func executeString(command: String) async throws -> String {
-        let result = try await executeWithResult(command: command)
+    func executeString(
+        command: String,
+        environment: ShellExecutionEnvironment = .inherited
+    ) async throws -> String {
+        let result = try await executeWithResult(
+            command: command,
+            environment: environment
+        )
         if !result.isSuccess {
             throw ShellExecutorError.executionFailed(
                 exitCode: result.exitCode,
@@ -173,13 +258,20 @@ nonisolated final class ShellExecutor: Sendable {
     /// - Parameter command: The shell command to execute.
     /// - Returns: The complete execution result.
     /// - Throws: A lifecycle `ShellExecutorError` or `CancellationError`.
-    func executeWithResult(command: String) async throws -> ShellExecutionResult {
+    func executeWithResult(
+        command: String,
+        environment: ShellExecutionEnvironment = .inherited
+    ) async throws -> ShellExecutionResult {
+        let childEnvironment = try environment.applying(
+            to: inheritedEnvironment
+        )
         let operation = ShellSubprocessOperation(
             executablePath: shellPath,
             arguments: [shellPath]
                 + GeneratedCommandShell.optionArguments
                 + [ShellCommandPathPrefixer.prefixIfNeeded(command: command)],
             workingDirectory: workingDirectory,
+            environment: childEnvironment,
             timeout: timeout,
             terminationGracePeriod: terminationGracePeriod,
             maximumOutputBytes: maximumOutputBytes
@@ -218,6 +310,7 @@ nonisolated private final class ShellSubprocessOperation: @unchecked Sendable {
     private let executablePath: String
     private let arguments: [String]
     private let workingDirectory: URL
+    private let environment: [String: String]
     private let timeout: TimeInterval
     private let terminationGracePeriod: TimeInterval
     private let maximumOutputBytes: Int
@@ -228,6 +321,7 @@ nonisolated private final class ShellSubprocessOperation: @unchecked Sendable {
         executablePath: String,
         arguments: [String],
         workingDirectory: URL,
+        environment: [String: String],
         timeout: TimeInterval,
         terminationGracePeriod: TimeInterval,
         maximumOutputBytes: Int
@@ -235,6 +329,7 @@ nonisolated private final class ShellSubprocessOperation: @unchecked Sendable {
         self.executablePath = executablePath
         self.arguments = arguments
         self.workingDirectory = workingDirectory
+        self.environment = environment
         self.timeout = max(0, timeout)
         self.terminationGracePeriod = max(0, terminationGracePeriod)
         self.maximumOutputBytes = maximumOutputBytes
@@ -409,8 +504,10 @@ nonisolated private final class ShellSubprocessOperation: @unchecked Sendable {
         defer { Self.freeCStringPointers(argumentPointers) }
         var argumentVector = argumentPointers + [nil]
 
-        let environment = ProcessInfo.processInfo.environment.map { "\($0.key)=\($0.value)" }
-        let environmentPointers = try Self.makeCStringPointers(environment)
+        let environmentEntries = environment
+            .sorted { $0.key < $1.key }
+            .map { "\($0.key)=\($0.value)" }
+        let environmentPointers = try Self.makeCStringPointers(environmentEntries)
         defer { Self.freeCStringPointers(environmentPointers) }
         var environmentVector = environmentPointers + [nil]
 

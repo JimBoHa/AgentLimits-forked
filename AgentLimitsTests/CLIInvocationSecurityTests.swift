@@ -84,6 +84,125 @@ final class CLIInvocationSecurityTests: XCTestCase {
         XCTAssertTrue(invocation.shellCommand.contains("'$(touch)'"))
     }
 
+    func testCCUsageDataRootMapsProviderAndExplicitlyUnsetsNil() throws {
+        let home = URL(fileURLWithPath: "/Users/tester", isDirectory: true)
+
+        let codex = try TokenUsageProvider.codex
+            .resolveCLIDataRootEnvironment(nil, homeDirectory: home)
+        let claude = try TokenUsageProvider.claude
+            .resolveCLIDataRootEnvironment("", homeDirectory: home)
+
+        XCTAssertEqual(
+            codex,
+            CLIDataRootEnvironment(variableName: "CODEX_HOME", value: nil)
+        )
+        XCTAssertEqual(
+            claude,
+            CLIDataRootEnvironment(
+                variableName: "CLAUDE_CONFIG_DIR",
+                value: nil
+            )
+        )
+    }
+
+    func testCCUsageDataRootExpandsTildeAndStandardizesPath() throws {
+        let home = URL(fileURLWithPath: "/Users/tester", isDirectory: true)
+
+        let codex = try TokenUsageProvider.codex
+            .resolveCLIDataRootEnvironment(
+                "~/Profiles/../Codex Work/./",
+                homeDirectory: home
+            )
+        let claude = try TokenUsageProvider.claude
+            .resolveCLIDataRootEnvironment(
+                "/profiles/personal/../work",
+                homeDirectory: home
+            )
+
+        XCTAssertEqual(codex?.value, "/Users/tester/Codex Work")
+        XCTAssertEqual(claude?.value, "/profiles/work")
+    }
+
+    func testCCUsageDataRootRejectsUnsafeOrAmbiguousForms() {
+        let cases: [(String, CLIDataRootError)] = [
+            ("relative/profile", .relativePath),
+            ("~/personal,~/work", .multipleRoots),
+            ("~someone/profile", .unsupportedTilde),
+            ("/profiles/work\0hidden", .nullByte),
+            ("/profiles/personal\n/profiles/work", .controlCharacter)
+        ]
+
+        for (root, expectedError) in cases {
+            XCTAssertThrowsError(
+                try TokenUsageProvider.codex
+                    .resolveCLIDataRootEnvironment(root)
+            ) { error in
+                XCTAssertEqual(error as? CLIDataRootError, expectedError)
+            }
+        }
+    }
+
+    func testCCUsageRootNeverEntersRenderedShellCommand() throws {
+        let root = "/profiles/work profile;$(/usr/bin/touch /tmp/not-run)"
+        let settings = CCUsageSettings(
+            provider: .codex,
+            isEnabled: true,
+            additionalArgs: "--timezone UTC"
+        )
+
+        let execution = try settings.makeCLIExecution(
+            startDate: "20260701",
+            cliDataRoot: root
+        )
+
+        XCTAssertEqual(
+            execution.dataRootEnvironment,
+            CLIDataRootEnvironment(variableName: "CODEX_HOME", value: root)
+        )
+        XCTAssertFalse(execution.invocation.shellCommand.contains(root))
+        XCTAssertEqual(
+            settings.makeCLICommand(
+                startDate: "20260701",
+                cliDataRoot: root
+            ),
+            execution.invocation.shellCommand
+        )
+    }
+
+    @MainActor
+    func testCCUsageFetcherBuildsAccountScopedExecution() throws {
+        let suiteName = "CCUsageAccountExecutionTests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let account = ProviderAccount(
+            provider: .claudeCode,
+            label: "Work",
+            cliDataRoot: "~/Claude Work"
+        )
+        let fetcher = CCUsageFetcher(
+            settingsStore: CCUsageSettingsStore(userDefaults: defaults)
+        )
+
+        let execution = try fetcher.makeCLIExecution(
+            for: account,
+            startDate: "20260701"
+        )
+
+        XCTAssertEqual(
+            execution.dataRootEnvironment?.variableName,
+            "CLAUDE_CONFIG_DIR"
+        )
+        XCTAssertEqual(
+            execution.dataRootEnvironment?.value,
+            FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent("Claude Work")
+                .standardizedFileURL.path
+        )
+        XCTAssertFalse(
+            execution.invocation.shellCommand.contains("Claude Work")
+        )
+    }
+
     func testWakeUpBuildsStructuredArgumentsWithoutCommandSeparators() throws {
         let schedule = WakeUpSchedule(
             provider: .claudeCode,

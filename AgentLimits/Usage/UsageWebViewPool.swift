@@ -194,6 +194,8 @@ final class UsageWebViewPool: ObservableObject {
     var onWebViewStoreCreated: ((WebViewStore) -> Void)?
     /// Invalidates account-bound async work before local data can be deleted.
     let webViewStoreRetirementDidBegin = PassthroughSubject<UUID, Never>()
+    /// Restores any account that survives a retirement invalidation interval.
+    let webViewStoreRetirementDidRestore = PassthroughSubject<UUID, Never>()
     /// Synchronous release boundary for observers and visible popup/page views.
     let webViewStoreWillRetire = PassthroughSubject<UUID, Never>()
 
@@ -506,6 +508,10 @@ final class UsageWebViewPool: ObservableObject {
         }
 
         let accountID = commit.removed.id
+        let survivingInvalidatedAccountIDs = retirement
+            .legacySharedWebViewStores
+            .map { $0.account.id }
+            .filter { $0 != accountID }
         webViewStoreWillRetire.send(accountID)
         objectWillChange.send()
         retirement.webViewStore.finalizeRetirement()
@@ -529,6 +535,9 @@ final class UsageWebViewPool: ObservableObject {
 
         activeAccountRetirement = nil
         reconcileActiveStores()
+        for survivingAccountID in survivingInvalidatedAccountIDs {
+            webViewStoreRetirementDidRestore.send(survivingAccountID)
+        }
     }
 
     /// Cancels only pre-commit retirement. Once registry commit succeeds, the
@@ -538,6 +547,9 @@ final class UsageWebViewPool: ObservableObject {
         guard let retirement = activeAccountRetirement,
               retirement.token == token,
               !retirement.isWebsiteDataRemovalInProgress else { return false }
+        let invalidatedAccountIDs = retirement.legacySharedWebViewStores.isEmpty
+            ? [retirement.plan.target.id]
+            : retirement.legacySharedWebViewStores.map { $0.account.id }
         if retirement.webViewStore.isRetirementInProgress {
             retirement.webViewStore.cancelRetirement()
         } else {
@@ -551,6 +563,9 @@ final class UsageWebViewPool: ObservableObject {
         retiringOrRemovedAccountIDs.remove(token.accountID)
         objectWillChange.send()
         reconcileActiveStores()
+        for accountID in invalidatedAccountIDs {
+            webViewStoreRetirementDidRestore.send(accountID)
+        }
         return true
     }
 

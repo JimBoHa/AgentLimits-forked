@@ -141,6 +141,7 @@
 "tokenUsage.notFetched" = "Nie pobrano";
 "tokenUsage.updated" = "Zaktualizowano: ";
 "ccusage.provider" = "Usługa";
+"ccusage.providerAccountFormat" = "%@ — %@";
 "ccusage.disabled" = "Wyłączone";
 "ccusage.credits.title" = "Podziękowania";
 "ccusage.credits.body" = "Specjalne podziękowania dla ryoppippi, twórcy ccusage.";
@@ -233,3 +234,9 @@
 "accounts.label" = "Nazwa konta";
 "accounts.save" = "Zapisz";
 "accounts.disabledFormat" = "%@ (Wyłączone)";
+"accounts.cliDataRoot" = "Katalog danych CLI";
+"accounts.cliDataRootPlaceholder" = "Domyślny katalog dostawcy";
+"accounts.cliDataRootHelp" = "Ustaw osobny lokalny katalog danych dla każdego dodatkowego konta CLI. AgentLimits odczytuje ten katalog, ale nigdy go nie usuwa.";
+"accounts.chooseFolder" = "Wybierz…";
+"accounts.cliDataRootDefault" = "Ustawienie domyślne dostawcy";
+"accounts.cliDataRootFormat" = "Dane CLI: %@";

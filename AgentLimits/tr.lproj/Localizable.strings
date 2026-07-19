@@ -141,6 +141,7 @@
 "tokenUsage.notFetched" = "Getirilemedi";
 "tokenUsage.updated" = "Güncellendi: ";
 "ccusage.provider" = "Hizmet";
+"ccusage.providerAccountFormat" = "%@ — %@";
 "ccusage.disabled" = "Devre dışı";
 "ccusage.credits.title" = "Teşekkürler";
 "ccusage.credits.body" = "ccusage'nin yaratıcısı ryoppippi'ye özel teşekkürler.";
@@ -233,3 +234,9 @@
 "accounts.label" = "Hesap adı";
 "accounts.save" = "Kaydet";
 "accounts.disabledFormat" = "%@ (Devre dışı)";
+"accounts.cliDataRoot" = "CLI veri dizini";
+"accounts.cliDataRootPlaceholder" = "Sağlayıcının varsayılan dizini";
+"accounts.cliDataRootHelp" = "Her ek CLI hesabı için farklı bir yerel veri dizini ayarlayın. AgentLimits bu dizini okur ancak hiçbir zaman silmez.";
+"accounts.chooseFolder" = "Seç…";
+"accounts.cliDataRootDefault" = "Sağlayıcı varsayılanı";
+"accounts.cliDataRootFormat" = "CLI verileri: %@";

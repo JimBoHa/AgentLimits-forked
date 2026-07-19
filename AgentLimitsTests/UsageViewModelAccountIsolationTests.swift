@@ -105,7 +105,20 @@ final class UsageViewModelAccountIsolationTests: XCTestCase {
     }
 
     func testRetirementInvalidatesFetchBeforeAccountDataCanBeDeleted() async throws {
-        let fixture = try makeFixture()
+        let fixture = try makeFixture(
+            initialSnapshots: { personal, work in
+                [
+                    personal.id: self.makeSnapshot(
+                        .chatgptCodex,
+                        timestamp: 100
+                    ),
+                    work.id: self.makeSnapshot(
+                        .chatgptCodex,
+                        timestamp: 200
+                    )
+                ]
+            }
+        )
         let personalStore = fixture.pool.getWebViewStore(
             for: fixture.personal
         )
@@ -119,6 +132,10 @@ final class UsageViewModelAccountIsolationTests: XCTestCase {
             id: fixture.personal.id
         )
         let retirement = try fixture.pool.beginAccountRetirement(plan)
+        XCTAssertEqual(
+            fixture.repository.projections[.chatgptCodex]?.fetchedAt,
+            Date(timeIntervalSince1970: 200)
+        )
         fixture.fetcher.complete(
             using: personalStore.webView,
             with: makeSnapshot(.chatgptCodex, timestamp: 600)
@@ -133,7 +150,43 @@ final class UsageViewModelAccountIsolationTests: XCTestCase {
                 fixture.personal.id
             )
         )
+        XCTAssertNil(fixture.tokenViewModel.snapshot(for: fixture.personal.id))
         XCTAssertTrue(fixture.pool.cancelAccountRetirement(retirement))
+        XCTAssertEqual(
+            fixture.viewModel.snapshot(for: fixture.personal.id)?.fetchedAt,
+            Date(timeIntervalSince1970: 100)
+        )
+        XCTAssertEqual(
+            fixture.tokenViewModel.snapshot(for: fixture.personal.id)?.fetchedAt,
+            Date(timeIntervalSince1970: 1_001)
+        )
+    }
+
+    func testRetirementCancellationDoesNotResurrectDeletedLocalSnapshots()
+        throws {
+        let fixture = try makeFixture(
+            initialSnapshots: { personal, _ in
+                [
+                    personal.id: self.makeSnapshot(
+                        .chatgptCodex,
+                        timestamp: 100
+                    )
+                ]
+            }
+        )
+        let plan = try fixture.accountStore.prepareRemoval(
+            id: fixture.personal.id
+        )
+        let retirement = try fixture.pool.beginAccountRetirement(plan)
+
+        XCTAssertNil(fixture.viewModel.snapshot(for: fixture.personal.id))
+        XCTAssertNil(fixture.tokenViewModel.snapshot(for: fixture.personal.id))
+        try fixture.repository.deleteSnapshot(for: fixture.personal)
+        try fixture.tokenRepository.deleteSnapshot(for: fixture.personal)
+
+        XCTAssertTrue(fixture.pool.cancelAccountRetirement(retirement))
+        XCTAssertNil(fixture.viewModel.snapshot(for: fixture.personal.id))
+        XCTAssertNil(fixture.tokenViewModel.snapshot(for: fixture.personal.id))
     }
 
     func testGlobalClearRejectsFetchCompletionAfterDeletion() async throws {
@@ -290,11 +343,13 @@ final class UsageViewModelAccountIsolationTests: XCTestCase {
 
         let added = try fixture.viewModel.addAndSelectAccount(
             provider: .chatgptCodex,
-            label: "Consulting"
+            label: "Consulting",
+            cliDataRoot: "/profiles/consulting"
         )
         let addedStore = fixture.pool.getWebViewStore(for: added)
 
         XCTAssertEqual(added.label, "Consulting")
+        XCTAssertEqual(added.cliDataRoot, "/profiles/consulting")
         XCTAssertEqual(added.webKitStorage, .isolated)
         XCTAssertEqual(
             fixture.viewModel.selectedAccount(for: .chatgptCodex).id,
@@ -338,6 +393,20 @@ final class UsageViewModelAccountIsolationTests: XCTestCase {
         XCTAssertEqual(
             fixture.viewModel.accounts(for: .claudeCode).map(\.provider),
             [.claudeCode]
+        )
+
+        let rootUpdated = try fixture.viewModel.updateAccount(
+            id: fixture.work.id,
+            label: updated.label,
+            isEnabled: updated.isEnabled,
+            cliDataRoot: "/profiles/client-work"
+        )
+        XCTAssertEqual(rootUpdated.cliDataRoot, "/profiles/client-work")
+        XCTAssertEqual(rootUpdated.id, fixture.work.id)
+        XCTAssertEqual(rootUpdated.createdAt, fixture.work.createdAt)
+        XCTAssertEqual(
+            rootUpdated.webKitStorage,
+            fixture.work.webKitStorage
         )
     }
 
@@ -394,8 +463,211 @@ final class UsageViewModelAccountIsolationTests: XCTestCase {
         )
     }
 
+    func testIndeterminateUsageProjectionBlocksSelectionAndAdd() throws {
+        let fixture = try makeFixture(indeterminateSelectedUsage: true)
+        let legacySnapshot = try XCTUnwrap(
+            fixture.repository.projections[.chatgptCodex]
+        )
+        let originalIDs = Set(fixture.accountStore.loadAccounts().map(\.id))
+
+        XCTAssertThrowsError(
+            try fixture.viewModel.selectAccount(id: fixture.work.id)
+        ) { error in
+            XCTAssertEqual(
+                error as? AccountUsageSnapshotRepositoryError,
+                .indeterminateSnapshot(
+                    provider: .chatgptCodex,
+                    accountLabel: fixture.personal.label
+                )
+            )
+        }
+        XCTAssertThrowsError(
+            try fixture.viewModel.addAndSelectAccount(
+                provider: .chatgptCodex,
+                label: "Consulting"
+            )
+        )
+
+        XCTAssertEqual(
+            fixture.accountStore.selectedAccount(for: .chatgptCodex).id,
+            fixture.personal.id
+        )
+        XCTAssertEqual(
+            Set(fixture.accountStore.loadAccounts().map(\.id)),
+            originalIDs
+        )
+        XCTAssertEqual(
+            fixture.repository.projections[.chatgptCodex]?.fetchedAt,
+            legacySnapshot.fetchedAt
+        )
+        XCTAssertTrue(
+            fixture.repository.suppressedProjectionProviders.contains(
+                .chatgptCodex
+            )
+        )
+    }
+
+    func testStableIDAddRetryQuarantinesOldCLIRootBeforeRegistryWrite()
+        throws {
+        let fixture = try makeFixture()
+        let oldRoot = fixture.work.cliDataRoot
+        fixture.tokenRepository.seedSnapshot(
+            makeTokenSnapshot(provider: .codex, timestamp: 1_500),
+            for: fixture.work
+        )
+        var observedRootDuringDelete: String?
+        var didObserveDelete = false
+        fixture.tokenRepository.onDelete = { account in
+            guard account.id == fixture.work.id,
+                  !didObserveDelete else { return }
+            didObserveDelete = true
+            observedRootDuringDelete = fixture.accountStore.account(
+                id: account.id
+            )?.cliDataRoot
+        }
+
+        let updated = try fixture.viewModel.addAndSelectAccount(
+            id: fixture.work.id,
+            provider: .chatgptCodex,
+            label: "Work",
+            cliDataRoot: "/profiles/work-retry"
+        )
+
+        XCTAssertTrue(didObserveDelete)
+        XCTAssertEqual(observedRootDuringDelete, oldRoot)
+        XCTAssertEqual(updated.cliDataRoot, "/profiles/work-retry")
+        XCTAssertNil(fixture.tokenRepository.snapshot(for: fixture.work.id))
+    }
+
+    func testSelectionRestoresBothProjectionsWhenTokenProjectionCannotHide()
+        throws {
+        let fixture = try makeFixture(
+            initialSnapshots: { personal, _ in
+                [
+                    personal.id: self.makeSnapshot(
+                        .chatgptCodex,
+                        timestamp: 1_000
+                    )
+                ]
+            }
+        )
+        fixture.tokenRepository.rejectNextNilProjection = true
+
+        XCTAssertThrowsError(
+            try fixture.viewModel.selectAccount(id: fixture.work.id)
+        )
+
+        XCTAssertEqual(
+            fixture.accountStore.selectedAccount(for: .chatgptCodex).id,
+            fixture.personal.id
+        )
+        XCTAssertEqual(
+            fixture.repository.projections[.chatgptCodex]?.fetchedAt,
+            Date(timeIntervalSince1970: 1_000)
+        )
+        XCTAssertEqual(
+            fixture.tokenRepository.projections[.codex]?.fetchedAt,
+            Date(timeIntervalSince1970: 1_001)
+        )
+    }
+
+    func testAddRestoresBothProjectionsWhenTokenProjectionCannotHide() throws {
+        let fixture = try makeFixture(
+            initialSnapshots: { personal, _ in
+                [
+                    personal.id: self.makeSnapshot(
+                        .chatgptCodex,
+                        timestamp: 1_100
+                    )
+                ]
+            }
+        )
+        let originalAccountIDs = Set(
+            fixture.accountStore.loadAccounts().map(\.id)
+        )
+        fixture.tokenRepository.rejectNextNilProjection = true
+
+        XCTAssertThrowsError(
+            try fixture.viewModel.addAndSelectAccount(
+                provider: .chatgptCodex,
+                label: "Consulting"
+            )
+        )
+
+        XCTAssertEqual(
+            Set(fixture.accountStore.loadAccounts().map(\.id)),
+            originalAccountIDs
+        )
+        XCTAssertEqual(
+            fixture.repository.projections[.chatgptCodex]?.fetchedAt,
+            Date(timeIntervalSince1970: 1_100)
+        )
+        XCTAssertEqual(
+            fixture.tokenRepository.projections[.codex]?.fetchedAt,
+            Date(timeIntervalSince1970: 1_001)
+        )
+    }
+
+    func testSuccessfulLegacyRetirementRestoresSharedSiblingState() throws {
+        let fixture = try makeFixture(
+            initialSnapshots: { personal, _ in
+                [
+                    personal.id: self.makeSnapshot(
+                        .chatgptCodex,
+                        timestamp: 100
+                    )
+                ]
+            },
+            additionalUsageSnapshots: { accountStore in
+                let claude = accountStore.selectedAccount(for: .claudeCode)
+                return [
+                    claude.id: self.makeSnapshot(
+                        .claudeCode,
+                        timestamp: 700
+                    )
+                ]
+            },
+            additionalTokenSnapshots: { accountStore in
+                let claude = accountStore.selectedAccount(for: .claudeCode)
+                return [
+                    claude.id: self.makeTokenSnapshot(
+                        provider: .claude,
+                        timestamp: 701
+                    )
+                ]
+            }
+        )
+        let claude = fixture.accountStore.selectedAccount(for: .claudeCode)
+        let targetStore = fixture.pool.getWebViewStore(for: fixture.personal)
+        let plan = try fixture.accountStore.prepareRemoval(
+            id: fixture.personal.id
+        )
+
+        let token = try fixture.pool.beginAccountRetirement(plan)
+        XCTAssertTrue(targetStore.beginRetirementDuringDataClear())
+        try fixture.repository.deleteSnapshot(for: fixture.personal)
+        try fixture.tokenRepository.deleteSnapshot(for: fixture.personal)
+        let commit = try fixture.accountStore.commitRemoval(plan)
+        try fixture.pool.finalizeAccountRetirement(token, commit: commit)
+
+        XCTAssertNil(fixture.accountStore.account(id: fixture.personal.id))
+        XCTAssertEqual(
+            fixture.viewModel.snapshot(for: claude.id)?.fetchedAt,
+            Date(timeIntervalSince1970: 700)
+        )
+        XCTAssertEqual(
+            fixture.tokenViewModel.snapshot(for: claude.id)?.fetchedAt,
+            Date(timeIntervalSince1970: 701)
+        )
+    }
+
     private func makeFixture(
-        initialSnapshots: ((ProviderAccount, ProviderAccount) -> [UUID: UsageSnapshot])? = nil
+        initialSnapshots: ((ProviderAccount, ProviderAccount) -> [UUID: UsageSnapshot])? = nil,
+        additionalUsageSnapshots:
+            ((ProviderAccountStore) -> [UUID: UsageSnapshot])? = nil,
+        additionalTokenSnapshots:
+            ((ProviderAccountStore) -> [UUID: TokenUsageSnapshot])? = nil,
+        indeterminateSelectedUsage: Bool = false
     ) throws -> IsolationFixture {
         let defaults = UserDefaults(
             suiteName: "UsageAccountIsolation-\(UUID().uuidString)"
@@ -409,9 +681,17 @@ final class UsageViewModelAccountIsolationTests: XCTestCase {
             provider: .chatgptCodex,
             label: "Work"
         )
-        let repository = IsolationSnapshotRepository(
-            snapshots: initialSnapshots?(personal, work) ?? [:]
-        )
+        var usageSnapshots = initialSnapshots?(personal, work) ?? [:]
+        usageSnapshots.merge(
+            additionalUsageSnapshots?(accountStore) ?? [:]
+        ) { _, newValue in newValue }
+        let repository = IsolationSnapshotRepository(snapshots: usageSnapshots)
+        if indeterminateSelectedUsage {
+            repository.indeterminateAccountIDs.insert(personal.id)
+            repository.seedProjection(
+                makeSnapshot(.chatgptCodex, timestamp: 1_450)
+            )
+        }
         let fetcher = ControlledUsageSnapshotFetcher()
         let pool = UsageWebViewPool(
             accountStore: accountStore,
@@ -419,11 +699,22 @@ final class UsageViewModelAccountIsolationTests: XCTestCase {
             websiteDataStoreProvider: { _ in .nonPersistent() },
             quiescenceTimeout: .milliseconds(100)
         )
-        let visibilityStore = IsolationSnapshotVisibilityStore()
+        var tokenSnapshots = [
+            personal.id: makeTokenSnapshot(
+                provider: .codex,
+                timestamp: 1_001
+            )
+        ]
+        tokenSnapshots.merge(
+            additionalTokenSnapshots?(accountStore) ?? [:]
+        ) { _, newValue in newValue }
+        let tokenRepository = IsolationAccountTokenSnapshotRepository(
+            snapshots: tokenSnapshots
+        )
         let tokenViewModel = TokenUsageViewModel(
-            snapshotStore: IsolationTokenSnapshotStore(),
-            settingsStore: CCUsageSettingsStore(userDefaults: defaults),
-            snapshotVisibilityStore: visibilityStore
+            snapshotRepository: tokenRepository,
+            accountStore: accountStore,
+            settingsStore: CCUsageSettingsStore(userDefaults: defaults)
         )
         let viewModel = UsageViewModel(
             webViewPool: pool,
@@ -440,6 +731,8 @@ final class UsageViewModelAccountIsolationTests: XCTestCase {
             personal: personal,
             work: work,
             repository: repository,
+            tokenRepository: tokenRepository,
+            tokenViewModel: tokenViewModel,
             fetcher: fetcher,
             pool: pool,
             viewModel: viewModel
@@ -462,6 +755,19 @@ final class UsageViewModelAccountIsolationTests: XCTestCase {
             secondaryWindow: nil
         )
     }
+
+    private func makeTokenSnapshot(
+        provider: TokenUsageProvider,
+        timestamp: TimeInterval
+    ) -> TokenUsageSnapshot {
+        TokenUsageSnapshot(
+            provider: provider,
+            fetchedAt: Date(timeIntervalSince1970: timestamp),
+            today: TokenUsagePeriod(costUSD: 1, totalTokens: 10),
+            thisWeek: TokenUsagePeriod(costUSD: 2, totalTokens: 20),
+            thisMonth: TokenUsagePeriod(costUSD: 3, totalTokens: 30)
+        )
+    }
 }
 
 @MainActor
@@ -470,6 +776,8 @@ private struct IsolationFixture {
     let personal: ProviderAccount
     let work: ProviderAccount
     let repository: IsolationSnapshotRepository
+    let tokenRepository: IsolationAccountTokenSnapshotRepository
+    let tokenViewModel: TokenUsageViewModel
     let fetcher: ControlledUsageSnapshotFetcher
     let pool: UsageWebViewPool
     let viewModel: UsageViewModel
@@ -483,6 +791,8 @@ private final class IsolationSnapshotRepository:
     private(set) var saveAttempts: [UUID] = []
     private(set) var deletionAttempts: [UUID] = []
     private var suppressedAccountIDs: Set<UUID> = []
+    var indeterminateAccountIDs: Set<UUID> = []
+    private(set) var suppressedProjectionProviders: Set<UsageProvider> = []
     var onPublish: ((ProviderAccount, UsageSnapshot?) -> Void)?
     var rejectNextNilProjection = false
 
@@ -496,6 +806,12 @@ private final class IsolationSnapshotRepository:
             return nil
         }
         return snapshots[account.id]
+    }
+
+    func canSafelyPublishMissingSnapshot(
+        for account: ProviderAccount
+    ) -> Bool {
+        !indeterminateAccountIDs.contains(account.id)
     }
 
     func saveSnapshot(
@@ -526,6 +842,17 @@ private final class IsolationSnapshotRepository:
         }
     }
 
+    func setSelectedProjectionSuppressed(
+        _ isSuppressed: Bool,
+        for account: ProviderAccount
+    ) {
+        if isSuppressed {
+            suppressedProjectionProviders.insert(account.provider)
+        } else {
+            suppressedProjectionProviders.remove(account.provider)
+        }
+    }
+
     func publishSelectedSnapshot(
         _ snapshot: UsageSnapshot?,
         for account: ProviderAccount
@@ -543,6 +870,11 @@ private final class IsolationSnapshotRepository:
         } else {
             projections.removeValue(forKey: account.provider)
         }
+        suppressedProjectionProviders.remove(account.provider)
+    }
+
+    func seedProjection(_ snapshot: UsageSnapshot) {
+        projections[snapshot.provider] = snapshot
     }
 
     func waitUntilDeleted(accountID: UUID) async {
@@ -593,36 +925,84 @@ private final class IsolationWebsiteDataClearer: WebsiteDataClearing {
 }
 
 @MainActor
-private final class IsolationTokenSnapshotStore: TokenUsageSnapshotStoring {
-    private var snapshots: [TokenUsageProvider: TokenUsageSnapshot] = [:]
+private final class IsolationAccountTokenSnapshotRepository:
+    AccountTokenUsageSnapshotRepository {
+    private(set) var snapshots: [UUID: TokenUsageSnapshot]
+    private(set) var projections: [TokenUsageProvider: TokenUsageSnapshot] = [:]
+    private var suppressedAccountIDs: Set<UUID> = []
+    var rejectNextNilProjection = false
+    var onDelete: ((ProviderAccount) -> Void)?
 
-    func loadSnapshot(for provider: TokenUsageProvider) -> TokenUsageSnapshot? {
-        snapshots[provider]
+    init(snapshots: [UUID: TokenUsageSnapshot] = [:]) {
+        self.snapshots = snapshots
     }
 
-    func saveSnapshot(_ snapshot: TokenUsageSnapshot) throws {
-        snapshots[snapshot.provider] = snapshot
+    func loadSnapshot(for account: ProviderAccount) -> TokenUsageSnapshot? {
+        guard !suppressedAccountIDs.contains(account.id),
+              let provider = account.provider.tokenUsageProvider,
+              snapshots[account.id]?.provider == provider else {
+            return nil
+        }
+        return snapshots[account.id]
     }
 
-    func deleteSnapshot(for provider: TokenUsageProvider) throws {
-        snapshots.removeValue(forKey: provider)
-    }
-}
-
-private final class IsolationSnapshotVisibilityStore:
-    SnapshotVisibilityControlling,
-    @unchecked Sendable {
-    private var suppressed: Set<String> = []
-
-    func isSnapshotSuppressed(fileName: String) -> Bool {
-        suppressed.contains(fileName)
+    func saveSnapshot(
+        _ snapshot: TokenUsageSnapshot,
+        for account: ProviderAccount
+    ) throws {
+        guard account.provider.tokenUsageProvider == snapshot.provider else {
+            throw AccountTokenUsageSnapshotRepositoryError.providerMismatch
+        }
+        snapshots[account.id] = snapshot
+        suppressedAccountIDs.remove(account.id)
     }
 
-    func setSnapshotSuppressed(_ isSuppressed: Bool, fileName: String) {
+    func deleteSnapshot(for account: ProviderAccount) throws {
+        onDelete?(account)
+        snapshots.removeValue(forKey: account.id)
+    }
+
+    func seedSnapshot(
+        _ snapshot: TokenUsageSnapshot,
+        for account: ProviderAccount
+    ) {
+        snapshots[account.id] = snapshot
+    }
+
+    func snapshot(for accountID: UUID) -> TokenUsageSnapshot? {
+        snapshots[accountID]
+    }
+
+    func setSnapshotSuppressed(
+        _ isSuppressed: Bool,
+        for account: ProviderAccount
+    ) {
         if isSuppressed {
-            suppressed.insert(fileName)
+            suppressedAccountIDs.insert(account.id)
         } else {
-            suppressed.remove(fileName)
+            suppressedAccountIDs.remove(account.id)
+        }
+    }
+
+    func publishSelectedSnapshot(
+        _ snapshot: TokenUsageSnapshot?,
+        for account: ProviderAccount
+    ) throws {
+        guard let provider = account.provider.tokenUsageProvider else {
+            throw AccountTokenUsageSnapshotRepositoryError.providerMismatch
+        }
+        if snapshot == nil, rejectNextNilProjection {
+            projections.removeValue(forKey: provider)
+            rejectNextNilProjection = false
+            throw AccountTokenUsageSnapshotRepositoryError.providerMismatch
+        }
+        if let snapshot {
+            guard snapshot.provider == provider else {
+                throw AccountTokenUsageSnapshotRepositoryError.providerMismatch
+            }
+            projections[provider] = snapshot
+        } else {
+            projections.removeValue(forKey: provider)
         }
     }
 }

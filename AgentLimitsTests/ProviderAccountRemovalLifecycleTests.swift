@@ -6,6 +6,52 @@ import XCTest
 
 @MainActor
 final class ProviderAccountRemovalLifecycleTests: XCTestCase {
+    func testLocalRetirementPreflightRunsBeforeSelectionMutation()
+        async throws {
+        let fixture = makeFixture()
+        defer {
+            fixture.defaults.removePersistentDomain(
+                forName: fixture.suiteName
+            )
+        }
+        let target = fixture.store.primaryAccount(for: .chatgptCodex)
+        _ = try fixture.store.addAccount(
+            provider: .chatgptCodex,
+            label: "Replacement"
+        )
+        let localRemover = RecordingLocalDataRemover()
+        localRemover.prepareError = .localData
+        localRemover.onPrepare = { account in
+            XCTAssertEqual(account.id, target.id)
+            XCTAssertEqual(
+                fixture.store.selectedAccount(for: .chatgptCodex).id,
+                target.id
+            )
+        }
+        let pool = makePool(accountStore: fixture.store)
+        let manager = makeManager(
+            accountStore: fixture.store,
+            pool: pool,
+            localRemover: localRemover,
+            staticRemover: RecordingIdentifiedDataStoreRemover()
+        )
+
+        do {
+            _ = try await manager.removeAccount(id: target.id)
+            XCTFail("Expected retirement preflight to fail")
+        } catch {
+            XCTAssertEqual(error as? LifecycleTestError, .localData)
+        }
+
+        XCTAssertEqual(localRemover.preparedAccountIDs, [target.id])
+        XCTAssertTrue(localRemover.removedAccountIDs.isEmpty)
+        XCTAssertEqual(fixture.store.account(id: target.id), target)
+        XCTAssertEqual(
+            fixture.store.selectedAccount(for: .chatgptCodex).id,
+            target.id
+        )
+    }
+
     func testIsolatedLocalCleanupFailureCancelsBeforeRegistryCommit() async throws {
         let fixture = makeFixture()
         defer { fixture.defaults.removePersistentDomain(forName: fixture.suiteName) }
@@ -395,6 +441,35 @@ final class ProviderAccountRemovalLifecycleTests: XCTestCase {
         XCTAssertTrue(pool.cancelDataClear(clearToken))
     }
 
+    func testLegacyRetirementCancellationNotifiesEveryInvalidatedAccount()
+        throws {
+        let fixture = makeFixture()
+        defer { fixture.defaults.removePersistentDomain(forName: fixture.suiteName) }
+        let target = fixture.store.primaryAccount(for: .chatgptCodex)
+        _ = try fixture.store.addAccount(
+            provider: .chatgptCodex,
+            label: "Replacement"
+        )
+        let pool = makePool(accountStore: fixture.store)
+        var beganAccountIDs: [UUID] = []
+        var canceledAccountIDs: [UUID] = []
+        let beginObservation = pool.webViewStoreRetirementDidBegin.sink {
+            beganAccountIDs.append($0)
+        }
+        let cancelObservation = pool.webViewStoreRetirementDidRestore.sink {
+            canceledAccountIDs.append($0)
+        }
+        let plan = try fixture.store.prepareRemoval(id: target.id)
+
+        let token = try pool.beginAccountRetirement(plan)
+        XCTAssertTrue(pool.cancelAccountRetirement(token))
+
+        XCTAssertGreaterThan(beganAccountIDs.count, 1)
+        XCTAssertEqual(canceledAccountIDs, beganAccountIDs)
+        withExtendedLifetime(beginObservation) {}
+        withExtendedLifetime(cancelObservation) {}
+    }
+
     func testRetirementReservesExclusivityBeforeStoreCreationCallbacks() throws {
         let fixture = makeFixture()
         defer { fixture.defaults.removePersistentDomain(forName: fixture.suiteName) }
@@ -487,12 +562,25 @@ private enum LifecycleTestError: Error, Equatable {
 @MainActor
 private final class RecordingLocalDataRemover:
     ProviderAccountLocalDataRemoving {
+    private(set) var preparedAccountIDs: [UUID] = []
     private(set) var removedAccountIDs: [UUID] = []
     var error: LifecycleTestError?
+    var prepareError: LifecycleTestError?
+    var onPrepare: ((ProviderAccount) -> Void)?
     var onRemove: ((ProviderAccount) -> Void)?
 
     init(error: LifecycleTestError? = nil) {
         self.error = error
+    }
+
+    func prepareLocalDataRetirement(
+        for account: ProviderAccount
+    ) throws {
+        preparedAccountIDs.append(account.id)
+        onPrepare?(account)
+        if let prepareError {
+            throw prepareError
+        }
     }
 
     func removeLocalData(for account: ProviderAccount) throws {

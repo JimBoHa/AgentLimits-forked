@@ -73,9 +73,21 @@ protocol CopilotBillingFetching {
 
 extension CopilotBillingFetcher: CopilotBillingFetching {}
 
-struct ClearDataDeletionFailure {
+struct ClearDataDeletionFailure: Hashable {
     let target: String
     let reason: String
+    fileprivate let identifier: String
+
+    static func == (
+        lhs: ClearDataDeletionFailure,
+        rhs: ClearDataDeletionFailure
+    ) -> Bool {
+        lhs.identifier == rhs.identifier
+    }
+
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(identifier)
+    }
 }
 
 enum ClearDataError: LocalizedError {
@@ -104,6 +116,10 @@ final class UsageViewModel: ObservableObject {
         let context: AccountUsageOperationGate.Context
     }
 
+    private struct RetirementRuntimeState {
+        let isAutoRefreshEnabled: Bool?
+    }
+
     @Published var snapshot: UsageSnapshot?
     @Published var statusMessage: String
     @Published var isFetching: Bool
@@ -128,6 +144,8 @@ final class UsageViewModel: ObservableObject {
     private var autoRecoveryInFlight: [UUID: RecoveryState] = [:]
     private var lastLoginRedirectAt: [UUID: Date] = [:]
     private var operationGate = AccountUsageOperationGate()
+    private var retirementRuntimeStatesByAccountID:
+        [UUID: RetirementRuntimeState] = [:]
     private var lifecycleCancellables: Set<AnyCancellable> = []
 
     init(
@@ -164,7 +182,7 @@ final class UsageViewModel: ObservableObject {
         self.copilotBillingFetcher = copilotBillingFetcher
             ?? CopilotBillingFetcher()
         self.tokenUsageViewModel = tokenUsageViewModel
-            ?? TokenUsageViewModel()
+            ?? TokenUsageViewModel(accountStore: webViewPool.accountStore)
         self.webViewPool = webViewPool
         self.displayModeStore = resolvedDisplayModeStore
         self.stateManager = resolvedStateManager
@@ -185,6 +203,11 @@ final class UsageViewModel: ObservableObject {
         webViewPool.webViewStoreRetirementDidBegin
             .sink { [weak self] accountID in
                 self?.handleAccountRetirementDidBegin(accountID)
+            }
+            .store(in: &lifecycleCancellables)
+        webViewPool.webViewStoreRetirementDidRestore
+            .sink { [weak self] accountID in
+                self?.handleAccountRetirementDidRestore(accountID)
             }
             .store(in: &lifecycleCancellables)
         webViewPool.webViewStoreWillRetire
@@ -260,10 +283,18 @@ final class UsageViewModel: ObservableObject {
             // Remove the provider-only compatibility projection before the
             // durable selection changes. A crash can show no widget data, but
             // never the prior account under the new selection.
-            try snapshotRepository.publishSelectedSnapshot(
-                nil,
-                for: priorAccount
-            )
+            try prepareSelectedUsageProjectionRemoval(for: priorAccount)
+            do {
+                try tokenUsageViewModel.prepareSelectedProjectionRemoval(
+                    for: priorAccount
+                )
+            } catch {
+                try? restoreSelectedUsageProjection(for: priorAccount)
+                try? tokenUsageViewModel.restoreSelectedProjection(
+                    for: priorAccount
+                )
+                throw error
+            }
         }
 
         let account: ProviderAccount
@@ -271,8 +302,8 @@ final class UsageViewModel: ObservableObject {
             account = try accountStore.selectAccount(id: id)
         } catch {
             if priorAccount.id != requestedAccount.id {
-                try? snapshotRepository.publishSelectedSnapshot(
-                    stateManager.getState(for: priorAccount.id).snapshot,
+                try? restoreSelectedUsageProjection(for: priorAccount)
+                try? tokenUsageViewModel.restoreSelectedProjection(
                     for: priorAccount
                 )
             }
@@ -289,27 +320,52 @@ final class UsageViewModel: ObservableObject {
     func addAndSelectAccount(
         id: UUID = UUID(),
         provider: UsageProvider,
-        label: String
+        label: String,
+        cliDataRoot: String? = nil
     ) throws -> ProviderAccount {
         let priorAccount = selectedAccount(for: provider)
+        if let existing = accountStore.account(id: id) {
+            guard existing.provider == provider,
+                  existing.webKitStorage == .isolated else {
+                throw ProviderAccountStoreError.persistenceFailed
+            }
+            let proposed = existing.updating(
+                label: label,
+                isEnabled: true,
+                cliDataRoot: cliDataRoot
+            )
+            try tokenUsageViewModel.prepareCLIDataRootChange(
+                from: existing,
+                to: proposed
+            )
+        }
         // Fail before account creation if the old compatibility projection
         // cannot be hidden. Retrying Save can therefore never create a duplicate.
-        try snapshotRepository.publishSelectedSnapshot(
-            nil,
-            for: priorAccount
-        )
+        try prepareSelectedUsageProjectionRemoval(for: priorAccount)
+        do {
+            try tokenUsageViewModel.prepareSelectedProjectionRemoval(
+                for: priorAccount
+            )
+        } catch {
+            try? restoreSelectedUsageProjection(for: priorAccount)
+            try? tokenUsageViewModel.restoreSelectedProjection(
+                for: priorAccount
+            )
+            throw error
+        }
         do {
             let account = try accountStore.addAndSelectAccount(
                 id: id,
                 provider: provider,
-                label: label
+                label: label,
+                cliDataRoot: cliDataRoot
             )
             synchronizeAccountCatalog()
             completeAccountSelection(account)
             return account
         } catch {
-            try? snapshotRepository.publishSelectedSnapshot(
-                stateManager.getState(for: priorAccount.id).snapshot,
+            try? restoreSelectedUsageProjection(for: priorAccount)
+            try? tokenUsageViewModel.restoreSelectedProjection(
                 for: priorAccount
             )
             // An unacknowledged registry write may still contain the exact
@@ -330,13 +386,36 @@ final class UsageViewModel: ObservableObject {
         guard let current = accountStore.account(id: id) else {
             throw ProviderAccountStoreError.accountNotFound
         }
-        try accountStore.updateAccount(
-            current.updating(
-                label: label,
-                isEnabled: isEnabled,
-                cliDataRoot: current.cliDataRoot
-            )
+        return try updateAccount(
+            id: id,
+            label: label,
+            isEnabled: isEnabled,
+            cliDataRoot: current.cliDataRoot
         )
+    }
+
+    /// Updates account metadata including the local CLI data directory. The
+    /// path is configuration only; AgentLimits never deletes that directory.
+    @discardableResult
+    func updateAccount(
+        id: UUID,
+        label: String,
+        isEnabled: Bool,
+        cliDataRoot: String?
+    ) throws -> ProviderAccount {
+        guard let current = accountStore.account(id: id) else {
+            throw ProviderAccountStoreError.accountNotFound
+        }
+        let proposed = current.updating(
+            label: label,
+            isEnabled: isEnabled,
+            cliDataRoot: cliDataRoot
+        )
+        try tokenUsageViewModel.prepareCLIDataRootChange(
+            from: current,
+            to: proposed
+        )
+        try accountStore.updateAccount(proposed)
         reloadAccounts()
         guard let updated = stateManager.account(id: id) else {
             throw ProviderAccountStoreError.accountNotFound
@@ -521,7 +600,8 @@ final class UsageViewModel: ObservableObject {
         autoRecoveryInFlight.removeAll()
         lastLoginRedirectAt.removeAll()
 
-        var deletionFailures: [ClearDataDeletionFailure] = []
+        var deletionFailuresByIdentifier:
+            [String: ClearDataDeletionFailure] = [:]
         var processedAccountIDs: Set<UUID> = []
 
         // Repeat because account registration can occur from another window
@@ -542,17 +622,26 @@ final class UsageViewModel: ObservableObject {
 
             for account in pendingAccounts {
                 processedAccountIDs.insert(account.id)
-                snapshotRepository.setSnapshotSuppressed(true, for: account)
                 do {
-                    try snapshotRepository.deleteSnapshot(for: account)
-                    snapshotRepository.setSnapshotSuppressed(false, for: account)
-                } catch {
-                    deletionFailures.append(
-                        ClearDataDeletionFailure(
-                            target: "\(account.provider.displayName) — \(account.label)",
-                            reason: error.localizedDescription
-                        )
+                    try snapshotRepository.setSnapshotSuppressed(
+                        true,
+                        for: account
                     )
+                    try snapshotRepository.deleteSnapshot(for: account)
+                    try snapshotRepository.setSnapshotSuppressed(
+                        false,
+                        for: account
+                    )
+                    deletionFailuresByIdentifier.removeValue(
+                        forKey: "usage-account-\(account.id.uuidString)"
+                    )
+                } catch {
+                    let failure = ClearDataDeletionFailure(
+                            target: "\(account.provider.displayName) — \(account.label)",
+                            reason: error.localizedDescription,
+                            identifier: "usage-account-\(account.id.uuidString)"
+                    )
+                    deletionFailuresByIdentifier[failure.identifier] = failure
                 }
                 stateManager.clearLoginHistory(for: account.id)
             }
@@ -561,15 +650,15 @@ final class UsageViewModel: ObservableObject {
         for failure in tokenUsageViewModel.clearAllSnapshots(
             during: tokenDataClearToken
         ) {
-            let target = failure.provider == .copilot
-                ? "Copilot billing"
-                : "\(failure.provider.displayName) token usage"
-            deletionFailures.append(
-                ClearDataDeletionFailure(
-                    target: target,
-                    reason: failure.reason
-                )
+            let deletionFailure = ClearDataDeletionFailure(
+                    target: failure.targetDescription,
+                    reason: failure.reason,
+                    identifier: failure.isSelectedProjection
+                        ? "token-projection-\(failure.provider.rawValue)"
+                        : "token-account-\(failure.accountID?.uuidString ?? "unknown")"
             )
+            deletionFailuresByIdentifier[deletionFailure.identifier] =
+                deletionFailure
         }
 
         // Clear provider-only widget compatibility projections after every
@@ -581,13 +670,16 @@ final class UsageViewModel: ObservableObject {
                     nil,
                     for: account
                 )
-            } catch {
-                deletionFailures.append(
-                    ClearDataDeletionFailure(
-                        target: "\(provider.displayName) widget",
-                        reason: error.localizedDescription
-                    )
+                deletionFailuresByIdentifier.removeValue(
+                    forKey: "usage-projection-\(provider.rawValue)"
                 )
+            } catch {
+                let failure = ClearDataDeletionFailure(
+                        target: "\(provider.displayName) widget",
+                        reason: error.localizedDescription,
+                        identifier: "usage-projection-\(provider.rawValue)"
+                )
+                deletionFailuresByIdentifier[failure.identifier] = failure
             }
             WidgetCenter.shared.reloadTimelines(ofKind: provider.widgetKind)
         }
@@ -600,26 +692,92 @@ final class UsageViewModel: ObservableObject {
             } catch {
                 throw ClearDataError.websiteData(error.localizedDescription)
             }
-            let newAccounts = accountStore.loadAccounts().filter {
+            let catalog = accountStore.loadAccounts()
+            stateManager.synchronizeAccounts(catalog)
+            let newAccounts = catalog.filter {
                 !processedAccountIDs.contains($0.id)
             }
-            guard !newAccounts.isEmpty else { break }
-            stateManager.synchronizeAccounts(accountStore.loadAccounts())
             for account in newAccounts {
                 processedAccountIDs.insert(account.id)
-                snapshotRepository.setSnapshotSuppressed(true, for: account)
                 do {
-                    try snapshotRepository.deleteSnapshot(for: account)
-                    snapshotRepository.setSnapshotSuppressed(false, for: account)
-                } catch {
-                    deletionFailures.append(
-                        ClearDataDeletionFailure(
-                            target: "\(account.provider.displayName) — \(account.label)",
-                            reason: error.localizedDescription
-                        )
+                    try snapshotRepository.setSnapshotSuppressed(
+                        true,
+                        for: account
                     )
+                    try snapshotRepository.deleteSnapshot(for: account)
+                    try snapshotRepository.setSnapshotSuppressed(
+                        false,
+                        for: account
+                    )
+                    deletionFailuresByIdentifier.removeValue(
+                        forKey: "usage-account-\(account.id.uuidString)"
+                    )
+                } catch {
+                    let failure = ClearDataDeletionFailure(
+                            target: "\(account.provider.displayName) — \(account.label)",
+                            reason: error.localizedDescription,
+                            identifier: "usage-account-\(account.id.uuidString)"
+                    )
+                    deletionFailuresByIdentifier[failure.identifier] = failure
                 }
                 stateManager.clearLoginHistory(for: account.id)
+            }
+            for provider in TokenUsageProvider.allCases {
+                deletionFailuresByIdentifier.removeValue(
+                    forKey: "token-projection-\(provider.rawValue)"
+                )
+            }
+            for account in newAccounts
+                where account.provider.tokenUsageProvider != nil {
+                deletionFailuresByIdentifier.removeValue(
+                    forKey: "token-account-\(account.id.uuidString)"
+                )
+            }
+            for failure in tokenUsageViewModel.clearLateRegisteredAccounts(
+                newAccounts,
+                during: tokenDataClearToken
+            ) {
+                let deletionFailure = ClearDataDeletionFailure(
+                        target: failure.targetDescription,
+                        reason: failure.reason,
+                        identifier: failure.isSelectedProjection
+                            ? "token-projection-\(failure.provider.rawValue)"
+                            : "token-account-\(failure.accountID?.uuidString ?? "unknown")"
+                )
+                deletionFailuresByIdentifier[deletionFailure.identifier] =
+                    deletionFailure
+            }
+            // A late add/select can republish provider facades. Clear them in
+            // the same synchronous convergence pass; callbacks are detected
+            // as new accounts on the next iteration.
+            for provider in UsageProvider.allCases {
+                let account = selectedAccount(for: provider)
+                do {
+                    try snapshotRepository.publishSelectedSnapshot(
+                        nil,
+                        for: account
+                    )
+                    deletionFailuresByIdentifier.removeValue(
+                        forKey: "usage-projection-\(provider.rawValue)"
+                    )
+                } catch {
+                    let failure = ClearDataDeletionFailure(
+                            target: "\(provider.displayName) widget",
+                            reason: error.localizedDescription,
+                            identifier: "usage-projection-\(provider.rawValue)"
+                    )
+                    deletionFailuresByIdentifier[failure.identifier] = failure
+                }
+                WidgetCenter.shared.reloadTimelines(
+                    ofKind: provider.widgetKind
+                )
+            }
+            let hasUnprocessedAccounts = accountStore.loadAccounts().contains {
+                !processedAccountIDs.contains($0.id)
+            }
+            if !hasUnprocessedAccounts,
+               webViewPool.isWebsiteDataClearComplete(webViewClearToken) {
+                break
             }
         }
 
@@ -634,8 +792,13 @@ final class UsageViewModel: ObservableObject {
         }
         didFinishWebsiteDataClear = true
 
-        if !deletionFailures.isEmpty {
-            let error = ClearDataError.snapshotDeletion(deletionFailures)
+        let uniqueDeletionFailures = deletionFailuresByIdentifier
+            .sorted { $0.key < $1.key }
+            .map(\.value)
+        if !uniqueDeletionFailures.isEmpty {
+            let error = ClearDataError.snapshotDeletion(
+                uniqueDeletionFailures
+            )
             Logger.usage.error(
                 "Clear Data snapshot deletion failed: \(error.localizedDescription)"
             )
@@ -792,6 +955,9 @@ final class UsageViewModel: ObservableObject {
                         ofKind: account.provider.widgetKind
                     )
                 } catch {
+                    WidgetCenter.shared.reloadTimelines(
+                        ofKind: account.provider.widgetKind
+                    )
                     Logger.usage.error(
                         "Could not publish selected account snapshot: \(String(describing: error))"
                     )
@@ -810,15 +976,12 @@ final class UsageViewModel: ObservableObject {
             guard operationGate.isCurrent(fetchToken),
                   webViewPool.isAvailable(webViewStore) else { return }
 
-            // Token billing remains provider-scoped. Until that subsystem is
-            // account-aware, only the still-selected Copilot account may write.
             if account.provider == .githubCopilot,
-               isCurrentSelectedStore(webViewStore),
                let billingContext = operationGate.captureContext(
                 for: account.id
                ),
                let tokenContext = tokenUsageViewModel
-                .captureExternalSnapshotContext(for: .copilot) {
+                .captureExternalSnapshotContext(for: account) {
                 Task {
                     await fetchCopilotBilling(
                         using: webViewStore,
@@ -1023,19 +1186,19 @@ final class UsageViewModel: ObservableObject {
         tokenUsageContext: TokenUsageViewModel.ExternalSnapshotContext
     ) async {
         guard operationGate.isCurrent(context),
-              isCurrentSelectedStore(webViewStore) else { return }
+              webViewPool.isAvailable(webViewStore) else { return }
         do {
             let snapshot = try await copilotBillingFetcher
                 .fetchBillingSnapshot(using: webViewStore.webView)
             guard operationGate.isCurrent(context),
-                  isCurrentSelectedStore(webViewStore) else { return }
+                  webViewPool.isAvailable(webViewStore) else { return }
             try tokenUsageViewModel.saveExternallyFetchedSnapshot(
                 snapshot,
                 context: tokenUsageContext
             )
         } catch {
             guard operationGate.isCurrent(context),
-                  isCurrentSelectedStore(webViewStore) else { return }
+                  webViewPool.isAvailable(webViewStore) else { return }
             Logger.usage.error(
                 "Copilot billing fetch failed: \(error.localizedDescription)"
             )
@@ -1064,6 +1227,7 @@ final class UsageViewModel: ObservableObject {
         let incomingIDs = Set(accounts.map(\.id))
         for removedID in currentIDs.subtracting(incomingIDs) {
             operationGate.invalidate(scope: removedID)
+            retirementRuntimeStatesByAccountID.removeValue(forKey: removedID)
             manualRefreshAccountIDs.remove(removedID)
             autoRecoveryInFlight.removeValue(forKey: removedID)
             lastLoginRedirectAt.removeValue(forKey: removedID)
@@ -1080,20 +1244,90 @@ final class UsageViewModel: ObservableObject {
         webViewPool.applyBackgroundPolicy(
             activeAccounts: stateManager.backgroundActiveAccounts
         )
+        tokenUsageViewModel.reloadAccounts()
     }
 
     private func publishSelectedProjection(for provider: UsageProvider) {
         let account = selectedAccount(for: provider)
+        let selectedSnapshot = stateManager.getState(
+            for: account.id
+        ).snapshot
+        guard snapshotRepository.canSafelyMutateSelectedProjection(
+            for: account
+        ) else {
+            do {
+                try snapshotRepository.setSelectedProjectionSuppressed(
+                    true,
+                    for: account
+                )
+            } catch {
+                Logger.usage.error(
+                    "Could not quarantine selected projection: \(String(describing: error))"
+                )
+            }
+            WidgetCenter.shared.reloadTimelines(ofKind: provider.widgetKind)
+            return
+        }
         do {
             try snapshotRepository.publishSelectedSnapshot(
-                stateManager.getState(for: account.id).snapshot,
+                selectedSnapshot,
                 for: account
             )
         } catch {
+            WidgetCenter.shared.reloadTimelines(ofKind: provider.widgetKind)
             Logger.usage.error(
                 "Could not update selected account projection: \(String(describing: error))"
             )
         }
+    }
+
+    private func prepareSelectedUsageProjectionRemoval(
+        for account: ProviderAccount
+    ) throws {
+        guard snapshotRepository.canSafelyMutateSelectedProjection(
+            for: account
+        ) else {
+            try snapshotRepository.setSelectedProjectionSuppressed(
+                true,
+                for: account
+            )
+            WidgetCenter.shared.reloadTimelines(
+                ofKind: account.provider.widgetKind
+            )
+            throw AccountUsageSnapshotRepositoryError.indeterminateSnapshot(
+                provider: account.provider,
+                accountLabel: account.label
+            )
+        }
+        try snapshotRepository.publishSelectedSnapshot(nil, for: account)
+    }
+
+    private func restoreSelectedUsageProjection(
+        for account: ProviderAccount
+    ) throws {
+        guard selectedAccount(for: account.provider).id == account.id else {
+            return
+        }
+        let selectedSnapshot = stateManager.getState(
+            for: account.id
+        ).snapshot
+        guard snapshotRepository.canSafelyMutateSelectedProjection(
+            for: account
+        ) else {
+            try snapshotRepository.setSelectedProjectionSuppressed(
+                true,
+                for: account
+            )
+            WidgetCenter.shared.reloadTimelines(
+                ofKind: account.provider.widgetKind
+            )
+            return
+        }
+        try snapshotRepository.publishSelectedSnapshot(
+            selectedSnapshot,
+            for: account
+        )
+        WidgetCenter.shared.reloadTimelines(ofKind: account.provider.widgetKind)
     }
 
     private func completeAccountSelection(_ account: ProviderAccount) {
@@ -1107,13 +1341,58 @@ final class UsageViewModel: ObservableObject {
     }
 
     private func handleAccountRetirementDidBegin(_ accountID: UUID) {
+        let retiringProvider = stateManager.account(id: accountID)?.provider
+        if stateManager.account(id: accountID) != nil {
+            retirementRuntimeStatesByAccountID[accountID] =
+                RetirementRuntimeState(
+                    isAutoRefreshEnabled: stateManager.getState(
+                        for: accountID
+                    ).isAutoRefreshEnabled
+                )
+        }
         operationGate.invalidate(scope: accountID)
+        tokenUsageViewModel.invalidateAccount(id: accountID)
+        tokenUsageViewModel.reloadAccounts()
         manualRefreshAccountIDs.remove(accountID)
         autoRecoveryInFlight.removeValue(forKey: accountID)
         lastLoginRedirectAt.removeValue(forKey: accountID)
         if stateManager.account(id: accountID) != nil {
-            stateManager.setFetching(false, for: accountID)
+            stateManager.clearLoginHistory(for: accountID)
         }
+        if let retiringProvider {
+            publishSelectedProjection(for: retiringProvider)
+            WidgetCenter.shared.reloadTimelines(
+                ofKind: retiringProvider.widgetKind
+            )
+        }
+    }
+
+    private func handleAccountRetirementDidRestore(_ accountID: UUID) {
+        let retirementState = retirementRuntimeStatesByAccountID.removeValue(
+            forKey: accountID
+        )
+        guard let account = accountStore.account(id: accountID),
+              stateManager.account(id: accountID) != nil else { return }
+        var restoredState = ProviderState.initial(
+            snapshot: snapshotRepository.loadSnapshot(for: account)
+        )
+        if let retirementState {
+            restoredState.isAutoRefreshEnabled =
+                retirementState.isAutoRefreshEnabled
+        }
+        stateManager.setState(
+            restoredState,
+            for: accountID
+        )
+        tokenUsageViewModel.restoreAccountAfterRetirementCancellation(
+            id: accountID
+        )
+        publishSelectedProjection(for: account.provider)
+        WidgetCenter.shared.reloadTimelines(ofKind: account.provider.widgetKind)
+        updateSelectedProviderState()
+        webViewPool.applyBackgroundPolicy(
+            activeAccounts: stateManager.backgroundActiveAccounts
+        )
     }
 
     private func isUsageURL(

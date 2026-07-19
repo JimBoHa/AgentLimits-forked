@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// Account management sheet for the selected usage provider. Mutations flow
@@ -78,18 +79,20 @@ struct ProviderAccountsSettingsView: View {
         .interactiveDismissDisabled(isBusy)
         .sheet(item: $editorConfiguration) { configuration in
             ProviderAccountEditorView(configuration: configuration) {
-                label, isEnabled in
+                label, isEnabled, cliDataRoot in
                 if let account = configuration.account {
                     _ = try viewModel.updateAccount(
                         id: account.id,
                         label: label,
-                        isEnabled: isEnabled
+                        isEnabled: isEnabled,
+                        cliDataRoot: cliDataRoot
                     )
                 } else {
                     _ = try viewModel.addAndSelectAccount(
                         id: configuration.id,
                         provider: configuration.provider,
-                        label: label
+                        label: label,
+                        cliDataRoot: cliDataRoot
                     )
                 }
             }
@@ -178,6 +181,16 @@ struct ProviderAccountsSettingsView: View {
                 Text(sessionDescription(for: account))
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                if account.provider.tokenUsageProvider?.isCLIBased == true {
+                    Text(
+                        "accounts.cliDataRootFormat".localized(
+                            account.cliDataRoot
+                                ?? "accounts.cliDataRootDefault".localized()
+                        )
+                    )
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                }
             }
 
             Spacer()
@@ -292,21 +305,25 @@ private struct ProviderAccountEditorView: View {
     @Environment(\.dismiss) private var dismiss
 
     let configuration: AccountEditorConfiguration
-    let onSave: (String, Bool) throws -> Void
+    let onSave: (String, Bool, String?) throws -> Void
 
     @State private var label: String
     @State private var isEnabled: Bool
+    @State private var cliDataRoot: String
     @State private var errorMessage: String?
 
     init(
         configuration: AccountEditorConfiguration,
-        onSave: @escaping (String, Bool) throws -> Void
+        onSave: @escaping (String, Bool, String?) throws -> Void
     ) {
         self.configuration = configuration
         self.onSave = onSave
         self._label = State(initialValue: configuration.account?.label ?? "")
         self._isEnabled = State(
             initialValue: configuration.account?.isEnabled ?? true
+        )
+        self._cliDataRoot = State(
+            initialValue: configuration.account?.cliDataRoot ?? ""
         )
     }
 
@@ -325,6 +342,23 @@ private struct ProviderAccountEditorView: View {
                 }
                 TextField("accounts.label".localized(), text: $label)
                     .textFieldStyle(.roundedBorder)
+                if usesCLIDataRoot {
+                    LabeledContent("accounts.cliDataRoot".localized()) {
+                        HStack {
+                            TextField(
+                                "accounts.cliDataRootPlaceholder".localized(),
+                                text: $cliDataRoot
+                            )
+                            .textFieldStyle(.roundedBorder)
+                            Button("accounts.chooseFolder".localized()) {
+                                chooseCLIDataRoot()
+                            }
+                        }
+                    }
+                    Text("accounts.cliDataRootHelp".localized())
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
                 if configuration.account != nil {
                     Toggle(
                         "accounts.autoRefresh".localized(),
@@ -342,7 +376,24 @@ private struct ProviderAccountEditorView: View {
                 .keyboardShortcut(.cancelAction)
                 Button("accounts.save".localized()) {
                     do {
-                        try onSave(label, isEnabled)
+                        let trimmedRoot = cliDataRoot.trimmingCharacters(
+                            in: .whitespacesAndNewlines
+                        )
+                        let resolvedRoot = usesCLIDataRoot
+                            && !trimmedRoot.isEmpty
+                            ? trimmedRoot
+                            : nil
+                        if let tokenProvider = configuration.provider
+                            .tokenUsageProvider,
+                           tokenProvider.isCLIBased {
+                            _ = try tokenProvider
+                                .resolveCLIDataRootEnvironment(resolvedRoot)
+                        }
+                        try onSave(
+                            label,
+                            isEnabled,
+                            resolvedRoot
+                        )
                         dismiss()
                     } catch {
                         errorMessage = error.localizedDescription
@@ -373,6 +424,22 @@ private struct ProviderAccountEditorView: View {
             }
         } message: {
             Text(errorMessage ?? "")
+        }
+    }
+
+    private var usesCLIDataRoot: Bool {
+        configuration.provider.tokenUsageProvider?.isCLIBased == true
+    }
+
+    private func chooseCLIDataRoot() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = true
+        panel.prompt = "accounts.chooseFolder".localized()
+        if panel.runModal() == .OK, let url = panel.url {
+            cliDataRoot = url.path
         }
     }
 }

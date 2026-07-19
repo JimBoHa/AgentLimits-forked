@@ -141,6 +141,7 @@
 "tokenUsage.notFetched" = "未获取";
 "tokenUsage.updated" = "更新： ";
 "ccusage.provider" = "服务";
+"ccusage.providerAccountFormat" = "%@ — %@";
 "ccusage.disabled" = "已禁用";
 "ccusage.credits.title" = "致谢";
 "ccusage.credits.body" = "特别感谢 ccusage 的作者 ryoppippi。";
@@ -233,3 +234,9 @@
 "accounts.label" = "账户名称";
 "accounts.save" = "保存";
 "accounts.disabledFormat" = "%@（已停用）";
+"accounts.cliDataRoot" = "CLI 数据目录";
+"accounts.cliDataRootPlaceholder" = "服务默认目录";
+"accounts.cliDataRootHelp" = "为每个额外的 CLI 账户设置不同的本地数据目录。AgentLimits 会读取此目录，但绝不会删除它。";
+"accounts.chooseFolder" = "选择…";
+"accounts.cliDataRootDefault" = "服务默认设置";
+"accounts.cliDataRootFormat" = "CLI 数据：%@";

@@ -3,25 +3,25 @@ import XCTest
 @testable import AgentLimits
 
 @MainActor
-final class AccountUsageSnapshotRepositoryTests: XCTestCase {
+final class AccountTokenUsageSnapshotRepositoryTests: XCTestCase {
     func testSameProviderAccountsSaveSuppressAndDeleteIndependently() throws {
         try withRepository { repository, visibilityStore, _ in
             let personal = makeAccount(
-                id: "a0000000-0000-0000-0000-00000000000a",
+                id: "a1000000-0000-0000-0000-00000000000a",
                 provider: .chatgptCodex,
                 label: "Personal"
             )
             let work = makeAccount(
-                id: "b0000000-0000-0000-0000-00000000000b",
+                id: "b1000000-0000-0000-0000-00000000000b",
                 provider: .chatgptCodex,
                 label: "Work"
             )
             let personalSnapshot = makeSnapshot(
-                provider: .chatgptCodex,
+                provider: .codex,
                 fetchedAt: 1_000
             )
             let workSnapshot = makeSnapshot(
-                provider: .chatgptCodex,
+                provider: .codex,
                 fetchedAt: 2_000
             )
 
@@ -64,21 +64,22 @@ final class AccountUsageSnapshotRepositoryTests: XCTestCase {
         }
     }
 
-    func testLegacyDefaultMigratesOnceAndIsolatedAccountNeverImportsProjection() throws {
+    func testLegacyDefaultMigratesOnceAndIsolatedAccountNeverImportsProjection()
+        throws {
         try withRepository { repository, _, context in
             let primary = makeAccount(
-                id: "c0000000-0000-0000-0000-00000000000c",
+                id: "c1000000-0000-0000-0000-00000000000c",
                 provider: .claudeCode,
                 label: "Primary",
                 webKitStorage: .legacyDefault
             )
             let secondary = makeAccount(
-                id: "d0000000-0000-0000-0000-00000000000d",
+                id: "d1000000-0000-0000-0000-00000000000d",
                 provider: .claudeCode,
                 label: "Secondary"
             )
             let legacySnapshot = makeSnapshot(
-                provider: .claudeCode,
+                provider: .claude,
                 fetchedAt: 3_000
             )
             try context.projectionStore.saveSnapshot(legacySnapshot)
@@ -91,7 +92,7 @@ final class AccountUsageSnapshotRepositoryTests: XCTestCase {
 
             try repository.deleteSnapshot(for: primary)
             XCTAssertNotNil(
-                context.projectionStore.loadSnapshot(for: .claudeCode)
+                context.projectionStore.loadSnapshot(for: .claude)
             )
 
             let relaunched = makeRepository(context: context)
@@ -100,56 +101,28 @@ final class AccountUsageSnapshotRepositoryTests: XCTestCase {
         }
     }
 
-    func testTransientMigrationFailureHidesProjectionAndRetryRecovers()
-        throws {
-        try withRepository { repository, visibilityStore, context in
+    func testMissingLegacyProjectionBecomesDurableTerminalMigration() throws {
+        try withRepository { repository, _, context in
             let account = makeAccount(
-                id: "c1000000-0000-0000-0000-00000000000c",
-                provider: .chatgptCodex,
+                id: "e1000000-0000-0000-0000-00000000000e",
+                provider: .githubCopilot,
                 label: "Primary",
                 webKitStorage: .legacyDefault
             )
-            let legacySnapshot = makeSnapshot(
-                provider: .chatgptCodex,
-                fetchedAt: 3_100
-            )
-            try context.projectionStore.saveSnapshot(legacySnapshot)
-            let accountsPath = context.containerURL
-                .appendingPathComponent(AppGroupConfig.snapshotDirectory)
-                .appendingPathComponent("accounts")
-            try Data("blocks-directory".utf8).write(
-                to: accountsPath,
-                options: .atomic
-            )
 
             XCTAssertNil(repository.loadSnapshot(for: account))
-            XCTAssertFalse(
-                repository.canSafelyPublishMissingSnapshot(for: account)
-            )
-            try repository.setSelectedProjectionSuppressed(true, for: account)
-            XCTAssertNil(
-                context.projectionStore.loadSnapshot(for: .chatgptCodex)
-            )
-            let legacyURL = context.containerURL
-                .appendingPathComponent(AppGroupConfig.snapshotDirectory)
-                .appendingPathComponent(account.provider.snapshotFileName)
-            XCTAssertFalse(try Data(contentsOf: legacyURL).isEmpty)
 
-            try FileManager.default.removeItem(at: accountsPath)
-            let retry = makeRepository(context: context)
-            let recovered = try XCTUnwrap(retry.loadSnapshot(for: account))
-            XCTAssertEqual(recovered.fetchedAt, legacySnapshot.fetchedAt)
-            try retry.publishSelectedSnapshot(recovered, for: account)
-            XCTAssertEqual(
-                context.projectionStore.loadSnapshot(
-                    for: .chatgptCodex
-                )?.fetchedAt,
-                legacySnapshot.fetchedAt
+            let lateProjection = makeSnapshot(
+                provider: .copilot,
+                fetchedAt: 4_000
             )
-            XCTAssertFalse(
-                context.projectionStore.isProjectionDisplaySuppressed(
-                    for: .chatgptCodex
-                )
+            try context.projectionStore.saveSnapshot(lateProjection)
+
+            let relaunched = makeRepository(context: context)
+            XCTAssertNil(relaunched.loadSnapshot(for: account))
+            XCTAssertEqual(
+                context.projectionStore.loadSnapshot(for: .copilot)?.fetchedAt,
+                lateProjection.fetchedAt
             )
         }
     }
@@ -157,7 +130,7 @@ final class AccountUsageSnapshotRepositoryTests: XCTestCase {
     func testExplicitDeleteBeforeLoadPreventsLaterLegacyImport() throws {
         try withRepository { repository, _, context in
             let account = makeAccount(
-                id: "c2000000-0000-0000-0000-00000000000c",
+                id: "e2000000-0000-0000-0000-00000000000e",
                 provider: .githubCopilot,
                 label: "Primary",
                 webKitStorage: .legacyDefault
@@ -165,10 +138,7 @@ final class AccountUsageSnapshotRepositoryTests: XCTestCase {
 
             try repository.deleteSnapshot(for: account)
             try context.projectionStore.saveSnapshot(
-                makeSnapshot(
-                    provider: .githubCopilot,
-                    fetchedAt: 3_200
-                )
+                makeSnapshot(provider: .copilot, fetchedAt: 4_500)
             )
 
             let relaunched = makeRepository(context: context)
@@ -179,27 +149,141 @@ final class AccountUsageSnapshotRepositoryTests: XCTestCase {
         }
     }
 
+    func testNonMissingMigrationFailureRemainsRetryable() throws {
+        try withRepository { _, _, context in
+            let account = makeAccount(
+                id: "f1000000-0000-0000-0000-00000000000f",
+                provider: .chatgptCodex,
+                label: "Primary",
+                webKitStorage: .legacyDefault
+            )
+            let legacySnapshot = makeSnapshot(
+                provider: .codex,
+                fetchedAt: 5_000
+            )
+            try context.projectionStore.saveSnapshot(legacySnapshot)
+
+            let accountsPath = context.containerURL
+                .appendingPathComponent(AppGroupConfig.snapshotDirectory)
+                .appendingPathComponent("accounts")
+            try Data("blocks-directory".utf8).write(
+                to: accountsPath,
+                options: .atomic
+            )
+
+            let firstAttempt = makeRepository(context: context)
+            XCTAssertNil(firstAttempt.loadSnapshot(for: account))
+            XCTAssertFalse(
+                firstAttempt.canSafelyPublishMissingSnapshot(for: account)
+            )
+            try firstAttempt.setSelectedProjectionSuppressed(
+                true,
+                for: account
+            )
+            XCTAssertNil(
+                context.projectionStore.loadSnapshot(for: .codex)
+            )
+            let legacyURL = context.containerURL
+                .appendingPathComponent(AppGroupConfig.snapshotDirectory)
+                .appendingPathComponent(
+                    TokenUsageProvider.codex.snapshotFileName
+                )
+            XCTAssertFalse(try Data(contentsOf: legacyURL).isEmpty)
+
+            try FileManager.default.removeItem(at: accountsPath)
+            let retry = makeRepository(context: context)
+            let recovered = try XCTUnwrap(retry.loadSnapshot(for: account))
+            XCTAssertEqual(recovered.fetchedAt, legacySnapshot.fetchedAt)
+            XCTAssertTrue(
+                retry.canSafelyPublishMissingSnapshot(for: account)
+            )
+            try retry.publishSelectedSnapshot(recovered, for: account)
+            XCTAssertEqual(
+                context.projectionStore.loadSnapshot(for: .codex)?.fetchedAt,
+                legacySnapshot.fetchedAt
+            )
+            XCTAssertFalse(
+                context.projectionStore.isProjectionDisplaySuppressed(
+                    for: .codex
+                )
+            )
+        }
+    }
+
+    func testDisplayOnlySuppressionHidesProjectionButAllowsMigration()
+        throws {
+        try withRepository { repository, _, context in
+            let account = makeAccount(
+                id: "f2000000-0000-0000-0000-00000000000f",
+                provider: .chatgptCodex,
+                label: "Primary",
+                webKitStorage: .legacyDefault
+            )
+            let legacySnapshot = makeSnapshot(
+                provider: .codex,
+                fetchedAt: 5_100
+            )
+            try context.projectionStore.saveSnapshot(legacySnapshot)
+            try context.projectionStore.setProjectionDisplaySuppressed(
+                true,
+                for: .codex
+            )
+
+            XCTAssertNil(context.projectionStore.loadSnapshot(for: .codex))
+            XCTAssertEqual(
+                repository.loadSnapshot(for: account)?.fetchedAt,
+                legacySnapshot.fetchedAt
+            )
+        }
+    }
+
+    func testDeletionSuppressionDoesNotImportLegacyProjection() throws {
+        try withRepository { repository, visibilityStore, context in
+            let account = makeAccount(
+                id: "f3000000-0000-0000-0000-00000000000f",
+                provider: .chatgptCodex,
+                label: "Primary",
+                webKitStorage: .legacyDefault
+            )
+            try context.projectionStore.saveSnapshot(
+                makeSnapshot(provider: .codex, fetchedAt: 5_200)
+            )
+            visibilityStore.setSnapshotSuppressed(
+                true,
+                fileName: TokenUsageProvider.codex.snapshotFileName
+            )
+            try context.projectionStore.setProjectionDisplaySuppressed(
+                true,
+                for: .codex
+            )
+
+            XCTAssertNil(context.projectionStore.loadSnapshot(for: .codex))
+            XCTAssertNil(repository.loadSnapshot(for: account))
+            XCTAssertTrue(repository.canSafelyPublishMissingSnapshot(for: account))
+        }
+    }
+
     func testIndeterminateLegacySourceBlocksSiblingProjectionOverwrite()
         throws {
         try withRepository { repository, visibilityStore, context in
             let primary = makeAccount(
-                id: "c3000000-0000-0000-0000-00000000000c",
+                id: "f4000000-0000-0000-0000-00000000000f",
                 provider: .chatgptCodex,
                 label: "Primary",
                 webKitStorage: .legacyDefault
             )
             let sibling = makeAccount(
-                id: "c4000000-0000-0000-0000-00000000000c",
+                id: "f5000000-0000-0000-0000-00000000000f",
                 provider: .chatgptCodex,
                 label: "Work"
             )
             let legacySnapshot = makeSnapshot(
-                provider: .chatgptCodex,
-                fetchedAt: 3_300
+                provider: .codex,
+                fetchedAt: 5_300
             )
             let siblingSnapshot = makeSnapshot(
-                provider: .chatgptCodex,
-                fetchedAt: 3_400
+                provider: .codex,
+                fetchedAt: 5_400
             )
             try repository.saveSnapshot(siblingSnapshot, for: sibling)
             try context.projectionStore.saveSnapshot(legacySnapshot)
@@ -220,19 +304,19 @@ final class AccountUsageSnapshotRepositoryTests: XCTestCase {
                 )
             ) { error in
                 XCTAssertEqual(
-                    error as? AccountUsageSnapshotRepositoryError,
-                    .legacyProjectionSourceIndeterminate(.chatgptCodex)
+                    error as? AccountTokenUsageSnapshotRepositoryError,
+                    .legacyProjectionSourceIndeterminate(.codex)
                 )
             }
             XCTAssertTrue(
                 context.projectionStore.isProjectionDisplaySuppressed(
-                    for: .chatgptCodex
+                    for: .codex
                 )
             )
             XCTAssertEqual(
                 try loadRawProjection(
-                    UsageSnapshot.self,
-                    providerFileName: UsageProvider.chatgptCodex
+                    TokenUsageSnapshot.self,
+                    providerFileName: TokenUsageProvider.codex
                         .snapshotFileName,
                     context: context
                 ).fetchedAt,
@@ -249,75 +333,29 @@ final class AccountUsageSnapshotRepositoryTests: XCTestCase {
                 for: sibling
             )
             XCTAssertEqual(
-                context.projectionStore.loadSnapshot(
-                    for: .chatgptCodex
-                )?.fetchedAt,
+                context.projectionStore.loadSnapshot(for: .codex)?.fetchedAt,
                 siblingSnapshot.fetchedAt
             )
         }
     }
 
-    func testRemovalPreflightDurablyRetiresUsageAndTokenImports() throws {
-        try withRepository { repository, visibilityStore, context in
-            let target = makeAccount(
-                id: "c5000000-0000-0000-0000-00000000000c",
-                provider: .chatgptCodex,
-                label: "Legacy",
-                webKitStorage: .legacyDefault
-            )
-            let remover = DefaultProviderAccountLocalDataRemover(
-                visibilityStore: visibilityStore,
-                migrationDefaults: context.migrationDefaults,
-                makeUsageSnapshotStore: { id in
-                    UsageSnapshotStore(
-                        visibilityStore: visibilityStore,
-                        accountID: id,
-                        containerURLOverride: context.containerURL
-                    )
-                }
-            )
-
-            try remover.prepareLocalDataRetirement(for: target)
-
-            XCTAssertTrue(
-                context.migrationDefaults.bool(
-                    forKey: AccountSnapshotMigrationKey.usage(for: target)
-                )
-            )
-            XCTAssertTrue(
-                context.migrationDefaults.bool(
-                    forKey: AccountSnapshotMigrationKey.tokenUsage(
-                        for: target
-                    )
-                )
-            )
-            try context.projectionStore.saveSnapshot(
-                makeSnapshot(
-                    provider: .chatgptCodex,
-                    fetchedAt: 3_500
-                )
-            )
-
-            XCTAssertNil(repository.loadSnapshot(for: target))
-        }
-    }
-
-    func testFailedMigrationMarkerPersistenceBlocksUntilRetry() throws {
+    func testFailedDeleteRetirementRestoresMarkerAndAllowsMigration()
+        throws {
         let containerURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(
-                "UsageMigrationRollback-\(UUID().uuidString)",
+                "TokenRetirementRollback-\(UUID().uuidString)",
                 isDirectory: true
             )
-        let suiteName = "UsageMigrationRollback-\(UUID().uuidString)"
-        let defaults = UsageSequencedSyncUserDefaults(
+        let suiteName = "TokenRetirementRollback-\(UUID().uuidString)"
+        let defaults = TokenSequencedSyncUserDefaults(
             suiteName: suiteName
         )!
-        let visibilityStore = LockedRepositoryVisibilityStore()
+        let visibilityStore = LockedTokenRepositoryVisibilityStore()
         let context = RepositoryContext(
             containerURL: containerURL,
             visibilityStore: visibilityStore,
             migrationDefaults: defaults,
-            projectionStore: UsageSnapshotStore(
+            projectionStore: TokenUsageSnapshotStore(
                 visibilityStore: visibilityStore,
                 containerURLOverride: containerURL
             )
@@ -327,75 +365,59 @@ final class AccountUsageSnapshotRepositoryTests: XCTestCase {
             defaults.removePersistentDomain(forName: suiteName)
         }
         let account = makeAccount(
-            id: "c6000000-0000-0000-0000-00000000000c",
+            id: "f6000000-0000-0000-0000-00000000000f",
             provider: .chatgptCodex,
             label: "Primary",
             webKitStorage: .legacyDefault
         )
         let legacySnapshot = makeSnapshot(
-            provider: .chatgptCodex,
-            fetchedAt: 3_600
+            provider: .codex,
+            fetchedAt: 5_500
         )
         try context.projectionStore.saveSnapshot(legacySnapshot)
         defaults.synchronizeResults = [false, false]
 
         let repository = makeRepository(context: context)
-        let recovered = try XCTUnwrap(repository.loadSnapshot(for: account))
-        XCTAssertFalse(
-            repository.canSafelyPublishMissingSnapshot(for: account)
-        )
+        XCTAssertThrowsError(
+            try repository.deleteSnapshot(for: account)
+        ) { error in
+            XCTAssertEqual(
+                error as? AccountTokenUsageSnapshotRepositoryError,
+                .migrationRetirementFailed
+            )
+        }
         XCTAssertNil(
             defaults.object(
-                forKey: AccountSnapshotMigrationKey.usage(for: account)
+                forKey: AccountSnapshotMigrationKey.tokenUsage(for: account)
             )
-        )
-        XCTAssertThrowsError(
-            try repository.publishSelectedSnapshot(recovered, for: account)
-        )
-        XCTAssertTrue(
-            context.projectionStore.isProjectionDisplaySuppressed(
-                for: .chatgptCodex
-            )
-        )
-        XCTAssertEqual(
-            try loadRawProjection(
-                UsageSnapshot.self,
-                providerFileName: account.provider.snapshotFileName,
-                context: context
-            ).fetchedAt,
-            legacySnapshot.fetchedAt
         )
 
         defaults.synchronizeResults = []
-        let retried = try XCTUnwrap(repository.loadSnapshot(for: account))
-        try repository.publishSelectedSnapshot(retried, for: account)
-        XCTAssertTrue(
-            repository.canSafelyPublishMissingSnapshot(for: account)
-        )
-        XCTAssertFalse(
-            context.projectionStore.isProjectionDisplaySuppressed(
-                for: .chatgptCodex
-            )
+        let retry = makeRepository(context: context)
+        XCTAssertEqual(
+            retry.loadSnapshot(for: account)?.fetchedAt,
+            legacySnapshot.fetchedAt
         )
     }
 
-    func testProviderMismatchRejectsScopedSaveAndFailsProjectionClosed() throws {
+    func testProviderMismatchRejectsScopedSaveAndFailsProjectionClosed()
+        throws {
         try withRepository { repository, visibilityStore, context in
             let account = makeAccount(
-                id: "e0000000-0000-0000-0000-00000000000e",
+                id: "a2000000-0000-0000-0000-00000000000a",
                 provider: .githubCopilot,
                 label: "Copilot"
             )
             let mismatched = makeSnapshot(
-                provider: .chatgptCodex,
-                fetchedAt: 4_000
+                provider: .codex,
+                fetchedAt: 6_000
             )
 
             XCTAssertThrowsError(
                 try repository.saveSnapshot(mismatched, for: account)
             ) { error in
                 XCTAssertEqual(
-                    error as? AccountUsageSnapshotRepositoryError,
+                    error as? AccountTokenUsageSnapshotRepositoryError,
                     .providerMismatch
                 )
             }
@@ -413,7 +435,7 @@ final class AccountUsageSnapshotRepositoryTests: XCTestCase {
             DateCodec.configureEncoder(encoder)
             try encoder.encode(mismatched).write(
                 to: accountDirectory.appendingPathComponent(
-                    account.provider.snapshotFileName
+                    TokenUsageProvider.copilot.snapshotFileName
                 ),
                 options: .atomic
             )
@@ -432,40 +454,116 @@ final class AccountUsageSnapshotRepositoryTests: XCTestCase {
                 )
             ) { error in
                 XCTAssertEqual(
-                    error as? AccountUsageSnapshotRepositoryError,
+                    error as? AccountTokenUsageSnapshotRepositoryError,
                     .providerMismatch
                 )
             }
             XCTAssertTrue(
                 context.projectionStore.isProjectionDisplaySuppressed(
-                    for: .githubCopilot
+                    for: .copilot
                 )
+            )
+        }
+    }
+
+    func testSelectedProjectionPublishesDeletesAndFailsSuppressed() throws {
+        try withRepository { repository, visibilityStore, context in
+            let account = makeAccount(
+                id: "b2000000-0000-0000-0000-00000000000b",
+                provider: .chatgptCodex,
+                label: "Personal"
+            )
+            let snapshot = makeSnapshot(
+                provider: .codex,
+                fetchedAt: 7_000
+            )
+            try repository.saveSnapshot(snapshot, for: account)
+
+            try repository.publishSelectedSnapshot(snapshot, for: account)
+            XCTAssertEqual(
+                context.projectionStore.loadSnapshot(for: .codex)?.fetchedAt,
+                snapshot.fetchedAt
+            )
+            XCTAssertFalse(
+                visibilityStore.isSnapshotSuppressed(
+                    fileName: TokenUsageProvider.codex.snapshotFileName
+                )
+            )
+            XCTAssertEqual(
+                repository.loadSnapshot(for: account)?.fetchedAt,
+                snapshot.fetchedAt
+            )
+
+            try repository.publishSelectedSnapshot(nil, for: account)
+            XCTAssertNil(context.projectionStore.loadSnapshot(for: .codex))
+            XCTAssertFalse(
+                visibilityStore.isSnapshotSuppressed(
+                    fileName: TokenUsageProvider.codex.snapshotFileName
+                )
+            )
+            XCTAssertEqual(
+                repository.loadSnapshot(for: account)?.fetchedAt,
+                snapshot.fetchedAt
+            )
+
+            try repository.publishSelectedSnapshot(snapshot, for: account)
+            let displayMarker = context.containerURL
+                .appendingPathComponent(AppGroupConfig.snapshotDirectory)
+                .appendingPathComponent(
+                    ".projection-display-suppressed-"
+                        + TokenUsageProvider.codex.snapshotFileName
+                )
+            try FileManager.default.createDirectory(
+                at: displayMarker,
+                withIntermediateDirectories: true
+            )
+
+            XCTAssertThrowsError(
+                try repository.publishSelectedSnapshot(
+                    nil,
+                    for: account
+                )
+            )
+            XCTAssertTrue(
+                context.projectionStore.isProjectionDisplaySuppressed(
+                    for: .codex
+                )
+            )
+            XCTAssertEqual(
+                try loadRawProjection(
+                    TokenUsageSnapshot.self,
+                    providerFileName: TokenUsageProvider.codex
+                        .snapshotFileName,
+                    context: context
+                ).fetchedAt,
+                snapshot.fetchedAt
             )
         }
     }
 
     private struct RepositoryContext {
         let containerURL: URL
-        let visibilityStore: LockedRepositoryVisibilityStore
+        let visibilityStore: LockedTokenRepositoryVisibilityStore
         let migrationDefaults: UserDefaults
-        let projectionStore: UsageSnapshotStore
+        let projectionStore: TokenUsageSnapshotStore
     }
 
     private func makeRepository(
-        context: RepositoryContext
-    ) -> DefaultAccountUsageSnapshotRepository {
-        DefaultAccountUsageSnapshotRepository(
+        context: RepositoryContext,
+        projectionStore: TokenUsageSnapshotStore? = nil
+    ) -> DefaultAccountTokenUsageSnapshotRepository {
+        DefaultAccountTokenUsageSnapshotRepository(
             visibilityStore: context.visibilityStore,
             migrationDefaults: context.migrationDefaults,
             makeAccountStore: { account, migratesLegacySnapshot in
-                UsageSnapshotStore(
+                TokenUsageSnapshotStore(
                     visibilityStore: context.visibilityStore,
                     accountID: account.id,
                     migratesLegacySnapshot: migratesLegacySnapshot,
                     containerURLOverride: context.containerURL
                 )
             },
-            projectionStore: context.projectionStore
+            projectionStore: projectionStore ?? context.projectionStore
         )
     }
 
@@ -484,20 +582,21 @@ final class AccountUsageSnapshotRepositoryTests: XCTestCase {
 
     private func withRepository(
         _ body: (
-            DefaultAccountUsageSnapshotRepository,
-            LockedRepositoryVisibilityStore,
+            DefaultAccountTokenUsageSnapshotRepository,
+            LockedTokenRepositoryVisibilityStore,
             RepositoryContext
         ) throws -> Void
     ) throws {
         let containerURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(
-                "AccountUsageSnapshotRepositoryTests-\(UUID().uuidString)",
+                "AccountTokenUsageSnapshotRepositoryTests-\(UUID().uuidString)",
                 isDirectory: true
             )
-        let suiteName = "AccountUsageSnapshotRepositoryTests-\(UUID().uuidString)"
+        let suiteName =
+            "AccountTokenUsageSnapshotRepositoryTests-\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!
-        let visibilityStore = LockedRepositoryVisibilityStore()
-        let projectionStore = UsageSnapshotStore(
+        let visibilityStore = LockedTokenRepositoryVisibilityStore()
+        let projectionStore = TokenUsageSnapshotStore(
             visibilityStore: visibilityStore,
             containerURLOverride: containerURL
         )
@@ -531,23 +630,25 @@ final class AccountUsageSnapshotRepositoryTests: XCTestCase {
     }
 
     private func makeSnapshot(
-        provider: UsageProvider,
+        provider: TokenUsageProvider,
         fetchedAt: TimeInterval
-    ) -> UsageSnapshot {
-        UsageSnapshot(
+    ) -> TokenUsageSnapshot {
+        TokenUsageSnapshot(
             provider: provider,
             fetchedAt: Date(timeIntervalSince1970: fetchedAt),
-            primaryWindow: nil,
-            secondaryWindow: nil
+            today: TokenUsagePeriod(costUSD: 1, totalTokens: 10),
+            thisWeek: TokenUsagePeriod(costUSD: 2, totalTokens: 20),
+            thisMonth: TokenUsagePeriod(costUSD: 3, totalTokens: 30)
         )
     }
 
     private func accountVisibilityKey(for account: ProviderAccount) -> String {
-        "accounts/\(account.snapshotNamespace)/\(account.provider.snapshotFileName)"
+        let provider = account.provider.tokenUsageProvider!
+        return "accounts/\(account.snapshotNamespace)/\(provider.snapshotFileName)"
     }
 }
 
-private final class LockedRepositoryVisibilityStore:
+private final class LockedTokenRepositoryVisibilityStore:
     SnapshotVisibilityControlling,
     @unchecked Sendable {
     private let lock = NSLock()
@@ -570,7 +671,7 @@ private final class LockedRepositoryVisibilityStore:
     }
 }
 
-private final class UsageSequencedSyncUserDefaults: UserDefaults {
+private final class TokenSequencedSyncUserDefaults: UserDefaults {
     var synchronizeResults: [Bool] = []
 
     override func synchronize() -> Bool {

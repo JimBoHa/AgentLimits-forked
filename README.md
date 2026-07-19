@@ -29,7 +29,7 @@ Fork releases: [JimBoHa/AgentLimits-forked releases](https://github.com/JimBoHa/
   - Claude Code: `ccusage claude daily`
 - **Premium request usage (Copilot):** daily premium request count and cost via WebView.
   - API: `https://github.com/settings/billing/usage_table` (fetched automatically with Copilot usage)
-- **Multiple web accounts:** Each provider can have named personal, work, or other accounts with separate login sessions and usage snapshots.
+- **Multiple accounts:** Each provider can have named personal, work, or other accounts with separate login sessions, quota snapshots, token snapshots, and optional local CLI data directories.
 
 ## Menu Bar Display
 - Two-line layout per provider in the icon area
@@ -100,7 +100,7 @@ Pacemaker shows a time-based usage benchmark to help you stay on track.
 ### Usage
 1. Open **Usage**.
 2. Select Codex, Claude Code, or Copilot.
-3. Choose an account, or click **Manage…** to add, rename, enable, disable, or remove named accounts.
+3. Choose an account, or click **Manage…** to add, rename, enable, disable, or remove named accounts. Codex and Claude Code accounts can use separate local CLI data directories.
 4. Choose refresh interval (1–10 minutes).
 5. Toggle **Show in menu bar** to show the selected account's usage percentage in the icon area.
 6. Toggle **Show dashboard in menu** to show/hide the provider's row in the menu dashboard.
@@ -114,10 +114,12 @@ Accounts migrated from older AgentLimits versions may temporarily share the lega
 ### ccusage
 1. Open **ccusage**.
 2. Select provider (Codex / Claude Code).
-3. Choose refresh interval (1–10 minutes).
-4. Enable periodic fetch and set additional CLI args if needed.
-5. Use **Test Now** to verify CLI execution.
-6. For Copilot: billing data is fetched automatically when Copilot usage is refreshed — just enable the toggle.
+3. Select the named account to inspect. Account selection is shared with **Usage** and the widgets.
+4. For multiple Codex or Claude Code accounts, set a unique CLI data directory for each additional account in **Usage → Manage…**. AgentLimits passes it to ccusage as [`CODEX_HOME`](https://ccusage.com/guide/codex/) or [`CLAUDE_CONFIG_DIR`](https://ccusage.com/guide/claude/) only for that child process.
+5. Choose refresh interval (1–10 minutes).
+6. Enable periodic fetch and set additional CLI args if needed.
+7. Use **Test Now** to verify the selected account's CLI execution.
+8. For Copilot: billing data is fetched automatically and stored for the exact account whose WebView produced it — just enable the toggle.
 
 ### Wake Up
 1. Open **Wake Up**.
@@ -168,6 +170,9 @@ Accounts migrated from older AgentLimits versions may temporarily share the lega
 Snapshots are stored in the App Group container:
 ```
 ~/Library/Group Containers/group.com.dmng.agentlimit/Library/Application Support/AgentLimit/
+├── accounts/<account-uuid>/
+│   ├── usage_snapshot*.json
+│   └── token_usage_*.json
 ├── usage_snapshot.json
 ├── usage_snapshot_claude.json
 ├── usage_snapshot_copilot.json
@@ -182,7 +187,8 @@ Snapshots are stored in the App Group container:
 - Widget refresh can be throttled by macOS.
 - Threshold notifications require permission.
 - Install ccusage explicitly first (for example, `npm install -g ccusage`) and review upgrades before applying them. AgentLimits never downloads or runs `ccusage@latest` automatically.
-- CLI execution uses the **user login shell** and prefixes PATH with `/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH`.
+- CLI execution uses fixed `/bin/zsh -f` wrappers and prefixes PATH with `/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH`.
+- Account-specific CLI data directories are read-only inputs to ccusage. AgentLimits never deletes or modifies them when an account is removed or **Clear Data** is used.
 - Full-path overrides in **Advanced** take precedence.
 - Claude Code logins may require multiple attempts.
 - The Claude Code status line script requires `jq`.
