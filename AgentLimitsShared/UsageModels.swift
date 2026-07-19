@@ -46,18 +46,38 @@ enum CLICommandPathValidator {
     /// Returns a trimmed override path, or nil when empty.
     static func normalizeOverridePath(_ rawValue: String) -> String? {
         let trimmedValue = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmedValue.isEmpty ? nil : trimmedValue
+        guard !trimmedValue.isEmpty, !trimmedValue.contains("\0") else {
+            return nil
+        }
+        return trimmedValue
     }
 
     /// Returns true when the path exists and is executable.
-    static func isExecutablePathValid(_ path: String) -> Bool {
+    static func isExecutablePathValid(
+        _ path: String,
+        fileManager: FileManager = .default
+    ) -> Bool {
         let expandedPath = (path as NSString).expandingTildeInPath
         var isDirectory: ObjCBool = false
-        let fileExists = FileManager.default.fileExists(atPath: expandedPath, isDirectory: &isDirectory)
+        let fileExists = fileManager.fileExists(
+            atPath: expandedPath,
+            isDirectory: &isDirectory
+        )
         guard fileExists, !isDirectory.boolValue else {
             return false
         }
-        return FileManager.default.isExecutableFile(atPath: expandedPath)
+        return fileManager.isExecutableFile(atPath: expandedPath)
+    }
+}
+
+enum CLICommandPathResolverError: LocalizedError, Equatable {
+    case invalidConfiguredPath(command: CLICommandKind)
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidConfiguredPath(let command):
+            return "The configured \(command.rawValue) path is missing or not executable."
+        }
     }
 }
 
@@ -76,18 +96,31 @@ enum CLICommandPathResolver {
     /// - Parameters:
     ///   - kind: Command kind that may have a path override.
     ///   - defaultName: Default executable name to use when no override is set.
-    static func resolveExecutable(for kind: CLICommandKind, defaultName: String) -> String {
-        guard let overridePath = loadCommandPath(for: kind) else {
+    static func resolveExecutable(
+        for kind: CLICommandKind,
+        defaultName: String,
+        userDefaults: UserDefaults? = nil,
+        fileManager: FileManager = .default
+    ) throws -> String {
+        let defaults = userDefaults ?? AppGroupDefaults.shared ?? .standard
+        let rawValue = defaults.string(forKey: commandPathKey(for: kind)) ?? ""
+        let trimmedValue = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedValue.isEmpty else {
             return defaultName
         }
-        return overridePath
-    }
-
-    private static func loadCommandPath(for kind: CLICommandKind) -> String? {
-        let defaults = AppGroupDefaults.shared ?? .standard
-        let key = commandPathKey(for: kind)
-        let rawValue = defaults.string(forKey: key) ?? ""
-        return CLICommandPathValidator.normalizeOverridePath(rawValue)
+        guard !trimmedValue.contains("\0") else {
+            throw CLICommandPathResolverError.invalidConfiguredPath(command: kind)
+        }
+        let overridePath = trimmedValue
+        let expandedPath = (overridePath as NSString).expandingTildeInPath
+        guard expandedPath.hasPrefix("/"),
+              CLICommandPathValidator.isExecutablePathValid(
+                  expandedPath,
+                  fileManager: fileManager
+              ) else {
+            throw CLICommandPathResolverError.invalidConfiguredPath(command: kind)
+        }
+        return expandedPath
     }
 
     private static func commandPathKey(for kind: CLICommandKind) -> String {

@@ -74,6 +74,7 @@ struct WakeUpSettingsView: View {
                         Task { await scheduler.triggerWakeUp(for: selectedProvider) }
                     }
                 )
+                .id(selectedProvider)
             }
         }
     }
@@ -170,6 +171,40 @@ struct WakeUpSettingsView: View {
 
 // MARK: - Provider Schedule View
 
+struct WakeUpArgumentsDraft: Equatable {
+    private(set) var text: String
+    private(set) var validationMessage: String?
+
+    init(committedValue: String) {
+        self.text = committedValue
+    }
+
+    mutating func update(_ newValue: String) {
+        text = newValue
+        validationMessage = nil
+    }
+
+    mutating func validatedValue() -> String? {
+        do {
+            _ = try CLIArgumentParser.parse(text)
+            validationMessage = nil
+            return text
+        } catch {
+            validationMessage = error.localizedDescription
+            return nil
+        }
+    }
+
+    mutating func synchronize(with committedValue: String) {
+        text = committedValue
+        validationMessage = nil
+    }
+
+    func hasChanges(comparedTo committedValue: String) -> Bool {
+        text != committedValue
+    }
+}
+
 /// Schedule configuration for a single provider
 private struct ProviderScheduleView: View {
     let schedule: WakeUpSchedule
@@ -177,6 +212,26 @@ private struct ProviderScheduleView: View {
     let onEnabledChange: (Bool) -> Void
     let onUpdate: (WakeUpSchedule) -> Void
     let onTestWakeUp: () -> Void
+    @State private var argumentsDraft: WakeUpArgumentsDraft
+
+    init(
+        schedule: WakeUpSchedule,
+        isTestRunning: Bool,
+        onEnabledChange: @escaping (Bool) -> Void,
+        onUpdate: @escaping (WakeUpSchedule) -> Void,
+        onTestWakeUp: @escaping () -> Void
+    ) {
+        self.schedule = schedule
+        self.isTestRunning = isTestRunning
+        self.onEnabledChange = onEnabledChange
+        self.onUpdate = onUpdate
+        self.onTestWakeUp = onTestWakeUp
+        _argumentsDraft = State(
+            initialValue: WakeUpArgumentsDraft(
+                committedValue: schedule.additionalArgs
+            )
+        )
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Spacing.medium) {
@@ -216,15 +271,32 @@ private struct ProviderScheduleView: View {
                 }
 
                 LabeledContent("wakeUp.additionalArgs".localized()) {
-                    TextField(
-                        "",
-                        text: additionalArgsBinding,
-                        prompt: Text("wakeUp.additionalArgsPlaceholder".localized())
-                    )
-                    .textFieldStyle(.roundedBorder)
-                    .multilineTextAlignment(.leading)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .accessibilityLabel(Text("wakeUp.additionalArgs".localized()))
+                    VStack(alignment: .leading, spacing: DesignTokens.Spacing.small) {
+                        HStack(spacing: DesignTokens.Spacing.small) {
+                            TextField(
+                                "",
+                                text: additionalArgsBinding,
+                                prompt: Text("wakeUp.additionalArgsPlaceholder".localized())
+                            )
+                            .textFieldStyle(.roundedBorder)
+                            .multilineTextAlignment(.leading)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .accessibilityLabel(Text("wakeUp.additionalArgs".localized()))
+                            .onSubmit(applyAdditionalArgs)
+
+                            Button("tab.update".localized(), action: applyAdditionalArgs)
+                                .disabled(!argumentsDraft.hasChanges(
+                                    comparedTo: schedule.additionalArgs
+                                ))
+                                .settingsButtonStyle(.secondary)
+                        }
+
+                        if let validationMessage = argumentsDraft.validationMessage {
+                            Text(validationMessage)
+                                .font(.caption)
+                                .foregroundStyle(.red)
+                        }
+                    }
                 }
 
                 HStack(spacing: DesignTokens.Spacing.small) {
@@ -250,6 +322,9 @@ private struct ProviderScheduleView: View {
                 }
             }
         }
+        .onChange(of: schedule.additionalArgs) { _, newValue in
+            argumentsDraft.synchronize(with: newValue)
+        }
     }
 
     private var enabledBinding: Binding<Bool> {
@@ -263,16 +338,24 @@ private struct ProviderScheduleView: View {
 
     private var additionalArgsBinding: Binding<String> {
         Binding(
-            get: { schedule.additionalArgs },
+            get: { argumentsDraft.text },
             set: { newValue in
-                onUpdate(WakeUpSchedule(
-                    provider: schedule.provider,
-                    enabledHours: schedule.enabledHours,
-                    isEnabled: schedule.isEnabled,
-                    additionalArgs: newValue
-                ))
+                argumentsDraft.update(newValue)
             }
         )
+    }
+
+    private func applyAdditionalArgs() {
+        guard argumentsDraft.hasChanges(comparedTo: schedule.additionalArgs) else {
+            return
+        }
+        guard let value = argumentsDraft.validatedValue() else { return }
+        onUpdate(WakeUpSchedule(
+            provider: schedule.provider,
+            enabledHours: schedule.enabledHours,
+            isEnabled: schedule.isEnabled,
+            additionalArgs: value
+        ))
     }
 
     private var selectedHoursText: String {

@@ -50,17 +50,38 @@ enum TokenUsageProvider: String, Codable, CaseIterable, Identifiable, SnapshotFi
         }
     }
 
-    /// Base CLI command (without arguments).
-    /// Returns empty string for non-CLI providers.
-    var cliCommandBase: String {
-        let ccusageExecutable = CLICommandPathResolver.resolveExecutable(for: .ccusage, defaultName: "ccusage")
+    /// Base CLI invocation before user-supplied and date-range arguments.
+    func makeCLIInvocationBase() throws -> CLICommandInvocation {
         switch self {
         case .codex:
-            return "\(ccusageExecutable) codex daily"
+            let ccusageExecutable = try CLICommandPathResolver.resolveExecutable(
+                for: .ccusage,
+                defaultName: "ccusage"
+            )
+            return CLICommandInvocation(
+                executable: ccusageExecutable,
+                arguments: ["codex", "daily"]
+            )
         case .claude:
-            return "\(ccusageExecutable) claude daily"
+            let ccusageExecutable = try CLICommandPathResolver.resolveExecutable(
+                for: .ccusage,
+                defaultName: "ccusage"
+            )
+            return CLICommandInvocation(
+                executable: ccusageExecutable,
+                arguments: ["claude", "daily"]
+            )
         case .copilot:
-            return ""
+            return CLICommandInvocation(executable: "", arguments: [])
+        }
+    }
+
+    /// Base command rendered safely for display or shell wrapping.
+    var cliCommandBase: String {
+        do {
+            return try makeCLIInvocationBase().shellCommand
+        } catch {
+            return "[\(error.localizedDescription)]"
         }
     }
 
@@ -241,14 +262,18 @@ struct CCUsageSettings: Codable, Equatable {
     var isEnabled: Bool
     var additionalArgs: String
 
-    /// Full CLI command with additional arguments
+    /// Full CLI command rendered safely for display.
     var cliCommand: String {
-        // Append additional args only when provided by user.
-        var cmd = provider.cliCommandBase
-        if !additionalArgs.isEmpty {
-            cmd += " " + additionalArgs
+        do {
+            let arguments = try CLIArgumentParser.parse(additionalArgs)
+            let base = try provider.makeCLIInvocationBase()
+            return CLICommandInvocation(
+                executable: base.executable,
+                arguments: base.arguments + arguments
+            ).shellCommand
+        } catch {
+            return "[\(error.localizedDescription)]"
         }
-        return cmd
     }
 
     /// CLI command for display (includes -s startDate -j)
@@ -260,10 +285,20 @@ struct CCUsageSettings: Codable, Equatable {
     /// - Parameter startDate: Start date in YYYYMMDD format.
     /// - Returns: CLI command string with date and JSON arguments.
     func makeCLICommand(startDate: String) -> String {
-        // Include start date and JSON flag for parsing.
-        var cmd = cliCommand
-        cmd += " --since \(startDate) -j"
-        return cmd
+        guard let invocation = try? makeCLIInvocation(startDate: startDate) else {
+            return cliCommand
+        }
+        return invocation.shellCommand
+    }
+
+    /// Builds literal argv without evaluating the additional-arguments field.
+    func makeCLIInvocation(startDate: String) throws -> CLICommandInvocation {
+        let additionalArguments = try CLIArgumentParser.parse(additionalArgs)
+        let base = try provider.makeCLIInvocationBase()
+        return CLICommandInvocation(
+            executable: base.executable,
+            arguments: base.arguments + additionalArguments + ["--since", startDate, "-j"]
+        )
     }
 
     /// Current month's start date in YYYYMMDD format

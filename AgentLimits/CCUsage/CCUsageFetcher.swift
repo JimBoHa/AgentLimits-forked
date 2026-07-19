@@ -61,6 +61,8 @@ enum CCUsageFetcherError: Error, LocalizedError {
     case executionFailed(exitCode: Int32, stderr: String)
     case timeout
     case outputLimitExceeded(maximumBytes: Int)
+    case invalidExecutable(String)
+    case invalidArguments(String)
     case parseError(String)
 
     var errorDescription: String? {
@@ -73,6 +75,10 @@ enum CCUsageFetcherError: Error, LocalizedError {
             return "CLI execution timed out"
         case .outputLimitExceeded(let maximumBytes):
             return "CLI output exceeded the \(maximumBytes)-byte limit"
+        case .invalidExecutable(let message):
+            return message
+        case .invalidArguments(let message):
+            return "Invalid additional arguments: \(message)"
         case .parseError(let message):
             return "Failed to parse JSON: \(message)"
         }
@@ -123,9 +129,16 @@ final class CCUsageFetcher {
         // Load per-provider settings and build CLI command for this month.
         let settings = settingsStore.loadSettings()[provider] ?? .defaultSettings(for: provider)
         let startOfMonth = calculateStartOfMonth()
-        let command = settings.makeCLICommand(startDate: startOfMonth)
+        let invocation: CLICommandInvocation
+        do {
+            invocation = try settings.makeCLIInvocation(startDate: startOfMonth)
+        } catch let error as CLICommandPathResolverError {
+            throw CCUsageFetcherError.invalidExecutable(error.localizedDescription)
+        } catch {
+            throw CCUsageFetcherError.invalidArguments(error.localizedDescription)
+        }
         // Execute CLI and parse JSON response into snapshot.
-        let jsonData = try await executeCLI(command: command)
+        let jsonData = try await executeCLI(invocation: invocation)
         return try parseResponse(jsonData: jsonData, provider: provider)
     }
 
@@ -141,16 +154,16 @@ final class CCUsageFetcher {
 
     /// Executes the CLI command and returns the JSON output.
     /// Uses ShellExecutor for command execution and maps errors to CCUsageFetcherError.
-    /// - Parameter command: The full CLI command to execute
+    /// - Parameter invocation: The executable and literal arguments to execute
     /// - Returns: The stdout data (JSON)
     /// - Throws: `CCUsageFetcherError` mapped from `ShellExecutorError`
-    private func executeCLI(command: String) async throws -> Data {
+    private func executeCLI(invocation: CLICommandInvocation) async throws -> Data {
         do {
-            // Run the CLI and return raw stdout JSON.
-            return try await shellExecutor.execute(command: command)
+            // Run only the shell-quoted rendering of structured argv.
+            return try await shellExecutor.execute(command: invocation.shellCommand)
         } catch let error as ShellExecutorError {
             // Map shell execution errors into domain errors.
-            throw mapShellError(error, command: command)
+            throw mapShellError(error, command: invocation.executable)
         }
     }
 

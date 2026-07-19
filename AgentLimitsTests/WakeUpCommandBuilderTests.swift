@@ -29,7 +29,7 @@ final class WakeUpCommandBuilderTests: XCTestCase {
         XCTAssertEqual(result.log, "quoted\n")
     }
 
-    func testLaunchAgentLogHeaderDoesNotEchoCommandArguments() {
+    func testLaunchAgentLogHeaderDoesNotEchoCommandArguments() throws {
         let schedule = WakeUpSchedule(
             provider: .claudeCode,
             enabledHours: [9],
@@ -37,7 +37,7 @@ final class WakeUpCommandBuilderTests: XCTestCase {
             additionalArgs: "--api-key sensitive-value"
         )
 
-        let command = WakeUpCommandBuilder.buildLaunchAgentCommand(for: schedule)
+        let command = try WakeUpCommandBuilder.buildLaunchAgentCommand(for: schedule)
 
         XCTAssertFalse(command.contains("Command:"))
         XCTAssertFalse(command.contains("echo \"--api-key"))
