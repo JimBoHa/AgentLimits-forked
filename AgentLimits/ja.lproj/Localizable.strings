@@ -97,6 +97,7 @@
 "wakeUp.command" = "実行コマンド";
 "wakeUp.additionalArgs" = "追加引数";
 "wakeUp.additionalArgsPlaceholder" = "例: --model=\"<<model-name>>\"";
+"wakeUp.additionalArgsSecurityWarning" = "パスワード、トークン、その他の機密情報は絶対に入力しないでください。引数はアプリ設定とLaunchAgent plistに平文で保存されます。";
 "wakeUp.status" = "ステータス";
 "wakeUp.notScheduled" = "スケジュールなし";
 "wakeUp.lastResult" = "最終結果:";

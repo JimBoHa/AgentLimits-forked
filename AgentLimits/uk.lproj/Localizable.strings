@@ -96,6 +96,7 @@
 "wakeUp.command" = "Команда";
 "wakeUp.additionalArgs" = "Додаткові аргументи";
 "wakeUp.additionalArgsPlaceholder" = "напр. --model=\"<<model-name>>\"";
+"wakeUp.additionalArgsSecurityWarning" = "Ніколи не вводьте тут паролі, токени чи інші секрети. Аргументи зберігаються як звичайний текст у налаштуваннях програми та plist LaunchAgent.";
 "wakeUp.status" = "Статус";
 "wakeUp.notScheduled" = "Не заплановано";
 "wakeUp.lastResult" = "Останній результат:";

@@ -3,6 +3,7 @@
 // Creates plist files in ~/Library/LaunchAgents/ for launchd to execute CLI commands.
 
 import Combine
+import Darwin
 @preconcurrency import Foundation
 import OSLog
 
@@ -35,6 +36,466 @@ struct UnsafeWakeUpWorkingDirectory: LocalizedError {
 
     var errorDescription: String? {
         "Wake-up working directory is not a private, user-owned directory: \(path)"
+    }
+}
+
+struct UnsafeLaunchAgentStorage: LocalizedError {
+    let path: String
+
+    var errorDescription: String? {
+        "LaunchAgent storage is not private, user-owned, and free of symbolic links: \(path)"
+    }
+}
+
+/// Performs every LaunchAgent plist mutation relative to validated directory
+/// descriptors. This prevents path substitution and never publishes a plist
+/// before its contents and owner-only permissions are final.
+enum SecureLaunchAgentPlistStore {
+    private struct MissingDirectory: Error {}
+
+    private static let directoryComponents = ["Library", "LaunchAgents"]
+    private static let privateFilePermissions: mode_t = 0o600
+    private static let safeDirectoryPermissions: mode_t = 0o755
+    private static let maximumPlistBytes = 1_048_576
+    private static let unsafeDirectoryACLPermissions: acl_permset_mask_t =
+        acl_permset_mask_t(ACL_ADD_FILE.rawValue)
+        | acl_permset_mask_t(ACL_ADD_SUBDIRECTORY.rawValue)
+        | acl_permset_mask_t(ACL_DELETE.rawValue)
+        | acl_permset_mask_t(ACL_DELETE_CHILD.rawValue)
+        | acl_permset_mask_t(ACL_WRITE_ATTRIBUTES.rawValue)
+        | acl_permset_mask_t(ACL_WRITE_EXTATTRIBUTES.rawValue)
+        | acl_permset_mask_t(ACL_WRITE_SECURITY.rawValue)
+        | acl_permset_mask_t(ACL_CHANGE_OWNER.rawValue)
+
+    static func ensureDirectory(homeDirectory: URL) throws {
+        try withDirectory(homeDirectory: homeDirectory) { _ in }
+    }
+
+    static func readIfPresent(
+        at url: URL,
+        homeDirectory: URL
+    ) throws -> Data? {
+        try validate(url: url, homeDirectory: homeDirectory)
+        return try withDirectory(homeDirectory: homeDirectory) { directoryFD in
+            guard try destinationExists(
+                named: url.lastPathComponent,
+                in: directoryFD,
+                path: url.path
+            ) else {
+                return nil
+            }
+            let descriptor = openat(
+                directoryFD,
+                url.lastPathComponent,
+                O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK
+            )
+            if descriptor == -1, errno == ENOENT {
+                return nil
+            }
+            guard descriptor >= 0 else {
+                throw posixError(operation: "open", path: url.path)
+            }
+            defer { _ = Darwin.close(descriptor) }
+            try validateFileDescriptor(descriptor, path: url.path)
+
+            var result = Data()
+            var buffer = [UInt8](repeating: 0, count: 16_384)
+            while true {
+                let count = Darwin.read(descriptor, &buffer, buffer.count)
+                if count == 0 {
+                    break
+                }
+                if count == -1, errno == EINTR {
+                    continue
+                }
+                guard count > 0 else {
+                    throw posixError(operation: "read", path: url.path)
+                }
+                guard result.count + count <= maximumPlistBytes else {
+                    throw CocoaError(
+                        .fileReadTooLarge,
+                        userInfo: [NSFilePathErrorKey: url.path]
+                    )
+                }
+                result.append(buffer, count: count)
+            }
+            return result
+        }
+    }
+
+    static func containsRegularFile(
+        at url: URL,
+        homeDirectory: URL
+    ) throws -> Bool {
+        try validate(url: url, homeDirectory: homeDirectory)
+        do {
+            return try withDirectory(
+                homeDirectory: homeDirectory,
+                createMissing: false
+            ) { directoryFD in
+                try destinationExists(
+                    named: url.lastPathComponent,
+                    in: directoryFD,
+                    path: url.path
+                )
+            }
+        } catch is MissingDirectory {
+            return false
+        }
+    }
+
+    static func write(
+        _ data: Data,
+        to url: URL,
+        homeDirectory: URL,
+        beforeCommit: () throws -> Void = {}
+    ) throws {
+        try validate(url: url, homeDirectory: homeDirectory)
+        try withDirectory(homeDirectory: homeDirectory) { directoryFD in
+            _ = try destinationExists(
+                named: url.lastPathComponent,
+                in: directoryFD,
+                path: url.path
+            )
+
+            let temporaryName = ".\(url.lastPathComponent).\(UUID().uuidString).tmp"
+            var temporaryExists = false
+            defer {
+                if temporaryExists {
+                    _ = unlinkat(directoryFD, temporaryName, 0)
+                }
+            }
+
+            var descriptor = openat(
+                directoryFD,
+                temporaryName,
+                O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW,
+                privateFilePermissions
+            )
+            guard descriptor >= 0 else {
+                throw posixError(
+                    operation: "create",
+                    path: url.deletingLastPathComponent()
+                        .appendingPathComponent(temporaryName).path
+                )
+            }
+            temporaryExists = true
+            defer {
+                if descriptor >= 0 {
+                    _ = Darwin.close(descriptor)
+                }
+            }
+
+            // A file can inherit an allow ACL even when its POSIX mode is
+            // 0600. Remove it before writing any user-entered arguments.
+            try stripExtendedACL(descriptor, path: url.path)
+            guard fchmod(descriptor, privateFilePermissions) == 0 else {
+                throw posixError(operation: "chmod", path: url.path)
+            }
+            try data.withUnsafeBytes { rawBuffer in
+                var written = 0
+                while written < rawBuffer.count {
+                    guard let baseAddress = rawBuffer.baseAddress else {
+                        throw CocoaError(.fileWriteUnknown)
+                    }
+                    let count = Darwin.write(
+                        descriptor,
+                        baseAddress.advanced(by: written),
+                        rawBuffer.count - written
+                    )
+                    if count == -1, errno == EINTR {
+                        continue
+                    }
+                    guard count > 0 else {
+                        throw posixError(operation: "write", path: url.path)
+                    }
+                    written += count
+                }
+            }
+            guard fsync(descriptor) == 0 else {
+                throw posixError(operation: "fsync", path: url.path)
+            }
+            try validateFileDescriptor(
+                descriptor,
+                path: url.path,
+                requirePrivatePermissions: true
+            )
+
+            let descriptorToClose = descriptor
+            descriptor = -1
+            guard Darwin.close(descriptorToClose) == 0 else {
+                throw posixError(operation: "close", path: url.path)
+            }
+
+            // Re-check immediately before the atomic publication. A failure
+            // here leaves the prior plist untouched and the temp file private.
+            _ = try destinationExists(
+                named: url.lastPathComponent,
+                in: directoryFD,
+                path: url.path
+            )
+            try beforeCommit()
+            guard renameat(
+                directoryFD,
+                temporaryName,
+                directoryFD,
+                url.lastPathComponent
+            ) == 0 else {
+                throw posixError(operation: "rename", path: url.path)
+            }
+            temporaryExists = false
+            // Deliberately no fallible operation after the atomic commit.
+        }
+    }
+
+    static func remove(at url: URL, homeDirectory: URL) throws {
+        try validate(url: url, homeDirectory: homeDirectory)
+        try withDirectory(homeDirectory: homeDirectory) { directoryFD in
+            guard try destinationExists(
+                named: url.lastPathComponent,
+                in: directoryFD,
+                path: url.path
+            ) else {
+                throw CocoaError(
+                    .fileNoSuchFile,
+                    userInfo: [NSFilePathErrorKey: url.path]
+                )
+            }
+            guard unlinkat(directoryFD, url.lastPathComponent, 0) == 0 else {
+                throw posixError(operation: "unlink", path: url.path)
+            }
+        }
+    }
+
+    private static func withDirectory<T>(
+        homeDirectory: URL,
+        createMissing: Bool = true,
+        body: (Int32) throws -> T
+    ) throws -> T {
+        var currentFD = open(
+            homeDirectory.path,
+            O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW
+        )
+        if currentFD == -1, errno == ENOENT, !createMissing {
+            throw MissingDirectory()
+        }
+        guard currentFD >= 0 else {
+            throw UnsafeLaunchAgentStorage(path: homeDirectory.path)
+        }
+        defer { _ = Darwin.close(currentFD) }
+        try validateDirectoryDescriptor(currentFD, path: homeDirectory.path)
+
+        var currentURL = homeDirectory
+        for component in directoryComponents {
+            currentURL.appendPathComponent(component, isDirectory: true)
+            var nextFD = openat(
+                currentFD,
+                component,
+                O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW
+            )
+            if nextFD == -1, errno == ENOENT {
+                guard createMissing else {
+                    throw MissingDirectory()
+                }
+                guard mkdirat(
+                    currentFD,
+                    component,
+                    safeDirectoryPermissions
+                ) == 0 || errno == EEXIST else {
+                    throw posixError(
+                        operation: "mkdir",
+                        path: currentURL.path
+                    )
+                }
+                nextFD = openat(
+                    currentFD,
+                    component,
+                    O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW
+                )
+            }
+            guard nextFD >= 0 else {
+                throw UnsafeLaunchAgentStorage(path: currentURL.path)
+            }
+            do {
+                try validateDirectoryDescriptor(nextFD, path: currentURL.path)
+            } catch {
+                _ = Darwin.close(nextFD)
+                throw error
+            }
+            _ = Darwin.close(currentFD)
+            currentFD = nextFD
+        }
+        return try body(currentFD)
+    }
+
+    private static func validate(
+        url: URL,
+        homeDirectory: URL
+    ) throws {
+        let expectedDirectory = homeDirectory
+            .appendingPathComponent("Library", isDirectory: true)
+            .appendingPathComponent("LaunchAgents", isDirectory: true)
+            .standardizedFileURL
+        guard url.deletingLastPathComponent().standardizedFileURL
+                == expectedDirectory,
+              !url.lastPathComponent.isEmpty,
+              url.lastPathComponent != ".",
+              url.lastPathComponent != "..",
+              !url.lastPathComponent.contains("/") else {
+            throw UnsafeLaunchAgentStorage(path: url.path)
+        }
+    }
+
+    private static func validateDirectoryDescriptor(
+        _ descriptor: Int32,
+        path: String
+    ) throws {
+        var info = stat()
+        guard fstat(descriptor, &info) == 0,
+              info.st_uid == getuid(),
+              info.st_mode & S_IFMT == S_IFDIR,
+              info.st_mode & 0o022 == 0 else {
+            throw UnsafeLaunchAgentStorage(path: path)
+        }
+        try ensureNoUnsafeDirectoryACL(descriptor, path: path)
+    }
+
+    private static func validateFileDescriptor(
+        _ descriptor: Int32,
+        path: String,
+        requirePrivatePermissions: Bool = false
+    ) throws {
+        var info = stat()
+        guard fstat(descriptor, &info) == 0,
+              info.st_uid == getuid(),
+              info.st_mode & S_IFMT == S_IFREG,
+              !requirePrivatePermissions || info.st_mode & 0o777 == 0o600 else {
+            throw UnsafeLaunchAgentStorage(path: path)
+        }
+        if requirePrivatePermissions {
+            try ensureNoExtendedACLEntries(descriptor, path: path)
+        }
+    }
+
+    private static func destinationExists(
+        named name: String,
+        in directoryFD: Int32,
+        path: String
+    ) throws -> Bool {
+        var info = stat()
+        if fstatat(directoryFD, name, &info, AT_SYMLINK_NOFOLLOW) == 0 {
+            guard info.st_uid == getuid(), info.st_mode & S_IFMT == S_IFREG else {
+                throw UnsafeLaunchAgentStorage(path: path)
+            }
+            return true
+        } else if errno != ENOENT {
+            throw posixError(operation: "stat", path: path)
+        }
+        return false
+    }
+
+    private static func stripExtendedACL(
+        _ descriptor: Int32,
+        path: String
+    ) throws {
+        guard let emptyACL = acl_init(0) else {
+            throw posixError(operation: "initialize ACL", path: path)
+        }
+        defer { _ = acl_free(UnsafeMutableRawPointer(emptyACL)) }
+        guard acl_set_fd_np(descriptor, emptyACL, ACL_TYPE_EXTENDED) == 0 else {
+            throw posixError(operation: "clear ACL", path: path)
+        }
+        try ensureNoExtendedACLEntries(descriptor, path: path)
+    }
+
+    private static func ensureNoUnsafeDirectoryACL(
+        _ descriptor: Int32,
+        path: String
+    ) throws {
+        try forEachExtendedACLEntry(descriptor, path: path) { entry in
+            var tag = ACL_UNDEFINED_TAG
+            guard acl_get_tag_type(entry, &tag) == 0 else {
+                throw posixError(operation: "read ACL tag", path: path)
+            }
+            guard tag == ACL_EXTENDED_ALLOW else {
+                return
+            }
+            var permissions: acl_permset_mask_t = 0
+            guard acl_get_permset_mask_np(entry, &permissions) == 0 else {
+                throw posixError(
+                    operation: "read ACL permissions",
+                    path: path
+                )
+            }
+            guard permissions & unsafeDirectoryACLPermissions == 0 else {
+                throw UnsafeLaunchAgentStorage(path: path)
+            }
+        }
+    }
+
+    private static func ensureNoExtendedACLEntries(
+        _ descriptor: Int32,
+        path: String
+    ) throws {
+        try forEachExtendedACLEntry(descriptor, path: path) { _ in
+            throw UnsafeLaunchAgentStorage(path: path)
+        }
+    }
+
+    private static func forEachExtendedACLEntry(
+        _ descriptor: Int32,
+        path: String,
+        body: (acl_entry_t) throws -> Void
+    ) throws {
+        guard let acl = acl_get_fd_np(descriptor, ACL_TYPE_EXTENDED) else {
+            let errorCode = errno
+            if errorCode == ENOENT {
+                return
+            }
+            throw posixError(
+                operation: "read ACL",
+                path: path,
+                errorCode: errorCode
+            )
+        }
+        defer { _ = acl_free(UnsafeMutableRawPointer(acl)) }
+
+        var entryIdentifier = Int32(ACL_FIRST_ENTRY.rawValue)
+        while true {
+            var entry: acl_entry_t?
+            if acl_get_entry(acl, entryIdentifier, &entry) == 0 {
+                guard let entry else {
+                    throw UnsafeLaunchAgentStorage(path: path)
+                }
+                try body(entry)
+                entryIdentifier = Int32(ACL_NEXT_ENTRY.rawValue)
+                continue
+            }
+            let errorCode = errno
+            if errorCode == EINVAL {
+                return
+            }
+            throw posixError(
+                operation: "iterate ACL",
+                path: path,
+                errorCode: errorCode
+            )
+        }
+    }
+
+    private static func posixError(
+        operation: String,
+        path: String,
+        errorCode: Int32 = errno
+    ) -> NSError {
+        return NSError(
+            domain: NSPOSIXErrorDomain,
+            code: Int(errorCode),
+            userInfo: [
+                NSFilePathErrorKey: path,
+                NSLocalizedDescriptionKey: "\(operation) failed for \(path)"
+            ]
+        )
     }
 }
 
@@ -339,18 +800,28 @@ final class LaunchAgentManager {
     private let homeDirectoryOverride: URL?
     private let launchCtlRunner: ([String]) throws -> LaunchCtlResult
     private let removeItem: (URL) throws -> Void
+    private let beforePlistCommit: () throws -> Void
     private var loadedLabels: Set<String> = []
 
     init(
         fileManager: FileManager = .default,
         homeDirectory: URL? = nil,
         launchCtlRunner: @escaping ([String]) throws -> LaunchCtlResult = LaunchCtlProcessRunner.run,
-        removeItem: ((URL) throws -> Void)? = nil
+        removeItem: ((URL) throws -> Void)? = nil,
+        beforePlistCommit: (() throws -> Void)? = nil
     ) {
         self.fileManager = fileManager
         self.homeDirectoryOverride = homeDirectory
         self.launchCtlRunner = launchCtlRunner
-        self.removeItem = removeItem ?? { try fileManager.removeItem(at: $0) }
+        let secureHomeDirectory = homeDirectory
+            ?? WakeUpLogPathResolver.realHomeDirectory(fileManager: fileManager)
+        self.removeItem = removeItem ?? {
+            try SecureLaunchAgentPlistStore.remove(
+                at: $0,
+                homeDirectory: secureHomeDirectory
+            )
+        }
+        self.beforePlistCommit = beforePlistCommit ?? {}
     }
 
     /// Returns the real user home directory (not sandboxed container)
@@ -383,8 +854,13 @@ final class LaunchAgentManager {
     /// Checks if a LaunchAgent is installed for the given schedule
     func isInstalled(for schedule: WakeUpSchedule) -> Bool {
         guard let url = plistURL(for: schedule) else { return false }
-        return fileManager.fileExists(atPath: url.path)
-            && loadedLabels.contains(schedule.launchAgentLabel)
+        guard (try? SecureLaunchAgentPlistStore.containsRegularFile(
+            at: url,
+            homeDirectory: realHomeDirectory
+        )) == true else {
+            return false
+        }
+        return loadedLabels.contains(schedule.launchAgentLabel)
     }
 
     /// Installs or updates a LaunchAgent for the given schedule
@@ -399,6 +875,9 @@ final class LaunchAgentManager {
                 homeDirectory: realHomeDirectory,
                 fileManager: fileManager
             )
+            try SecureLaunchAgentPlistStore.ensureDirectory(
+                homeDirectory: realHomeDirectory
+            )
         } catch {
             throw WakeUpError.launchAgentWriteFailed(error)
         }
@@ -406,16 +885,14 @@ final class LaunchAgentManager {
         Logger.wakeup.info("LaunchAgentManager: Installing plist at \(url.path)")
         let wasServiceLoaded = try serviceIsLoaded(schedule)
         updateCachedLoadedState(wasServiceLoaded, for: schedule)
-        let hadPreviousPlist = fileManager.fileExists(atPath: url.path)
         let previousPlistData: Data?
-        if hadPreviousPlist {
-            do {
-                previousPlistData = try Data(contentsOf: url)
-            } catch {
-                throw WakeUpError.launchAgentWriteFailed(error)
-            }
-        } else {
-            previousPlistData = nil
+        do {
+            previousPlistData = try SecureLaunchAgentPlistStore.readIfPresent(
+                at: url,
+                homeDirectory: realHomeDirectory
+            )
+        } catch {
+            throw WakeUpError.launchAgentWriteFailed(error)
         }
 
         // Generate and stage the new plist before stopping a working service.
@@ -429,18 +906,6 @@ final class LaunchAgentManager {
         }
         Logger.wakeup.info("LaunchAgentManager: Generated plist data (\(plistData.count) bytes)")
 
-        // Ensure directory exists
-        if let directory = launchAgentsURL {
-            do {
-                // Create LaunchAgents directory if needed.
-                try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
-                Logger.wakeup.info("LaunchAgentManager: Directory ensured at \(directory.path)")
-            } catch {
-                Logger.wakeup.error("LaunchAgentManager: Failed to create directory: \(error.localizedDescription)")
-                throw WakeUpError.launchAgentWriteFailed(error)
-            }
-        }
-
         do {
             try WakeUpLogPathResolver.ensureSecureLogDirectory(
                 homeDirectory: realHomeDirectory,
@@ -453,8 +918,7 @@ final class LaunchAgentManager {
 
         // Write plist file
         do {
-            // Persist plist atomically to avoid partial writes.
-            try plistData.write(to: url, options: .atomic)
+            try writePrivatePlist(plistData, to: url)
             Logger.wakeup.info("LaunchAgentManager: Plist written successfully")
         } catch {
             Logger.wakeup.error("LaunchAgentManager: Failed to write plist: \(error.localizedDescription)")
@@ -475,6 +939,7 @@ final class LaunchAgentManager {
                 try rollbackPlist(
                     at: url,
                     previousData: previousPlistData,
+                    wasServiceLoaded: wasServiceLoaded,
                     schedule: schedule
                 )
             } catch {
@@ -497,38 +962,54 @@ final class LaunchAgentManager {
         }
 
         let previousPlistData: Data?
-        if fileManager.fileExists(atPath: url.path) {
-            do {
-                previousPlistData = try Data(contentsOf: url)
-            } catch {
-                throw WakeUpError.launchAgentWriteFailed(error)
-            }
-        } else {
-            previousPlistData = nil
+        do {
+            try SecureLaunchAgentPlistStore.ensureDirectory(
+                homeDirectory: realHomeDirectory
+            )
+            previousPlistData = try SecureLaunchAgentPlistStore.readIfPresent(
+                at: url,
+                homeDirectory: realHomeDirectory
+            )
+        } catch {
+            throw WakeUpError.launchAgentWriteFailed(error)
         }
 
         // Never remove the plist while launchd may still be running the job.
+        let wasServiceLoaded = try serviceIsLoaded(schedule)
+        updateCachedLoadedState(wasServiceLoaded, for: schedule)
         try unload(schedule: schedule)
-        if fileManager.fileExists(atPath: url.path) {
-            do {
+        do {
+            if try SecureLaunchAgentPlistStore.containsRegularFile(
+                at: url,
+                homeDirectory: realHomeDirectory
+            ) {
                 try removeItem(url)
-            } catch {
-                let removalError = WakeUpError.launchAgentWriteFailed(error)
-                do {
-                    if !fileManager.fileExists(atPath: url.path), let previousPlistData {
-                        try previousPlistData.write(to: url, options: .atomic)
-                    }
-                    try load(schedule: schedule)
-                } catch {
-                    throw WakeUpError.launchAgentLoadFailed(
-                        LaunchAgentRollbackFailure(
-                            originalError: removalError,
-                            rollbackError: error
-                        )
+            }
+        } catch {
+            let removalError = WakeUpError.launchAgentWriteFailed(error)
+            do {
+                guard let previousPlistData else {
+                    throw CocoaError(
+                        .fileNoSuchFile,
+                        userInfo: [NSFilePathErrorKey: url.path]
                     )
                 }
-                throw removalError
+                // Always republish the verified prior bytes. Never bootstrap
+                // an unknown regular file that appeared during a failed remove.
+                try writePrivatePlist(previousPlistData, to: url)
+                try restoreServiceState(
+                    wasLoaded: wasServiceLoaded,
+                    schedule: schedule
+                )
+            } catch {
+                throw WakeUpError.launchAgentLoadFailed(
+                    LaunchAgentRollbackFailure(
+                        originalError: removalError,
+                        rollbackError: error
+                    )
+                )
             }
+            throw removalError
         }
     }
 
@@ -583,22 +1064,23 @@ final class LaunchAgentManager {
     private func rollbackPlist(
         at url: URL,
         previousData: Data?,
+        wasServiceLoaded: Bool,
         schedule: WakeUpSchedule
     ) throws {
         if let previousData {
-            try previousData.write(to: url, options: .atomic)
-            if try serviceIsLoaded(schedule) {
-                // A failed bootstrap can still leave the replacement loaded.
-                // Stop it before loading the restored plist so success means
-                // the original configuration is actually active again.
-                try unload(schedule: schedule)
-            }
-            try load(schedule: schedule)
+            try writePrivatePlist(previousData, to: url)
+            try restoreServiceState(
+                wasLoaded: wasServiceLoaded,
+                schedule: schedule
+            )
         } else {
             if try serviceIsLoaded(schedule) {
                 try unload(schedule: schedule)
             }
-            if fileManager.fileExists(atPath: url.path) {
+            if try SecureLaunchAgentPlistStore.containsRegularFile(
+                at: url,
+                homeDirectory: realHomeDirectory
+            ) {
                 try removeItem(url)
             }
             guard try !serviceIsLoaded(schedule) else {
@@ -612,6 +1094,40 @@ final class LaunchAgentManager {
             }
             updateCachedLoadedState(false, for: schedule)
         }
+    }
+
+    private func restoreServiceState(
+        wasLoaded: Bool,
+        schedule: WakeUpSchedule
+    ) throws {
+        if try serviceIsLoaded(schedule) {
+            // A failed bootstrap can still leave an unknown configuration
+            // loaded. Stop it before restoring the verified prior state.
+            try unload(schedule: schedule)
+        }
+        if wasLoaded {
+            try load(schedule: schedule)
+        } else {
+            guard try !serviceIsLoaded(schedule) else {
+                throw LaunchCtlCommandFailure(
+                    operation: "rollback verification",
+                    terminationStatus: -1,
+                    standardError: "service became loaded"
+                )
+            }
+            updateCachedLoadedState(false, for: schedule)
+        }
+    }
+
+    /// LaunchAgent arguments can contain user-entered values. Keep every
+    /// generated or restored plist readable only by its owning account.
+    private func writePrivatePlist(_ data: Data, to url: URL) throws {
+        try SecureLaunchAgentPlistStore.write(
+            data,
+            to: url,
+            homeDirectory: realHomeDirectory,
+            beforeCommit: beforePlistCommit
+        )
     }
 
     private func serviceIsLoaded(_ schedule: WakeUpSchedule) throws -> Bool {

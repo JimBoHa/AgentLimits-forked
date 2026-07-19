@@ -296,6 +296,17 @@ private struct ProviderScheduleView: View {
                                 .font(.caption)
                                 .foregroundStyle(.red)
                         }
+
+                        Label(
+                            "wakeUp.additionalArgsSecurityWarning".localized(),
+                            systemImage: "exclamationmark.triangle.fill"
+                        )
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier(
+                            "wakeup.additionalArgsSecurityWarning"
+                        )
                     }
                 }
 

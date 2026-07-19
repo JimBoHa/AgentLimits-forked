@@ -96,6 +96,7 @@
 "wakeUp.command" = "Komut";
 "wakeUp.additionalArgs" = "Ek Argümanlar";
 "wakeUp.additionalArgsPlaceholder" = "örn. --model=\"<<model-name>>\"";
+"wakeUp.additionalArgsSecurityWarning" = "Buraya asla parola, belirteç veya başka gizli bilgiler girmeyin. Bağımsız değişkenler uygulama ayarlarında ve LaunchAgent plist dosyasında düz metin olarak saklanır.";
 "wakeUp.status" = "Durum";
 "wakeUp.notScheduled" = "Planlanmadı";
 "wakeUp.lastResult" = "Son sonuç:";
