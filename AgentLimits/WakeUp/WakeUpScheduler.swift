@@ -84,6 +84,7 @@ enum WakeUpError: Error, LocalizedError {
     case cliNotFound(command: String)
     case executionFailed(exitCode: Int32, stderr: String)
     case timeout
+    case outputLimitExceeded(maximumBytes: Int)
     case launchAgentWriteFailed(Error)
     case launchAgentLoadFailed(Error)
     case homeDirectoryNotFound
@@ -96,6 +97,8 @@ enum WakeUpError: Error, LocalizedError {
             return "CLI failed (\(code)): \(stderr)"
         case .timeout:
             return "CLI execution timed out"
+        case .outputLimitExceeded(let maximumBytes):
+            return "CLI output exceeded the \(maximumBytes)-byte limit"
         case .launchAgentWriteFailed(let error):
             return "Failed to write LaunchAgent: \(error.localizedDescription)"
         case .launchAgentLoadFailed(let error):
@@ -587,6 +590,8 @@ final class CLIExecutor {
             return .cliNotFound(command: schedule.cliCommand)
         case .timeout:
             return .timeout
+        case .outputLimitExceeded(let maximumBytes):
+            return .outputLimitExceeded(maximumBytes: maximumBytes)
         case .executionFailed(let exitCode, let stderr):
             return .executionFailed(exitCode: exitCode, stderr: stderr)
         }

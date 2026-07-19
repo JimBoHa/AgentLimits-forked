@@ -60,6 +60,7 @@ enum CCUsageFetcherError: Error, LocalizedError {
     case cliNotFound(command: String)
     case executionFailed(exitCode: Int32, stderr: String)
     case timeout
+    case outputLimitExceeded(maximumBytes: Int)
     case parseError(String)
 
     var errorDescription: String? {
@@ -70,6 +71,8 @@ enum CCUsageFetcherError: Error, LocalizedError {
             return "CLI failed (\(code)): \(stderr)"
         case .timeout:
             return "CLI execution timed out"
+        case .outputLimitExceeded(let maximumBytes):
+            return "CLI output exceeded the \(maximumBytes)-byte limit"
         case .parseError(let message):
             return "Failed to parse JSON: \(message)"
         }
@@ -163,6 +166,8 @@ final class CCUsageFetcher {
             return .cliNotFound(command: command)
         case .timeout:
             return .timeout
+        case .outputLimitExceeded(let maximumBytes):
+            return .outputLimitExceeded(maximumBytes: maximumBytes)
         case .executionFailed(let exitCode, let stderr):
             return .executionFailed(exitCode: exitCode, stderr: stderr)
         }
