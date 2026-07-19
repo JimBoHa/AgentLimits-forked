@@ -50,6 +50,10 @@
 - [ ] Apple accepts app, PKG, and DMG notarization submissions.
 - [ ] Every Apple notarization log matches its submission and has zero issues.
 - [ ] Stapler validation and Gatekeeper app/package assessments pass.
+- [ ] Final ZIP, expanded PKG, and read-only DMG reopen with exact layouts; each
+      contained app matches both original Code Directory hashes and passes
+      signature, stapler, and Gatekeeper checks.
+- [ ] Expanded PKG installs only the app in `/Applications` and has no scripts.
 - [ ] DMG integrity and clean-user quarantine installation pass.
 
 ## iOS, iPadOS, and watchOS distribution
