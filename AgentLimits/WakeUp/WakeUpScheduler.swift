@@ -118,20 +118,57 @@ struct WakeUpSchedule: Codable, Equatable {
         "\(launchAgentLabel).plist"
     }
 
-    /// Returns the base CLI command (without logging prefix)
+    /// Returns the CLI command rendered safely for display.
     var cliCommand: String {
-        let args = additionalArgs.trimmingCharacters(in: .whitespaces)
-        let suffix = args.isEmpty ? "" : " \(args)"
+        do {
+            return try makeCLIInvocation().shellCommand
+        } catch {
+            return "[\(error.localizedDescription)]"
+        }
+    }
 
+    /// Builds literal argv without evaluating the additional-arguments field.
+    func makeCLIInvocation() throws -> CLICommandInvocation {
+        let arguments: [String]
+        do {
+            arguments = try CLIArgumentParser.parse(additionalArgs)
+        } catch {
+            throw WakeUpError.invalidArguments(error.localizedDescription)
+        }
+        let base: CLICommandInvocation
+        do {
+            base = try makeBaseCLIInvocation()
+        } catch {
+            throw WakeUpError.invalidExecutable(error.localizedDescription)
+        }
+        return CLICommandInvocation(
+            executable: base.executable,
+            arguments: base.arguments + arguments
+        )
+    }
+
+    private func makeBaseCLIInvocation() throws -> CLICommandInvocation {
         switch provider {
         case .chatgptCodex:
-            let codexExecutable = CLICommandPathResolver.resolveExecutable(for: .codex, defaultName: "codex")
-            return "\(codexExecutable) exec --skip-git-repo-check \"hello\"\(suffix)"
+            let codexExecutable = try CLICommandPathResolver.resolveExecutable(
+                for: .codex,
+                defaultName: "codex"
+            )
+            return CLICommandInvocation(
+                executable: codexExecutable,
+                arguments: ["exec", "--skip-git-repo-check", "hello"]
+            )
         case .claudeCode:
-            let claudeExecutable = CLICommandPathResolver.resolveExecutable(for: .claude, defaultName: "claude")
-            return "\(claudeExecutable) -p \"hello\"\(suffix)"
+            let claudeExecutable = try CLICommandPathResolver.resolveExecutable(
+                for: .claude,
+                defaultName: "claude"
+            )
+            return CLICommandInvocation(
+                executable: claudeExecutable,
+                arguments: ["-p", "hello"]
+            )
         case .githubCopilot:
-            return ""
+            return CLICommandInvocation(executable: "", arguments: [])
         }
     }
 
@@ -155,6 +192,8 @@ enum WakeUpError: Error, LocalizedError {
     case executionFailed(exitCode: Int32, stderr: String)
     case timeout
     case outputLimitExceeded(maximumBytes: Int)
+    case invalidExecutable(String)
+    case invalidArguments(String)
     case launchAgentWriteFailed(Error)
     case launchAgentLoadFailed(Error)
     case homeDirectoryNotFound
@@ -169,6 +208,10 @@ enum WakeUpError: Error, LocalizedError {
             return "CLI execution timed out"
         case .outputLimitExceeded(let maximumBytes):
             return "CLI output exceeded the \(maximumBytes)-byte limit"
+        case .invalidExecutable(let message):
+            return message
+        case .invalidArguments(let message):
+            return "Invalid additional arguments: \(message)"
         case .launchAgentWriteFailed(let error):
             return "Failed to write LaunchAgent: \(error.localizedDescription)"
         case .launchAgentLoadFailed(let error):
@@ -309,6 +352,8 @@ final class LaunchAgentManager {
         let plistData: Data
         do {
             plistData = try generatePlist(for: schedule)
+        } catch let error as WakeUpError {
+            throw error
         } catch {
             throw WakeUpError.launchAgentWriteFailed(error)
         }
@@ -563,7 +608,7 @@ final class LaunchAgentManager {
     /// Generates plist data for a schedule
     private func generatePlist(for schedule: WakeUpSchedule) throws -> Data {
         // Build full command with logging prefix.
-        let fullCommand = WakeUpCommandBuilder.buildLaunchAgentCommand(for: schedule)
+        let fullCommand = try WakeUpCommandBuilder.buildLaunchAgentCommand(for: schedule)
 
         // Build StartCalendarInterval array
         var calendarIntervals: [[String: Int]] = []
@@ -600,8 +645,11 @@ final class LaunchAgentManager {
 // MARK: - CLI Executor
 
 enum WakeUpCommandBuilder {
-    static func buildLaunchAgentCommand(for schedule: WakeUpSchedule) -> String {
-        let prefixedCommand = ShellCommandPathPrefixer.prefixIfNeeded(command: schedule.cliCommand)
+    static func buildLaunchAgentCommand(for schedule: WakeUpSchedule) throws -> String {
+        let invocation = try schedule.makeCLIInvocation()
+        let prefixedCommand = ShellCommandPathPrefixer.prefixIfNeeded(
+            command: invocation.shellCommand
+        )
         let guardedCommand = wrapWithTimeout(command: prefixedCommand)
         return buildCommand(for: schedule, command: guardedCommand, marker: nil)
     }
@@ -609,8 +657,25 @@ enum WakeUpCommandBuilder {
     static func buildTestCommand(
         for schedule: WakeUpSchedule,
         logPath: String? = nil
+    ) throws -> String {
+        let invocation = try schedule.makeCLIInvocation()
+        return buildTestCommand(
+            for: schedule,
+            invocation: invocation,
+            logPath: logPath
+        )
+    }
+
+    static func buildTestCommand(
+        for schedule: WakeUpSchedule,
+        invocation: CLICommandInvocation,
+        logPath: String? = nil
     ) -> String {
-        let baseCommand = buildCommand(for: schedule, command: schedule.cliCommand, marker: "[TEST]")
+        let baseCommand = buildCommand(
+            for: schedule,
+            command: invocation.shellCommand,
+            marker: "[TEST]"
+        )
         return buildLoggedTestCommand(
             command: baseCommand,
             logPath: logPath ?? schedule.logPath
@@ -652,9 +717,10 @@ final class CLIExecutor {
     init(
         timeout: TimeInterval = 30,
         fileManager: FileManager = .default,
-        homeDirectory: URL? = nil
+        homeDirectory: URL? = nil,
+        shellPath: String = ShellPathResolver.resolveLoginShellPath()
     ) {
-        self.shellExecutor = ShellExecutor(timeout: timeout)
+        self.shellExecutor = ShellExecutor(timeout: timeout, shellPath: shellPath)
         self.fileManager = fileManager
         self.homeDirectoryOverride = homeDirectory
     }
@@ -678,27 +744,37 @@ final class CLIExecutor {
             .appendingPathComponent("agentlimits-wakeup-\(schedule.provider.rawValue).log")
             .path
         // Build command with logging (same format as LaunchAgent, with [TEST] marker).
-        let command = WakeUpCommandBuilder.buildTestCommand(
-            for: schedule,
-            logPath: logPath
-        )
+        let invocation: CLICommandInvocation
+        let command: String
+        do {
+            invocation = try schedule.makeCLIInvocation()
+            command = WakeUpCommandBuilder.buildTestCommand(
+                for: schedule,
+                invocation: invocation,
+                logPath: logPath
+            )
+        } catch let error as WakeUpError {
+            throw error
+        } catch {
+            throw WakeUpError.invalidArguments(error.localizedDescription)
+        }
 
         do {
             return try await shellExecutor.executeString(command: command)
         } catch let error as ShellExecutorError {
-            throw mapShellError(error, schedule: schedule)
+            throw mapShellError(error, executable: invocation.executable)
         }
     }
 
     /// Maps ShellExecutorError to WakeUpError for domain-specific error messages.
     /// - Parameters:
     ///   - error: The shell execution error
-    ///   - schedule: The schedule that was being executed (for error context)
+    ///   - executable: The non-secret executable used for error context
     /// - Returns: A WakeUpError with appropriate message
-    private func mapShellError(_ error: ShellExecutorError, schedule: WakeUpSchedule) -> WakeUpError {
+    private func mapShellError(_ error: ShellExecutorError, executable: String) -> WakeUpError {
         switch error {
         case .launchFailed:
-            return .cliNotFound(command: schedule.cliCommand)
+            return .cliNotFound(command: executable)
         case .timeout:
             return .timeout
         case .outputLimitExceeded(let maximumBytes):

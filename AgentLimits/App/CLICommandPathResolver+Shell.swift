@@ -15,9 +15,16 @@ extension CLICommandPathResolver {
     /// - Parameter commandName: Command name to resolve via `command -v`.
     /// - Returns: Resolved path or nil when not found.
     static func resolveExecutablePath(commandName: String) async -> String? {
+        guard !commandName.isEmpty, !commandName.contains("\0") else {
+            return nil
+        }
+        let lookup = CLICommandInvocation(
+            executable: "command",
+            arguments: ["-v", commandName]
+        )
         do {
             let output = try await ShellExecutor(timeout: 5).executeString(
-                command: "command -v \(commandName)"
+                command: lookup.shellCommand
             )
             let trimmed = output.trimmingCharacters(in: .whitespacesAndNewlines)
             return trimmed.isEmpty ? nil : trimmed
