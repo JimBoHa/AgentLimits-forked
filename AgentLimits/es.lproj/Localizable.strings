@@ -40,7 +40,7 @@
 "content.refreshNow" = "Actualizar ahora";
 "content.clearData" = "Borrar datos";
 "content.clearDataConfirmTitle" = "Borrar datos";
-"content.clearDataConfirmMessage" = "Esto eliminará los datos de inicio de sesión del navegador integrado, el almacenamiento de sitios web y las instantáneas de uso en caché.";
+"content.clearDataConfirmMessage" = "Esto eliminará los datos de inicio de sesión del navegador integrado, el almacenamiento de sitios web, las instantáneas de uso en caché y las credenciales de sesión guardadas.";
 "content.clearDataConfirmAction" = "Borrar";
 "content.clearDataCancel" = "Cancelar";
 "content.provider" = "Servicio";
@@ -228,7 +228,9 @@
 "accounts.removeTitle" = "¿Eliminar cuenta?";
 "accounts.cancel" = "Cancelar";
 "accounts.removeMessage" = "¿Eliminar %@? Se eliminarán sus datos de uso en caché y su sesión de inicio aislada.";
-"accounts.removeLegacyMessage" = "¿Eliminar %@? Esta cuenta migrada comparte datos heredados de WebKit; se cerrarán todas las sesiones de inicio compartidas migradas. Las cuentas aisladas no se verán afectadas.";
+"accounts.removeLegacyMessage" = "¿Eliminar %@? Se eliminarán los datos de uso en caché de esta cuenta. Esta cuenta migrada también comparte datos heredados de WebKit; se cerrarán todas las sesiones de inicio compartidas migradas. Las cuentas aisladas no se verán afectadas.";
+"accounts.removeGitHubMessage" = "¿Eliminar %@? Se eliminarán sus datos de uso en caché, su credencial de sesión y su sesión de inicio aislada.";
+"accounts.removeLegacyGitHubMessage" = "¿Eliminar %@? Se eliminarán los datos de uso en caché y la credencial de sesión de esta cuenta. Esta cuenta migrada también comparte datos heredados de WebKit; se cerrarán todas las sesiones de inicio compartidas migradas. Las cuentas aisladas no se verán afectadas.";
 "accounts.pendingCleanup" = "La cuenta se eliminó. WebKit volverá a intentar eliminar sus datos de inicio aislados la próxima vez que se abra la app.";
 "accounts.ok" = "OK";
 "accounts.label" = "Nombre de la cuenta";
@@ -240,3 +242,31 @@
 "accounts.chooseFolder" = "Elegir…";
 "accounts.cliDataRootDefault" = "Predeterminado del proveedor";
 "accounts.cliDataRootFormat" = "Datos de la CLI: %@";
+
+/* Sesiones actuales */
+"activity.title" = "Sesiones actuales";
+"activity.unsupported" = "Este proveedor no ofrece el recuento de sesiones actuales.";
+"activity.notChecked" = "Aún no se ha comprobado.";
+"activity.unavailable" = "El recuento de sesiones actuales no está disponible.";
+"activity.summaryFormat" = "%d abiertas — %d trabajando, %d en espera";
+"activity.staleSummaryFormat" = "%d abiertas (último dato conocido) — %d trabajando, %d en espera";
+"activity.authenticationRequired" = "La credencial no existe, fue rechazada o no tiene acceso de lectura a Agent tasks. Añádela o sustitúyela.";
+"activity.scopeGitHub" = "Sesiones de agentes en la nube de Copilot visibles para esta credencial.";
+"activity.observed" = "Observado";
+"activity.refresh" = "Actualizar sesiones";
+"activity.credentialTitle" = "Credencial de sesión de GitHub";
+"activity.credentialPlaceholder" = "Pegar credencial";
+"activity.credentialHelp" = "Usa un PAT específico o un token de acceso de usuario de una GitHub App solo con permiso de lectura de “Agent tasks” en los repositorios. Se conserva en el llavero de este dispositivo. La API está en versión preliminar pública.";
+"activity.credentialStored" = "Hay una credencial guardada para esta cuenta.";
+"activity.noCredential" = "No hay ninguna credencial guardada para esta cuenta.";
+"activity.apiDocumentation" = "Documentación de la API Agent Tasks de GitHub";
+"activity.removeCredential" = "Eliminar credencial";
+"activity.removeCredentialTitle" = "¿Eliminar la credencial de sesión?";
+"activity.removeCredentialMessage" = "Esta credencial no se podrá recuperar desde AgentLimits después de eliminarla.";
+"activity.saveCredential" = "Guardar credencial";
+"activity.errorInvalidCredential" = "La credencial no puede estar vacía, no debe contener espacios ni caracteres de control y debe ocupar como máximo 16 KiB.";
+"activity.errorInvalidStoredCredential" = "La credencial guardada no es válida. Elimínala y añade una nueva.";
+"activity.errorKeychainFormat" = "La operación del llavero falló (estado %d).";
+"activity.errorUnsupportedProvider" = "Este proveedor no admite credenciales de sesión.";
+"activity.errorAccountNotFound" = "Esta cuenta ya no existe.";
+"activity.errorClearInProgress" = "Se están borrando los datos de actividad de las sesiones.";

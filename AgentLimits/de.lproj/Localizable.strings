@@ -41,7 +41,7 @@
 "content.refreshNow" = "Jetzt aktualisieren";
 "content.clearData" = "Daten löschen";
 "content.clearDataConfirmTitle" = "Daten löschen";
-"content.clearDataConfirmMessage" = "Dies entfernt Anmeldedaten des eingebetteten Browsers, Website-Speicher und zwischengespeicherte Nutzungs-Snapshots.";
+"content.clearDataConfirmMessage" = "Dies entfernt Anmeldedaten des eingebetteten Browsers, Website-Speicher, zwischengespeicherte Nutzungs-Snapshots und gespeicherte Sitzungsanmeldedaten.";
 "content.clearDataConfirmAction" = "Löschen";
 "content.clearDataCancel" = "Abbrechen";
 "content.provider" = "Dienst";
@@ -228,7 +228,9 @@
 "accounts.removeTitle" = "Konto entfernen?";
 "accounts.cancel" = "Abbrechen";
 "accounts.removeMessage" = "%@ entfernen? Die zwischengespeicherten Nutzungsdaten und die isolierte Anmeldesitzung werden gelöscht.";
-"accounts.removeLegacyMessage" = "%@ entfernen? Dieses migrierte Konto verwendet ältere WebKit-Daten gemeinsam; alle migrierten gemeinsamen Anmeldesitzungen werden abgemeldet. Isolierte Konten bleiben unberührt.";
+"accounts.removeLegacyMessage" = "%@ entfernen? Die zwischengespeicherten Nutzungsdaten dieses Kontos werden gelöscht. Dieses migrierte Konto verwendet außerdem ältere WebKit-Daten gemeinsam; alle migrierten gemeinsamen Anmeldesitzungen werden abgemeldet. Isolierte Konten bleiben unberührt.";
+"accounts.removeGitHubMessage" = "%@ entfernen? Die zwischengespeicherten Nutzungsdaten, Sitzungsanmeldedaten und die isolierte Anmeldesitzung werden gelöscht.";
+"accounts.removeLegacyGitHubMessage" = "%@ entfernen? Die zwischengespeicherten Nutzungsdaten und Sitzungsanmeldedaten dieses Kontos werden gelöscht. Dieses migrierte Konto verwendet außerdem ältere WebKit-Daten gemeinsam; alle migrierten gemeinsamen Anmeldesitzungen werden abgemeldet. Isolierte Konten bleiben unberührt.";
 "accounts.pendingCleanup" = "Das Konto wurde entfernt. WebKit versucht beim nächsten Start erneut, seine isolierten Anmeldedaten zu löschen.";
 "accounts.ok" = "OK";
 "accounts.label" = "Kontoname";
@@ -240,3 +242,31 @@
 "accounts.chooseFolder" = "Auswählen…";
 "accounts.cliDataRootDefault" = "Standardeinstellung des Anbieters";
 "accounts.cliDataRootFormat" = "CLI-Daten: %@";
+
+/* Aktuelle Sitzungen */
+"activity.title" = "Aktuelle Sitzungen";
+"activity.unsupported" = "Dieser Anbieter stellt keine aktuellen Sitzungszahlen bereit.";
+"activity.notChecked" = "Noch nicht geprüft.";
+"activity.unavailable" = "Die aktuelle Sitzungszahl ist nicht verfügbar.";
+"activity.summaryFormat" = "%d offen — %d in Bearbeitung, %d wartend";
+"activity.staleSummaryFormat" = "%d offen (zuletzt bekannt) — %d in Bearbeitung, %d wartend";
+"activity.authenticationRequired" = "Anmeldedaten fehlen, wurden abgelehnt oder haben keinen Lesezugriff auf Agent tasks. Füge sie hinzu oder ersetze sie.";
+"activity.scopeGitHub" = "Copilot-Cloud-Agent-Sitzungen, die für diese Anmeldedaten sichtbar sind.";
+"activity.observed" = "Erfasst";
+"activity.refresh" = "Sitzungen aktualisieren";
+"activity.credentialTitle" = "GitHub-Sitzungsanmeldedaten";
+"activity.credentialPlaceholder" = "Anmeldedaten einfügen";
+"activity.credentialHelp" = "Verwende ein fein abgestuftes PAT oder ein GitHub-App-Benutzerzugriffstoken ausschließlich mit der Repository-Leseberechtigung „Agent tasks“. Es bleibt im Schlüsselbund dieses Geräts. Die API befindet sich in der öffentlichen Vorschau.";
+"activity.credentialStored" = "Für dieses Konto sind Anmeldedaten gespeichert.";
+"activity.noCredential" = "Für dieses Konto sind keine Anmeldedaten gespeichert.";
+"activity.apiDocumentation" = "Dokumentation der GitHub Agent Tasks API";
+"activity.removeCredential" = "Anmeldedaten entfernen";
+"activity.removeCredentialTitle" = "Sitzungsanmeldedaten entfernen?";
+"activity.removeCredentialMessage" = "Diese Anmeldedaten können nach dem Entfernen nicht aus AgentLimits wiederhergestellt werden.";
+"activity.saveCredential" = "Anmeldedaten speichern";
+"activity.errorInvalidCredential" = "Die Anmeldedaten dürfen nicht leer sein, keine Leer- oder Steuerzeichen enthalten und höchstens 16 KiB groß sein.";
+"activity.errorInvalidStoredCredential" = "Die gespeicherten Anmeldedaten sind ungültig. Entferne sie und füge neue hinzu.";
+"activity.errorKeychainFormat" = "Schlüsselbundvorgang fehlgeschlagen (Status %d).";
+"activity.errorUnsupportedProvider" = "Dieser Anbieter akzeptiert keine Sitzungsanmeldedaten.";
+"activity.errorAccountNotFound" = "Dieses Konto existiert nicht mehr.";
+"activity.errorClearInProgress" = "Sitzungsaktivitätsdaten werden gerade gelöscht.";

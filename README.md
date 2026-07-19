@@ -30,6 +30,7 @@ Fork releases: [JimBoHa/AgentLimits-forked releases](https://github.com/JimBoHa/
 - **Premium request usage (Copilot):** daily premium request count and cost via WebView.
   - API: `https://github.com/settings/billing/usage_table` (fetched automatically with Copilot usage)
 - **Multiple accounts:** Each provider can have named personal, work, or other accounts with separate login sessions, quota snapshots, token snapshots, and optional local CLI data directories.
+- **Current Copilot cloud-agent sessions:** Per-account open, working, and waiting session counts from the [GitHub Agent Tasks API](https://docs.github.com/en/rest/agent-tasks/agent-tasks). Counts include only repositories visible to that account’s credential; Codex and Claude Code do not currently expose an equivalent count.
 
 ## Menu Bar Display
 - Two-line layout per provider in the icon area
@@ -107,9 +108,12 @@ Pacemaker shows a time-based usage benchmark to help you stay on track.
 7. Drag rows in **Display Order** to change the order of providers in the menu bar icon and dashboard.
 8. Click the bottom login bar (`▲`) to expand the selected account's embedded WebView panel.
 9. Sign in via the embedded WebView (chatgpt.com / claude.ai / github.com). Each newly added account has isolated website storage and cached usage snapshots.
-10. Use **Clear Data** to remove the selected account's login data, website storage, and cached usage snapshots if sign-in gets stuck or you want to reset login history.
+10. For a Copilot account, use the key button beside **Current Sessions** (or in **Manage…**) to save a fine-grained PAT or GitHub App user access token. Grant only repository **Agent tasks: Read** permission. The credential stays in this device’s non-synchronizing Keychain; the API is currently a GitHub public preview.
+11. Use **Clear Data** to remove login data, website storage, cached usage snapshots, and saved session credentials for all managed accounts if sign-in gets stuck or you want a full reset.
 
-Accounts migrated from older AgentLimits versions may temporarily share the legacy website session. The app warns before removing a migrated account because doing so signs out every migrated account that still shares that session; newly added isolated accounts are unaffected.
+Accounts migrated from older AgentLimits versions may temporarily share the legacy website session. The app warns before removing a migrated account because doing so signs out every migrated account that still shares that session; newly added isolated accounts are unaffected. Removing a Copilot account also deletes its account-scoped session credential from Keychain.
+
+Current-session counts are fetched independently for each named Copilot account. A missing, rejected, or under-scoped credential is shown as unavailable—not zero—and failed refreshes label prior counts as last known instead of presenting them as current.
 
 ### ccusage
 1. Open **ccusage**.

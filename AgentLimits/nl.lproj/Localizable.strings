@@ -40,7 +40,7 @@
 "content.refreshNow" = "Nu verversen";
 "content.clearData" = "Gegevens wissen";
 "content.clearDataConfirmTitle" = "Gegevens wissen";
-"content.clearDataConfirmMessage" = "Dit verwijdert inloggegevens van de ingebouwde browser, website-opslag en gecachte gebruikssnapshots.";
+"content.clearDataConfirmMessage" = "Dit verwijdert inloggegevens van de ingebouwde browser, website-opslag, gecachte gebruikssnapshots en opgeslagen sessiereferenties.";
 "content.clearDataConfirmAction" = "Wissen";
 "content.clearDataCancel" = "Annuleren";
 "content.provider" = "Service";
@@ -228,7 +228,9 @@
 "accounts.removeTitle" = "Account verwijderen?";
 "accounts.cancel" = "Annuleren";
 "accounts.removeMessage" = "%@ verwijderen? De gebruiksgegevens in de cache en de geïsoleerde aanmeldsessie worden verwijderd.";
-"accounts.removeLegacyMessage" = "%@ verwijderen? Dit gemigreerde account deelt verouderde WebKit-gegevens; alle gemigreerde gedeelde aanmeldsessies worden afgemeld. Geïsoleerde accounts blijven onaangetast.";
+"accounts.removeLegacyMessage" = "%@ verwijderen? De gebruiksgegevens van dit account in de cache worden verwijderd. Dit gemigreerde account deelt ook verouderde WebKit-gegevens; alle gemigreerde gedeelde aanmeldsessies worden afgemeld. Geïsoleerde accounts blijven onaangetast.";
+"accounts.removeGitHubMessage" = "%@ verwijderen? De gebruiksgegevens in de cache, de sessiereferentie en de geïsoleerde aanmeldsessie worden verwijderd.";
+"accounts.removeLegacyGitHubMessage" = "%@ verwijderen? De gebruiksgegevens in de cache en de sessiereferentie van dit account worden verwijderd. Dit gemigreerde account deelt ook verouderde WebKit-gegevens; alle gemigreerde gedeelde aanmeldsessies worden afgemeld. Geïsoleerde accounts blijven onaangetast.";
 "accounts.pendingCleanup" = "Het account is verwijderd. WebKit probeert bij de volgende start opnieuw de geïsoleerde aanmeldgegevens te verwijderen.";
 "accounts.ok" = "OK";
 "accounts.label" = "Accountnaam";
@@ -240,3 +242,31 @@
 "accounts.chooseFolder" = "Kiezen…";
 "accounts.cliDataRootDefault" = "Standaardinstelling van provider";
 "accounts.cliDataRootFormat" = "CLI-gegevens: %@";
+
+/* Huidige sessies */
+"activity.title" = "Huidige sessies";
+"activity.unsupported" = "Deze provider stelt geen actuele sessieaantallen beschikbaar.";
+"activity.notChecked" = "Nog niet gecontroleerd.";
+"activity.unavailable" = "Het huidige sessieaantal is niet beschikbaar.";
+"activity.summaryFormat" = "%d open — %d actief, %d wachtend";
+"activity.staleSummaryFormat" = "%d open (laatst bekend) — %d actief, %d wachtend";
+"activity.authenticationRequired" = "Referentie ontbreekt, is geweigerd of heeft geen leestoegang tot Agent tasks. Voeg deze toe of vervang deze.";
+"activity.scopeGitHub" = "Copilot-cloudagentsessies die voor deze referentie zichtbaar zijn.";
+"activity.observed" = "Waargenomen";
+"activity.refresh" = "Sessies vernieuwen";
+"activity.credentialTitle" = "GitHub-sessiereferentie";
+"activity.credentialPlaceholder" = "Referentie plakken";
+"activity.credentialHelp" = "Gebruik een fijnmazig PAT of gebruikerstoegangstoken van een GitHub-app met uitsluitend leesrechten voor ‘Agent tasks’ in opslagplaatsen. Het blijft in de sleutelhanger van dit apparaat. De API is een openbare preview.";
+"activity.credentialStored" = "Voor dit account is een referentie opgeslagen.";
+"activity.noCredential" = "Voor dit account is geen referentie opgeslagen.";
+"activity.apiDocumentation" = "Documentatie voor de GitHub Agent Tasks-API";
+"activity.removeCredential" = "Referentie verwijderen";
+"activity.removeCredentialTitle" = "Sessiereferentie verwijderen?";
+"activity.removeCredentialMessage" = "Deze referentie kan na verwijdering niet vanuit AgentLimits worden hersteld.";
+"activity.saveCredential" = "Referentie bewaren";
+"activity.errorInvalidCredential" = "De referentie mag niet leeg zijn, mag geen witruimte of besturingstekens bevatten en mag maximaal 16 KiB groot zijn.";
+"activity.errorInvalidStoredCredential" = "De opgeslagen referentie is ongeldig. Verwijder deze en voeg een nieuwe toe.";
+"activity.errorKeychainFormat" = "Sleutelhangerbewerking mislukt (status %d).";
+"activity.errorUnsupportedProvider" = "Deze provider accepteert geen sessiereferentie.";
+"activity.errorAccountNotFound" = "Dit account bestaat niet meer.";
+"activity.errorClearInProgress" = "De sessieactiviteitsgegevens worden momenteel gewist.";

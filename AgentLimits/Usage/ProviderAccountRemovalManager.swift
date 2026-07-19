@@ -25,6 +25,17 @@ protocol ProviderAccountLocalDataRemoving {
     func removeLocalData(for account: ProviderAccount) throws
 }
 
+@MainActor
+protocol ProviderAccountActivityDataRetiring: AnyObject {
+    func retireActivityData(for account: ProviderAccount) throws
+}
+
+extension SessionActivityViewModel: ProviderAccountActivityDataRetiring {
+    func retireActivityData(for account: ProviderAccount) throws {
+        try retireAccount(account)
+    }
+}
+
 extension ProviderAccountLocalDataRemoving {
     func prepareLocalDataRetirement(for account: ProviderAccount) throws {}
 }
@@ -121,6 +132,8 @@ final class ProviderAccountRemovalManager {
     private let accountStore: ProviderAccountStore
     private let webViewPool: UsageWebViewPool
     private let localDataRemover: any ProviderAccountLocalDataRemoving
+    private let activityDataRetirer:
+        (any ProviderAccountActivityDataRetiring)?
     private let websiteDataStoreRemover: any IdentifiedWebsiteDataStoreRemoving
     private let cleanupAttempts: Int
     private let cleanupRetryDelay: Duration
@@ -130,6 +143,8 @@ final class ProviderAccountRemovalManager {
         accountStore: ProviderAccountStore,
         webViewPool: UsageWebViewPool,
         localDataRemover: (any ProviderAccountLocalDataRemoving)? = nil,
+        activityDataRetirer:
+            (any ProviderAccountActivityDataRetiring)? = nil,
         websiteDataStoreRemover:
             (any IdentifiedWebsiteDataStoreRemoving)? = nil,
         cleanupAttempts: Int = 4,
@@ -139,6 +154,7 @@ final class ProviderAccountRemovalManager {
         self.webViewPool = webViewPool
         self.localDataRemover = localDataRemover
             ?? DefaultProviderAccountLocalDataRemover()
+        self.activityDataRetirer = activityDataRetirer
         self.websiteDataStoreRemover = websiteDataStoreRemover
             ?? DefaultIdentifiedWebsiteDataStoreRemover()
         self.cleanupAttempts = max(1, cleanupAttempts)
@@ -165,6 +181,9 @@ final class ProviderAccountRemovalManager {
         do {
             try await webViewPool.quiesceAccountForRetirement(token)
             try localDataRemover.removeLocalData(for: plan.target)
+            // Delete account-scoped API credentials before registry commit so
+            // a crash cannot strand an unreachable Keychain item.
+            try activityDataRetirer?.retireActivityData(for: plan.target)
             let commit = try accountStore.commitRemoval(plan)
             registryCommitted = true
 

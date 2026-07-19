@@ -8,20 +8,24 @@ struct ProviderAccountsSettingsView: View {
     @Environment(\.dismiss) private var dismiss
 
     @ObservedObject var viewModel: UsageViewModel
+    @ObservedObject var sessionActivityViewModel: SessionActivityViewModel
     let removalManager: ProviderAccountRemovalManager
 
     @State private var selectedProvider: UsageProvider
     @State private var editorConfiguration: AccountEditorConfiguration?
+    @State private var activityCredentialAccount: ProviderAccount?
     @State private var removalCandidate: ProviderAccount?
     @State private var pendingRemovalAccountID: UUID?
     @State private var alertMessage: String?
 
     init(
         viewModel: UsageViewModel,
+        sessionActivityViewModel: SessionActivityViewModel,
         removalManager: ProviderAccountRemovalManager,
         initialProvider: UsageProvider
     ) {
         self.viewModel = viewModel
+        self.sessionActivityViewModel = sessionActivityViewModel
         self.removalManager = removalManager
         self._selectedProvider = State(initialValue: initialProvider)
     }
@@ -75,7 +79,7 @@ struct ProviderAccountsSettingsView: View {
             }
         }
         .padding(DesignTokens.Spacing.large)
-        .frame(minWidth: 620, minHeight: 430)
+        .frame(minWidth: 760, minHeight: 430)
         .interactiveDismissDisabled(isBusy)
         .sheet(item: $editorConfiguration) { configuration in
             ProviderAccountEditorView(configuration: configuration) {
@@ -96,6 +100,12 @@ struct ProviderAccountsSettingsView: View {
                     )
                 }
             }
+        }
+        .sheet(item: $activityCredentialAccount) { account in
+            GitHubActivityCredentialView(
+                account: account,
+                viewModel: sessionActivityViewModel
+            )
         }
         .confirmationDialog(
             "accounts.removeTitle".localized(),
@@ -181,6 +191,16 @@ struct ProviderAccountsSettingsView: View {
                 Text(sessionDescription(for: account))
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                Text(
+                    SessionActivityPresentation.summary(
+                        for: account,
+                        snapshot: sessionActivityViewModel.snapshot(
+                            for: account.id
+                        )
+                    )
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
                 if account.provider.tokenUsageProvider?.isCLIBased == true {
                     Text(
                         "accounts.cliDataRootFormat".localized(
@@ -198,6 +218,40 @@ struct ProviderAccountsSettingsView: View {
             if pendingRemovalAccountID == account.id {
                 ProgressView()
                     .controlSize(.small)
+            }
+
+            if account.provider == .githubCopilot {
+                if sessionActivityViewModel.isFetching(
+                    accountID: account.id
+                ) {
+                    ProgressView()
+                        .controlSize(.small)
+                }
+
+                Button {
+                    Task {
+                        await sessionActivityViewModel.refresh(
+                            account: account
+                        )
+                    }
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                }
+                .disabled(
+                    isBusy
+                        || sessionActivityViewModel.isFetching(
+                            accountID: account.id
+                        )
+                )
+                .help("activity.refresh".localized())
+
+                Button {
+                    activityCredentialAccount = account
+                } label: {
+                    Image(systemName: "key")
+                }
+                .disabled(isBusy)
+                .help("activity.credentialTitle".localized())
             }
 
             Toggle(
@@ -266,8 +320,18 @@ struct ProviderAccountsSettingsView: View {
     private func removalMessage(for account: ProviderAccount) -> String {
         switch account.webKitStorage {
         case .isolated:
+            if account.provider == .githubCopilot {
+                return "accounts.removeGitHubMessage".localized(
+                    account.label
+                )
+            }
             return "accounts.removeMessage".localized(account.label)
         case .legacyDefault:
+            if account.provider == .githubCopilot {
+                return "accounts.removeLegacyGitHubMessage".localized(
+                    account.label
+                )
+            }
             return "accounts.removeLegacyMessage".localized(account.label)
         }
     }

@@ -40,7 +40,7 @@
 "content.refreshNow" = "立即刷新";
 "content.clearData" = "清除数据";
 "content.clearDataConfirmTitle" = "清除数据";
-"content.clearDataConfirmMessage" = "这将移除内置浏览器的登录数据、网站存储以及缓存的使用量快照。";
+"content.clearDataConfirmMessage" = "这将移除内置浏览器的登录数据、网站存储、缓存的使用量快照以及存储的会话凭据。";
 "content.clearDataConfirmAction" = "清除";
 "content.clearDataCancel" = "取消";
 "content.provider" = "服务";
@@ -228,7 +228,9 @@
 "accounts.removeTitle" = "删除账户？";
 "accounts.cancel" = "取消";
 "accounts.removeMessage" = "要删除 %@ 吗？其缓存的使用量数据和隔离的登录会话将被删除。";
-"accounts.removeLegacyMessage" = "要删除 %@ 吗？此迁移账户共享旧版 WebKit 数据；所有迁移的共享登录会话都将退出登录。隔离账户不受影响。";
+"accounts.removeLegacyMessage" = "要删除 %@ 吗？此账户缓存的使用量数据将被删除。此迁移账户还共享旧版 WebKit 数据；所有迁移的共享登录会话都将退出登录。隔离账户不受影响。";
+"accounts.removeGitHubMessage" = "要删除 %@ 吗？其缓存的使用量数据、会话凭据和隔离的登录会话将被删除。";
+"accounts.removeLegacyGitHubMessage" = "要删除 %@ 吗？此账户缓存的使用量数据和会话凭据将被删除。此迁移账户还共享旧版 WebKit 数据；所有迁移的共享登录会话都将退出登录。隔离账户不受影响。";
 "accounts.pendingCleanup" = "账户已删除。WebKit 将在下次启动时重试删除其隔离的登录数据。";
 "accounts.ok" = "确定";
 "accounts.label" = "账户名称";
@@ -240,3 +242,31 @@
 "accounts.chooseFolder" = "选择…";
 "accounts.cliDataRootDefault" = "服务默认设置";
 "accounts.cliDataRootFormat" = "CLI 数据：%@";
+
+/* 当前会话 */
+"activity.title" = "当前会话";
+"activity.unsupported" = "此提供商不提供当前会话数量。";
+"activity.notChecked" = "尚未检查。";
+"activity.unavailable" = "当前会话数量不可用。";
+"activity.summaryFormat" = "%d 个未结束 — %d 个工作中，%d 个等待中";
+"activity.staleSummaryFormat" = "%d 个未结束（上次已知）— %d 个工作中，%d 个等待中";
+"activity.authenticationRequired" = "凭据缺失、被拒绝或没有 Agent tasks 读取权限。请添加或替换凭据。";
+"activity.scopeGitHub" = "此凭据可见的 Copilot 云端代理会话。";
+"activity.observed" = "观测于";
+"activity.refresh" = "刷新会话";
+"activity.credentialTitle" = "GitHub 会话凭据";
+"activity.credentialPlaceholder" = "粘贴凭据";
+"activity.credentialHelp" = "请使用仅有仓库“Agent tasks”读取权限的细粒度 PAT 或 GitHub App 用户访问令牌。它只保留在此设备的钥匙串中。此 API 处于公开预览阶段。";
+"activity.credentialStored" = "已为此账户存储凭据。";
+"activity.noCredential" = "未为此账户存储凭据。";
+"activity.apiDocumentation" = "GitHub Agent Tasks API 文档";
+"activity.removeCredential" = "移除凭据";
+"activity.removeCredentialTitle" = "要移除会话凭据吗？";
+"activity.removeCredentialMessage" = "移除后，无法从 AgentLimits 恢复此凭据。";
+"activity.saveCredential" = "存储凭据";
+"activity.errorInvalidCredential" = "凭据不能为空、不得包含空白或控制字符，且最大为 16 KiB。";
+"activity.errorInvalidStoredCredential" = "存储的凭据无效。请将其移除并添加新凭据。";
+"activity.errorKeychainFormat" = "钥匙串操作失败（状态 %d）。";
+"activity.errorUnsupportedProvider" = "此提供商不接受会话凭据。";
+"activity.errorAccountNotFound" = "此账户已不存在。";
+"activity.errorClearInProgress" = "正在清除会话活动数据。";

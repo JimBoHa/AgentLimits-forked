@@ -22,11 +22,22 @@ final class UsageViewModelClearOrchestrationTests: XCTestCase {
             )
         )
         let websiteDataClearer = RecordingWebsiteDataClearer()
+        let activityCredentialStore =
+            OrchestrationSessionActivityCredentialStore()
+        let activityViewModel = SessionActivityViewModel(
+            accountStore: accountStore,
+            credentialStore: activityCredentialStore
+        )
+        activityCredentialStore.onDeleteAll = {
+            XCTAssertTrue(websiteDataClearer.didClear)
+        }
         usageRepository.onDelete = { _ in
             XCTAssertTrue(websiteDataClearer.didClear)
+            XCTAssertEqual(activityCredentialStore.deleteAllCallCount, 1)
         }
         tokenStore.onDelete = {
             XCTAssertTrue(websiteDataClearer.didClear)
+            XCTAssertEqual(activityCredentialStore.deleteAllCallCount, 1)
         }
         let tokenViewModel = makeTokenViewModel(
             store: tokenStore,
@@ -39,13 +50,15 @@ final class UsageViewModelClearOrchestrationTests: XCTestCase {
         let viewModel = makeUsageViewModel(
             pool: pool,
             usageRepository: usageRepository,
-            tokenViewModel: tokenViewModel
+            tokenViewModel: tokenViewModel,
+            sessionActivityDataClearer: activityViewModel
         )
 
         XCTAssertNotNil(viewModel.snapshot)
         try await viewModel.clearData()
 
         XCTAssertEqual(websiteDataClearer.clearCount, 1)
+        XCTAssertEqual(activityCredentialStore.deleteAllCallCount, 1)
         XCTAssertTrue(usageRepository.snapshotsByAccountID.isEmpty)
         XCTAssertEqual(
             Set(usageRepository.deletionAttempts),
@@ -68,6 +81,13 @@ final class UsageViewModelClearOrchestrationTests: XCTestCase {
                 visibilityStore.isSnapshotSuppressed(
                     fileName: provider.snapshotFileName
                 )
+            )
+        }
+        let retryToken = activityViewModel.beginActivityDataClear()
+        XCTAssertNotNil(retryToken)
+        if let retryToken {
+            XCTAssertTrue(
+                activityViewModel.finishActivityDataClear(retryToken)
             )
         }
     }
@@ -374,6 +394,12 @@ final class UsageViewModelClearOrchestrationTests: XCTestCase {
             store: tokenStore,
             visibilityStore: visibilityStore
         )
+        let activityCredentialStore =
+            OrchestrationSessionActivityCredentialStore()
+        let activityViewModel = SessionActivityViewModel(
+            accountStore: accountStore,
+            credentialStore: activityCredentialStore
+        )
         let pool = UsageWebViewPool(
             accountStore: accountStore,
             websiteDataClearer: websiteDataClearer
@@ -381,7 +407,8 @@ final class UsageViewModelClearOrchestrationTests: XCTestCase {
         let viewModel = makeUsageViewModel(
             pool: pool,
             usageRepository: usageRepository,
-            tokenViewModel: tokenViewModel
+            tokenViewModel: tokenViewModel,
+            sessionActivityDataClearer: activityViewModel
         )
 
         do {
@@ -399,6 +426,7 @@ final class UsageViewModelClearOrchestrationTests: XCTestCase {
         )
         XCTAssertEqual(tokenStore.snapshots.count, TokenUsageProvider.allCases.count)
         XCTAssertEqual(tokenViewModel.snapshots.count, TokenUsageProvider.allCases.count)
+        XCTAssertEqual(activityCredentialStore.deleteAllCallCount, 0)
         XCTAssertNotNil(viewModel.snapshot)
         XCTAssertFalse(usageRepository.isSnapshotSuppressed(for: codexAccount))
         XCTAssertFalse(pool.getWebViewStore(for: .chatgptCodex).isDataClearInProgress)
@@ -407,6 +435,136 @@ final class UsageViewModelClearOrchestrationTests: XCTestCase {
                 visibilityStore.isSnapshotSuppressed(fileName: provider.snapshotFileName)
             )
         }
+        let retryToken = activityViewModel.beginActivityDataClear()
+        XCTAssertNotNil(retryToken)
+        if let retryToken {
+            XCTAssertTrue(
+                activityViewModel.finishActivityDataClear(retryToken)
+            )
+        }
+    }
+
+    func testActivityDataFailurePreservesSnapshotsAndReleasesClearGates()
+        async throws {
+        let accountStore = makeProviderAccountStore()
+        let codexAccount = accountStore.selectedAccount(for: .chatgptCodex)
+        let visibilityStore = OrchestrationSnapshotVisibilityStore()
+        let usageRepository = OrchestrationAccountUsageSnapshotRepository(
+            accounts: accountStore.loadAccounts(),
+            snapshots: [.chatgptCodex: makeUsageSnapshot(.chatgptCodex)],
+            visibilityStore: visibilityStore
+        )
+        let tokenStore = OrchestrationTokenSnapshotStore(
+            snapshots: [.codex: makeTokenSnapshot(.codex)]
+        )
+        let tokenViewModel = makeTokenViewModel(
+            store: tokenStore,
+            visibilityStore: visibilityStore
+        )
+        let activityCredentialStore =
+            OrchestrationSessionActivityCredentialStore()
+        activityCredentialStore.deleteAllError =
+            OrchestrationError.activityDataFailed
+        let activityViewModel = SessionActivityViewModel(
+            accountStore: accountStore,
+            credentialStore: activityCredentialStore
+        )
+        let websiteDataClearer = RecordingWebsiteDataClearer()
+        let pool = UsageWebViewPool(
+            accountStore: accountStore,
+            websiteDataClearer: websiteDataClearer
+        )
+        let viewModel = makeUsageViewModel(
+            pool: pool,
+            usageRepository: usageRepository,
+            tokenViewModel: tokenViewModel,
+            sessionActivityDataClearer: activityViewModel
+        )
+
+        do {
+            try await viewModel.clearData()
+            XCTFail("Expected session-activity clear failure")
+        } catch let error as ClearDataError {
+            guard case .activityData = error else {
+                return XCTFail("Unexpected clear error: \(error)")
+            }
+        }
+
+        XCTAssertEqual(websiteDataClearer.clearCount, 1)
+        XCTAssertEqual(activityCredentialStore.deleteAllCallCount, 1)
+        XCTAssertNotNil(
+            usageRepository.snapshotsByAccountID[codexAccount.id]
+        )
+        XCTAssertNotNil(tokenStore.snapshots[.codex])
+        XCTAssertFalse(
+            pool.getWebViewStore(for: codexAccount).isDataClearInProgress
+        )
+
+        activityCredentialStore.deleteAllError = nil
+        try await viewModel.clearData()
+
+        XCTAssertEqual(websiteDataClearer.clearCount, 2)
+        XCTAssertEqual(activityCredentialStore.deleteAllCallCount, 2)
+        XCTAssertTrue(usageRepository.snapshotsByAccountID.isEmpty)
+        XCTAssertTrue(tokenStore.snapshots.isEmpty)
+    }
+
+    func testActivityClearContentionRollsBackOtherClearGates() async throws {
+        let accountStore = makeProviderAccountStore()
+        let visibilityStore = OrchestrationSnapshotVisibilityStore()
+        let usageRepository = OrchestrationAccountUsageSnapshotRepository(
+            accounts: accountStore.loadAccounts(),
+            snapshots: [.chatgptCodex: makeUsageSnapshot(.chatgptCodex)],
+            visibilityStore: visibilityStore
+        )
+        let tokenStore = OrchestrationTokenSnapshotStore(
+            snapshots: [.codex: makeTokenSnapshot(.codex)]
+        )
+        let tokenViewModel = makeTokenViewModel(
+            store: tokenStore,
+            visibilityStore: visibilityStore
+        )
+        let activityCredentialStore =
+            OrchestrationSessionActivityCredentialStore()
+        let activityViewModel = SessionActivityViewModel(
+            accountStore: accountStore,
+            credentialStore: activityCredentialStore
+        )
+        let heldToken = try XCTUnwrap(
+            activityViewModel.beginActivityDataClear()
+        )
+        let websiteDataClearer = RecordingWebsiteDataClearer()
+        let pool = UsageWebViewPool(
+            accountStore: accountStore,
+            websiteDataClearer: websiteDataClearer
+        )
+        let viewModel = makeUsageViewModel(
+            pool: pool,
+            usageRepository: usageRepository,
+            tokenViewModel: tokenViewModel,
+            sessionActivityDataClearer: activityViewModel
+        )
+
+        do {
+            try await viewModel.clearData()
+            XCTFail("Expected session-activity clear contention")
+        } catch let error as ClearDataError {
+            guard case .activityData = error else {
+                return XCTFail("Unexpected clear error: \(error)")
+            }
+        }
+
+        XCTAssertEqual(websiteDataClearer.clearCount, 0)
+        XCTAssertEqual(activityCredentialStore.deleteAllCallCount, 0)
+        XCTAssertFalse(usageRepository.snapshotsByAccountID.isEmpty)
+        XCTAssertFalse(tokenStore.snapshots.isEmpty)
+        XCTAssertTrue(activityViewModel.finishActivityDataClear(heldToken))
+
+        try await viewModel.clearData()
+        XCTAssertEqual(websiteDataClearer.clearCount, 1)
+        XCTAssertEqual(activityCredentialStore.deleteAllCallCount, 1)
+        XCTAssertTrue(usageRepository.snapshotsByAccountID.isEmpty)
+        XCTAssertTrue(tokenStore.snapshots.isEmpty)
     }
 
     func testTokenRefreshRemainsBlockedThroughoutWebsiteDataClear() async throws {
@@ -444,6 +602,8 @@ final class UsageViewModelClearOrchestrationTests: XCTestCase {
         pool: UsageWebViewPool,
         usageRepository: OrchestrationAccountUsageSnapshotRepository,
         tokenViewModel: TokenUsageViewModel,
+        sessionActivityDataClearer:
+            (any SessionActivityDataClearing)? = nil,
         selectedProvider: UsageProvider = .chatgptCodex
     ) -> UsageViewModel {
         let defaults = UserDefaults(
@@ -453,6 +613,7 @@ final class UsageViewModelClearOrchestrationTests: XCTestCase {
             webViewPool: pool,
             snapshotRepository: usageRepository,
             tokenUsageViewModel: tokenViewModel,
+            sessionActivityDataClearer: sessionActivityDataClearer,
             displayModeStore: UsageDisplayModeStore(
                 userDefaults: defaults,
                 appGroupDefaults: nil
@@ -795,9 +956,37 @@ private final class OrchestrationRecordingCCUsageFetcher: CCUsageFetching {
     }
 }
 
+private final class OrchestrationSessionActivityCredentialStore:
+    SessionActivityCredentialStoring {
+    var credentials: [UUID: String] = [:]
+    var deleteAllError: Error?
+    var onDeleteAll: (() -> Void)?
+    private(set) var deleteAllCallCount = 0
+
+    func credential(for accountID: UUID) throws -> String? {
+        credentials[accountID]
+    }
+
+    func saveCredential(_ credential: String, for accountID: UUID) throws {
+        credentials[accountID] = credential
+    }
+
+    func deleteCredential(for accountID: UUID) throws {
+        credentials.removeValue(forKey: accountID)
+    }
+
+    func deleteAllCredentials() throws {
+        deleteAllCallCount += 1
+        onDeleteAll?()
+        if let deleteAllError { throw deleteAllError }
+        credentials.removeAll()
+    }
+}
+
 private enum OrchestrationError: LocalizedError {
     case deleteFailed
     case websiteDataFailed
+    case activityDataFailed
 
     var errorDescription: String? {
         switch self {
@@ -805,6 +994,8 @@ private enum OrchestrationError: LocalizedError {
             return "Test deletion failed"
         case .websiteDataFailed:
             return "Test website-data clear failed"
+        case .activityDataFailed:
+            return "Test session-activity clear failed"
         }
     }
 }

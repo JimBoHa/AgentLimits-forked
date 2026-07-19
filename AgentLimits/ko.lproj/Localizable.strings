@@ -40,7 +40,7 @@
 "content.refreshNow" = "지금 새로 고침";
 "content.clearData" = "데이터 지우기";
 "content.clearDataConfirmTitle" = "데이터 지우기";
-"content.clearDataConfirmMessage" = "내장 브라우저의 로그인 데이터, 웹사이트 저장소 및 캐시된 사용량 스냅샷을 제거합니다.";
+"content.clearDataConfirmMessage" = "내장 브라우저의 로그인 데이터, 웹사이트 저장소, 캐시된 사용량 스냅샷 및 저장된 세션 인증 정보를 제거합니다.";
 "content.clearDataConfirmAction" = "지우기";
 "content.clearDataCancel" = "취소";
 "content.provider" = "서비스";
@@ -228,7 +228,9 @@
 "accounts.removeTitle" = "계정을 삭제할까요?";
 "accounts.cancel" = "취소";
 "accounts.removeMessage" = "%@을(를) 삭제할까요? 캐시된 사용량과 격리된 로그인 세션이 삭제됩니다.";
-"accounts.removeLegacyMessage" = "%@을(를) 삭제할까요? 이 마이그레이션된 계정은 기존 WebKit 데이터를 공유하므로 마이그레이션된 모든 공유 로그인 세션에서 로그아웃됩니다. 격리된 계정에는 영향을 주지 않습니다.";
+"accounts.removeLegacyMessage" = "%@을(를) 삭제할까요? 이 계정의 캐시된 사용량이 삭제됩니다. 또한 이 마이그레이션된 계정은 기존 WebKit 데이터를 공유하므로 마이그레이션된 모든 공유 로그인 세션에서 로그아웃됩니다. 격리된 계정에는 영향을 주지 않습니다.";
+"accounts.removeGitHubMessage" = "%@을(를) 삭제할까요? 캐시된 사용량, 세션 인증 정보 및 격리된 로그인 세션이 삭제됩니다.";
+"accounts.removeLegacyGitHubMessage" = "%@을(를) 삭제할까요? 이 계정의 캐시된 사용량과 세션 인증 정보가 삭제됩니다. 또한 이 마이그레이션된 계정은 기존 WebKit 데이터를 공유하므로 마이그레이션된 모든 공유 로그인 세션에서 로그아웃됩니다. 격리된 계정에는 영향을 주지 않습니다.";
 "accounts.pendingCleanup" = "계정이 삭제되었습니다. 다음 실행 시 WebKit이 격리된 로그인 데이터 삭제를 다시 시도합니다.";
 "accounts.ok" = "확인";
 "accounts.label" = "계정 이름";
@@ -240,3 +242,31 @@
 "accounts.chooseFolder" = "선택…";
 "accounts.cliDataRootDefault" = "서비스 기본값";
 "accounts.cliDataRootFormat" = "CLI 데이터: %@";
+
+/* 현재 세션 */
+"activity.title" = "현재 세션";
+"activity.unsupported" = "이 서비스는 현재 세션 수를 제공하지 않습니다.";
+"activity.notChecked" = "아직 확인하지 않았습니다.";
+"activity.unavailable" = "현재 세션 수를 확인할 수 없습니다.";
+"activity.summaryFormat" = "%d개 열림 — %d개 작업 중, %d개 대기 중";
+"activity.staleSummaryFormat" = "%d개 열림(마지막 확인) — %d개 작업 중, %d개 대기 중";
+"activity.authenticationRequired" = "인증 정보가 없거나 거부되었거나 Agent tasks 읽기 권한이 없습니다. 추가하거나 교체하세요.";
+"activity.scopeGitHub" = "이 인증 정보로 볼 수 있는 Copilot 클라우드 에이전트 세션입니다.";
+"activity.observed" = "확인 시각";
+"activity.refresh" = "세션 새로 고침";
+"activity.credentialTitle" = "GitHub 세션 인증 정보";
+"activity.credentialPlaceholder" = "인증 정보 붙여넣기";
+"activity.credentialHelp" = "저장소의 ‘Agent tasks’ 읽기 권한만 부여한 세분화된 PAT 또는 GitHub App 사용자 액세스 토큰을 사용하세요. 이 기기의 키체인에만 보관됩니다. 이 API는 공개 미리 보기 상태입니다.";
+"activity.credentialStored" = "이 계정의 인증 정보가 저장되어 있습니다.";
+"activity.noCredential" = "이 계정에 저장된 인증 정보가 없습니다.";
+"activity.apiDocumentation" = "GitHub Agent Tasks API 문서";
+"activity.removeCredential" = "인증 정보 제거";
+"activity.removeCredentialTitle" = "세션 인증 정보를 제거할까요?";
+"activity.removeCredentialMessage" = "제거한 인증 정보는 AgentLimits에서 복구할 수 없습니다.";
+"activity.saveCredential" = "인증 정보 저장";
+"activity.errorInvalidCredential" = "인증 정보는 비어 있을 수 없고 공백이나 제어 문자를 포함할 수 없으며 16 KiB 이하여야 합니다.";
+"activity.errorInvalidStoredCredential" = "저장된 인증 정보가 올바르지 않습니다. 제거한 후 새 인증 정보를 추가하세요.";
+"activity.errorKeychainFormat" = "키체인 작업에 실패했습니다(상태 %d).";
+"activity.errorUnsupportedProvider" = "이 서비스는 세션 인증 정보를 지원하지 않습니다.";
+"activity.errorAccountNotFound" = "이 계정은 더 이상 존재하지 않습니다.";
+"activity.errorClearInProgress" = "세션 활동 데이터를 지우는 중입니다.";

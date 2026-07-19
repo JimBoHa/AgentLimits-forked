@@ -68,6 +68,7 @@ final class SettingsWindowController: NSWindowController {
             viewModel: appState.viewModel,
             webViewPool: appState.webViewPool,
             tokenUsageViewModel: appState.tokenUsageViewModel,
+            sessionActivityViewModel: appState.sessionActivityViewModel,
             accountRemovalManager: appState.accountRemovalManager
         )
         let hostingController = NSHostingController(rootView: rootView)
