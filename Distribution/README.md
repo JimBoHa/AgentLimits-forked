@@ -99,8 +99,9 @@ Scripts/package-macos.sh \
   "Developer ID Installer: Legal Name (TEAMID)"
 ```
 
-The workflow creates a universal app, ZIP, DMG, and signed PKG. It uses Xcode
-for Developer ID export, `productbuild` for the installer signature,
+The workflow creates a universal app, ZIP, Developer ID Application-signed
+DMG, and Developer ID Installer-signed PKG. It uses Xcode for Developer ID
+export, `codesign` for the disk image, `productbuild` for the installer,
 `notarytool` for notarization, and `stapler`/Gatekeeper assessment for final
 verification. It never performs an unsafe recursive ad-hoc re-sign.
 

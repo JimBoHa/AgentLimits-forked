@@ -42,6 +42,7 @@
 - [ ] No executable has `get-task-allow`.
 - [ ] App and widget are universal `arm64` + `x86_64`; dSYMs match UUIDs.
 - [ ] PKG has a valid Developer ID Installer signature.
+- [ ] DMG has a valid Developer ID Application signature from the same Team.
 - [ ] Apple accepts app, PKG, and DMG notarization submissions.
 - [ ] Stapler validation and Gatekeeper app/package assessments pass.
 - [ ] DMG integrity and clean-user quarantine installation pass.

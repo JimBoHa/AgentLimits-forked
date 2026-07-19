@@ -16,7 +16,7 @@
 - Fixed usage-window, billing-period, date-boundary, formatting, refresh-race,
   WebView-lifecycle, and snapshot-retirement bugs.
 - Added Apple privacy manifests, distribution automation, unsigned preflight
-  packages, signing/notarization guidance, and release checklists.
+  packages, signed-disk-image/notarization guidance, and release checklists.
 
 Original AgentLimits was created by Nihondo and remains credited under the MIT
 license: https://github.com/Nihondo/AgentLimits
