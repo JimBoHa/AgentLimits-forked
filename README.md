@@ -4,7 +4,7 @@
 
 **In Development**
 
-AgentLimits is a macOS Sonoma+ menu bar app with Notification Center widgets, plus an iPhone and iPad companion under active development. The Mac app shows usage limits for ChatGPT Codex / Claude Code (5-hour + weekly, or monthly when the provider returns a monthly window), GitHub Copilot (monthly premium requests), and ccusage token usage.
+AgentLimits is a macOS Sonoma+ menu bar app with Notification Center widgets, plus iPhone, iPad, and Apple Watch companions under active development. The Mac app shows usage limits for ChatGPT Codex / Claude Code (5-hour + weekly, or monthly when the provider returns a monthly window), GitHub Copilot (monthly premium requests), and ccusage token usage.
 
 ![](./images/agentlimit_sample.png)
 
@@ -31,6 +31,17 @@ initial companion target.
 
 See the [privacy policy](PRIVACY.md) for on-device storage, provider requests,
 retention, and deletion behavior.
+
+## Apple Watch Companion
+
+The dependent `AgentLimitsWatch` app displays every named account received from
+the paired iPhone and shows exact GitHub Copilot open, working, and waiting
+cloud-agent counts when available. WatchConnectivity transfers only a bounded,
+validated status snapshot; GitHub credentials, provider cookies, and local CLI
+data never go to Apple Watch. Cached status becomes visibly stale after 10
+minutes, and refresh requests contain only the selected enabled Copilot account
+UUID. The Watch app has no direct provider networking and is embedded in the
+iOS archive rather than distributed as a separate installer.
 
 ## What It Tracks
 - **Usage limits (Codex / Claude Code):** 5-hour + weekly usage, or monthly usage when the provider returns a monthly window, via internal APIs.

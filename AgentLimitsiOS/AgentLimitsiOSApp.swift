@@ -4,6 +4,7 @@ import SwiftUI
 @MainActor
 struct AgentLimitsiOSApp: App {
     @StateObject private var model: MobileAppModel
+    private let watchCompanionBridge: MobileWatchCompanionBridge?
 
     init() {
         #if DEBUG
@@ -14,7 +15,12 @@ struct AgentLimitsiOSApp: App {
             )
         }
         #endif
-        _model = StateObject(wrappedValue: MobileAppModel())
+        let model = MobileAppModel()
+        _model = StateObject(wrappedValue: model)
+        watchCompanionBridge = MobileWatchCompanionBridge(
+            accountStore: model.accountStore,
+            activityController: model.activityController
+        )
     }
 
     var body: some Scene {
