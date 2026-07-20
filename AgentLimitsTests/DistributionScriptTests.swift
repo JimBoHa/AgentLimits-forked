@@ -120,6 +120,63 @@ final class DistributionScriptTests: XCTestCase {
         }
     }
 
+    func testUnsignedBuildUsesCleanSnapshotAndAtomicStaging() throws {
+        let script = try releaseScript(named: "build-unsigned-artifacts.sh")
+        let containerValidation = try releaseScript(
+            named: "macos-container-validation.sh"
+        )
+
+        XCTAssertTrue(script.contains("PATH=\"/usr/bin:/bin:/usr/sbin:/sbin\""))
+        XCTAssertTrue(script.contains("source \"$script_dir/signing-config.sh\""))
+        XCTAssertTrue(script.contains("git -C \"$project_root\" archive"))
+        XCTAssertTrue(script.contains("$build_root/AgentLimits.xcodeproj"))
+        XCTAssertTrue(
+            script.contains("prepare_xcode_signing_environment \"$snapshot_config\"")
+        )
+        XCTAssertTrue(script.contains("verify_source_unchanged"))
+        XCTAssertTrue(script.contains("-derivedDataPath \"$derived_data\""))
+        XCTAssertTrue(script.contains("output_parent_owner"))
+        XCTAssertTrue(script.contains("output_parent_mode"))
+        XCTAssertTrue(script.contains("output_parent_mutating_acl_entries"))
+        XCTAssertTrue(
+            script.contains(
+                "mktemp -d \"$output_parent/.AgentLimits-unsigned-stage.XXXXXX\""
+            )
+        )
+        XCTAssertTrue(script.contains("publication_lock"))
+        XCTAssertTrue(script.contains("publish_staged_directory"))
+        XCTAssertTrue(
+            containerValidation.contains("Output path appeared while building")
+        )
+    }
+
+    func testUnsignedBuildValidatesEveryBundleIdentityAndVersion() throws {
+        let script = try releaseScript(named: "build-unsigned-artifacts.sh")
+
+        for identifier in [
+            "com.jimboha.agentlimits.macos",
+            "com.jimboha.agentlimits.macos.widget",
+            "com.jimboha.agentlimits.ios",
+            "com.jimboha.agentlimits.ios.watchkitapp"
+        ] {
+            XCTAssertTrue(script.contains(identifier), identifier)
+        }
+        XCTAssertTrue(
+            script.contains(
+                "macOS, widget, iOS, and watchOS version/build values are not synchronized"
+            )
+        )
+        XCTAssertTrue(script.contains("verify_archive_has_no_signing_metadata"))
+        XCTAssertTrue(script.contains("verify_linker_adhoc_bundle"))
+        XCTAssertTrue(script.contains("verify_no_code_signature_for_architecture"))
+        XCTAssertTrue(script.contains("verify_unsigned_product_package"))
+        XCTAssertTrue(script.contains("verify_unsigned_disk_image"))
+        XCTAssertTrue(script.contains("embedded.mobileprovision"))
+        XCTAssertTrue(script.contains("embedded.provisionprofile"))
+        XCTAssertTrue(script.contains("ApplicationProperties.Team"))
+        XCTAssertTrue(script.contains("ApplicationProperties.SigningIdentity"))
+    }
+
     func testReleaseBuildsUseOnlyResolvedPackageVersions() throws {
         let lockFlag = "-onlyUsePackageVersionsFromResolvedFile"
         for name in [
@@ -150,14 +207,14 @@ final class DistributionScriptTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: directory) }
         let config = directory.appendingPathComponent("sanitized.xcconfig")
         try Data("DEVELOPMENT_TEAM = ABCDE12345\n".utf8).write(to: config)
-        let command = #"source "$1"; export XCODE_XCCONFIG_FILE=/private/tmp/hostile.xcconfig; export TOOLCHAINS=hostile; export XCRUN_TOOLCHAIN_NAME=hostile; prepare_xcode_signing_environment "$2"; printf '%s\n%s\n%s\n' "$XCODE_XCCONFIG_FILE" "${TOOLCHAINS-unset}" "${XCRUN_TOOLCHAIN_NAME-unset}""#
+        let command = #"source "$1"; export XCODE_XCCONFIG_FILE=/private/tmp/hostile.xcconfig; export TOOLCHAINS=hostile; export XCRUN_TOOLCHAIN_NAME=hostile; export SDKROOT=/private/tmp; export CPATH=/private/tmp/include; export LIBRARY_PATH=/private/tmp/lib; prepare_xcode_signing_environment "$2"; printf '%s\n%s\n%s\n%s\n%s\n%s\n' "$XCODE_XCCONFIG_FILE" "${TOOLCHAINS-unset}" "${XCRUN_TOOLCHAIN_NAME-unset}" "${SDKROOT-unset}" "${CPATH-unset}" "${LIBRARY_PATH-unset}""#
 
         let result = try runSigningConfigValidator(config: config, command: command)
 
         XCTAssertEqual(result.status, 0, result.output)
         XCTAssertEqual(
             result.output.split(separator: "\n").map(String.init),
-            [config.path, "unset", "unset"]
+            [config.path, "unset", "unset", "unset", "unset", "unset"]
         )
     }
 
@@ -323,6 +380,72 @@ final class DistributionScriptTests: XCTestCase {
         }
     }
 
+    func testLinkerAdHocSignatureValidationRejectsDistributionMetadata() throws {
+        let identifier = "AgentLimitsForked"
+        let validDetails = """
+        Identifier=\(identifier)
+        CodeDirectory v=20400 size=426 flags=0x20002(adhoc,linker-signed) hashes=10+0 location=embedded
+        Signature=adhoc
+        Info.plist=not bound
+        TeamIdentifier=not set
+        Sealed Resources=none
+        Internal requirements=none
+        """
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let detailsFile = directory.appendingPathComponent("codesign.txt")
+        let command = #"source "$1"; details="$(cat "$2")"; validate_linker_adhoc_signature_details "$details" "$3" component"#
+
+        try Data(validDetails.utf8).write(to: detailsFile)
+        var result = try runMacCodeSigningHelper(
+            command: command,
+            arguments: [detailsFile.path, identifier]
+        )
+        XCTAssertEqual(result.status, 0, result.output)
+
+        for invalid in [
+            validDetails.replacingOccurrences(
+                of: "TeamIdentifier=not set",
+                with: "TeamIdentifier=ABCDE12345"
+            ),
+            validDetails + "\nAuthority=Developer ID Application: Example\n",
+            validDetails.replacingOccurrences(
+                of: "flags=0x20002(adhoc,linker-signed)",
+                with: "flags=0x10000(runtime)"
+            )
+        ] {
+            try Data(invalid.utf8).write(to: detailsFile)
+            result = try runMacCodeSigningHelper(
+                command: command,
+                arguments: [detailsFile.path, identifier]
+            )
+            XCTAssertNotEqual(result.status, 0, result.output)
+        }
+    }
+
+    func testUnsignedCodeDiagnosticRequiresExactCodesignFailure() throws {
+        let command = #"source "$1"; validate_no_code_signature_diagnostic "$2" "$3" component"#
+        let unsignedDetails = "/tmp/Product: code object is not signed at all"
+
+        var result = try runMacCodeSigningHelper(
+            command: command,
+            arguments: [unsignedDetails, "1"]
+        )
+        XCTAssertEqual(result.status, 0, result.output)
+
+        for (details, status) in [
+            (unsignedDetails, "0"),
+            ("/tmp/Product: bundle format unrecognized", "1"),
+            ("Signature=adhoc", "0")
+        ] {
+            result = try runMacCodeSigningHelper(
+                command: command,
+                arguments: [details, status]
+            )
+            XCTAssertNotEqual(result.status, 0, result.output)
+        }
+    }
+
     func testEveryUniversalSignatureSliceMustPass() throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -377,6 +500,40 @@ final class DistributionScriptTests: XCTestCase {
             )
             XCTAssertNotEqual(result.status, 0, result.output)
         }
+    }
+
+    func testDeviceArchitectureValidationRejectsExtraSlices() throws {
+        let watchCommand = #"source "$1"; validate_exact_binary_architectures "$2" watch arm64 arm64_32"#
+        for architectures in ["arm64 arm64_32", "arm64_32 arm64"] {
+            let result = try runMacCodeSigningHelper(
+                command: watchCommand,
+                arguments: [architectures]
+            )
+            XCTAssertEqual(result.status, 0, result.output)
+        }
+        for architectures in [
+            "arm64",
+            "arm64_32",
+            "arm64 arm64_32 x86_64"
+        ] {
+            let result = try runMacCodeSigningHelper(
+                command: watchCommand,
+                arguments: [architectures]
+            )
+            XCTAssertNotEqual(result.status, 0, result.output)
+        }
+
+        let iOSCommand = #"source "$1"; validate_exact_binary_architectures "$2" ios arm64"#
+        var result = try runMacCodeSigningHelper(
+            command: iOSCommand,
+            arguments: ["arm64"]
+        )
+        XCTAssertEqual(result.status, 0, result.output)
+        result = try runMacCodeSigningHelper(
+            command: iOSCommand,
+            arguments: ["arm64 x86_64"]
+        )
+        XCTAssertNotEqual(result.status, 0, result.output)
     }
 
     func testSparkleAutoupdateIdentifiersArePinned() throws {
@@ -586,6 +743,173 @@ final class DistributionScriptTests: XCTestCase {
         XCTAssertNotEqual(result.status, 0, result.output)
     }
 
+    func testArchiveTreeManifestDetectsContentAndSymlinkChanges() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let source = directory.appendingPathComponent("source")
+        let candidate = directory.appendingPathComponent("candidate")
+        let sourceSubdirectory = source.appendingPathComponent("subdirectory")
+        let candidateSubdirectory = candidate.appendingPathComponent("subdirectory")
+        try FileManager.default.createDirectory(
+            at: sourceSubdirectory,
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createDirectory(
+            at: candidateSubdirectory,
+            withIntermediateDirectories: true
+        )
+        try Data("same".utf8).write(
+            to: sourceSubdirectory.appendingPathComponent("file")
+        )
+        try Data("same".utf8).write(
+            to: candidateSubdirectory.appendingPathComponent("file")
+        )
+        try FileManager.default.createSymbolicLink(
+            atPath: source.appendingPathComponent("link").path,
+            withDestinationPath: "subdirectory/file"
+        )
+        try FileManager.default.createSymbolicLink(
+            atPath: candidate.appendingPathComponent("link").path,
+            withDestinationPath: "subdirectory/file"
+        )
+        let reference = directory.appendingPathComponent("reference.tree")
+        let actual = directory.appendingPathComponent("actual.tree")
+        let command = #"source "$1"; create_tree_manifest "$2" "$3" || exit $?; validate_tree_matches_manifest "$4" "$3" "$5" fixture"#
+
+        var result = try runMacContainerHelper(
+            command: command,
+            arguments: [
+                source.path,
+                reference.path,
+                candidate.path,
+                actual.path
+            ]
+        )
+        XCTAssertEqual(result.status, 0, result.output)
+
+        try Data("changed".utf8).write(
+            to: candidateSubdirectory.appendingPathComponent("file")
+        )
+        result = try runMacContainerHelper(
+            command: command,
+            arguments: [
+                source.path,
+                reference.path,
+                candidate.path,
+                actual.path
+            ]
+        )
+        XCTAssertNotEqual(result.status, 0, result.output)
+
+        try Data("same".utf8).write(
+            to: candidateSubdirectory.appendingPathComponent("file")
+        )
+        try FileManager.default.removeItem(at: candidate.appendingPathComponent("link"))
+        try FileManager.default.createSymbolicLink(
+            atPath: candidate.appendingPathComponent("link").path,
+            withDestinationPath: "unexpected"
+        )
+        result = try runMacContainerHelper(
+            command: command,
+            arguments: [
+                source.path,
+                reference.path,
+                candidate.path,
+                actual.path
+            ]
+        )
+        XCTAssertNotEqual(result.status, 0, result.output)
+    }
+
+    func testTreeManifestFailsForUnreadableContent() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let root = directory.appendingPathComponent("root")
+        let blockedDirectory = root.appendingPathComponent("blocked")
+        let blockedFile = root.appendingPathComponent("blocked-file")
+        let manifest = directory.appendingPathComponent("manifest.tree")
+        try FileManager.default.createDirectory(
+            at: blockedDirectory,
+            withIntermediateDirectories: true
+        )
+        try Data("secret".utf8).write(to: blockedFile)
+        let command = #"source "$1"; create_tree_manifest "$2" "$3""#
+
+        try setPermissions(0o000, for: blockedFile)
+        var result = try runMacContainerHelper(
+            command: command,
+            arguments: [root.path, manifest.path]
+        )
+        XCTAssertNotEqual(result.status, 0, result.output)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: manifest.path))
+        try setPermissions(0o600, for: blockedFile)
+
+        try Data("hidden".utf8).write(
+            to: blockedDirectory.appendingPathComponent("file")
+        )
+        try setPermissions(0o000, for: blockedDirectory)
+        result = try runMacContainerHelper(
+            command: command,
+            arguments: [root.path, manifest.path]
+        )
+        try setPermissions(0o700, for: blockedDirectory)
+        XCTAssertNotEqual(result.status, 0, result.output)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: manifest.path))
+    }
+
+    func testStagedPublicationNeverNestsIntoExistingDestination() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let stageParent = directory.appendingPathComponent("stage")
+        let outputParent = directory.appendingPathComponent("output")
+        let staged = stageParent.appendingPathComponent("result")
+        let existing = outputParent.appendingPathComponent("result")
+        try FileManager.default.createDirectory(
+            at: staged,
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createDirectory(
+            at: existing,
+            withIntermediateDirectories: true
+        )
+        try Data("staged".utf8).write(to: staged.appendingPathComponent("file"))
+        try Data("existing".utf8).write(
+            to: existing.appendingPathComponent("competitor")
+        )
+        let command = #"source "$1"; publish_staged_directory "$2" "$3" result"#
+
+        var result = try runMacContainerHelper(
+            command: command,
+            arguments: [staged.path, outputParent.path]
+        )
+        XCTAssertEqual(result.status, 73, result.output)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: staged.path))
+        XCTAssertTrue(
+            FileManager.default.fileExists(
+                atPath: existing.appendingPathComponent("competitor").path
+            )
+        )
+        XCTAssertFalse(
+            FileManager.default.fileExists(
+                atPath: existing.appendingPathComponent("result").path
+            )
+        )
+
+        try FileManager.default.removeItem(at: existing)
+        result = try runMacContainerHelper(
+            command: command,
+            arguments: [staged.path, outputParent.path]
+        )
+        XCTAssertEqual(result.status, 0, result.output)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: staged.path))
+        XCTAssertTrue(
+            FileManager.default.fileExists(
+                atPath: outputParent
+                    .appendingPathComponent("result/file").path
+            )
+        )
+    }
+
     func testExpandedProductPackageLayoutAndMetadataFailClosed() throws {
         let root = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -726,6 +1050,44 @@ final class DistributionScriptTests: XCTestCase {
                 "mktemp -d \"/private/tmp/AgentLimits-macos-package.XXXXXX\""
             )
         )
+    }
+
+    func testUnsignedContainersReopenBeforePublication() throws {
+        let script = try releaseScript(named: "build-unsigned-artifacts.sh")
+        let zipCreate = try offset(
+            of: #"ditto -c -k --sequesterRsrc --keepParent "$mac_app" "$mac_zip""#,
+            in: script
+        )
+        let zipExtract = try offset(of: #"ditto -x -k "$mac_zip""#, in: script)
+        let packageCreate = try offset(of: "productbuild", in: script)
+        let packageExpand = try offset(
+            of: #"pkgutil --expand-full "$mac_pkg""#,
+            in: script
+        )
+        let dmgCreate = try offset(of: "hdiutil create", in: script)
+        let dmgAttach = try offset(of: "hdiutil attach", in: script)
+        let checksums = try offset(of: "> SHA256SUMS", in: script)
+        let publish = try offset(of: "publish_staged_directory", in: script)
+
+        XCTAssertLessThan(zipCreate, zipExtract)
+        XCTAssertLessThan(packageCreate, packageExpand)
+        XCTAssertLessThan(dmgCreate, dmgAttach)
+        XCTAssertLessThan(zipExtract, checksums)
+        XCTAssertLessThan(packageExpand, checksums)
+        XCTAssertLessThan(dmgAttach, checksums)
+        XCTAssertLessThan(checksums, publish)
+        XCTAssertTrue(script.contains("--component \"$mac_app\" /Applications"))
+        XCTAssertTrue(script.contains("validate_product_package_layout"))
+        XCTAssertTrue(script.contains("validate_tree_matches_manifest"))
+        XCTAssertTrue(script.contains("ARCHIVE-MANIFESTS"))
+        XCTAssertTrue(
+            script.contains("create_tree_manifest \"$mac_archive\" \"$mac_archive_manifest\"")
+        )
+        XCTAssertTrue(
+            script.contains("create_tree_manifest \"$ios_archive\" \"$ios_archive_manifest\"")
+        )
+        XCTAssertTrue(script.contains("staged macOS archive"))
+        XCTAssertTrue(script.contains("staged iOS/watchOS archive"))
     }
 
     private func packageScript() throws -> String {

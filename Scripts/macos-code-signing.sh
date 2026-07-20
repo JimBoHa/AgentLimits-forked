@@ -3,6 +3,38 @@
 # Shared, pure validation helpers for signed macOS release code.
 # This file is sourced by package-macos.sh and its tests.
 
+validate_linker_adhoc_signature_details() {
+    local details="$1"
+    local expected_identifier="$2"
+    local label="$3"
+
+    if ! printf '%s\n' "$details" \
+            | grep -q '^CodeDirectory .*flags=0x20002(adhoc,linker-signed) ' \
+        || ! printf '%s\n' "$details" \
+            | grep -Fqx "Identifier=$expected_identifier" \
+        || ! printf '%s\n' "$details" | grep -Fqx 'Signature=adhoc' \
+        || ! printf '%s\n' "$details" | grep -Fqx 'Info.plist=not bound' \
+        || ! printf '%s\n' "$details" | grep -Fqx 'TeamIdentifier=not set' \
+        || ! printf '%s\n' "$details" | grep -Fqx 'Sealed Resources=none' \
+        || printf '%s\n' "$details" \
+            | grep -qE '^(Authority|Timestamp|Signed Time)='; then
+        echo "$label is not exclusively linker-generated ad-hoc code" >&2
+        return 1
+    fi
+}
+
+validate_no_code_signature_diagnostic() {
+    local details="$1"
+    local signature_exit="$2"
+    local label="$3"
+
+    if [[ "$signature_exit" != "1" \
+        || "$details" != *"code object is not signed at all"* ]]; then
+        echo "$label signature state could not be proven unsigned" >&2
+        return 1
+    fi
+}
+
 validate_developer_id_signature_details() {
     local details="$1"
     local expected_team="$2"
@@ -90,12 +122,30 @@ validate_developer_id_signature_slices() {
 validate_universal_binary_architectures() {
     local architectures="$1"
     local label="$2"
-    local normalized
 
-    normalized="$(printf '%s\n' "$architectures" | awk '{$1=$1; print}')"
-    if [[ "$normalized" != "arm64 x86_64" \
-        && "$normalized" != "x86_64 arm64" ]]; then
-        echo "$label is not exactly arm64 + x86_64: $normalized" >&2
+    validate_exact_binary_architectures \
+        "$architectures" "$label" arm64 x86_64
+}
+
+validate_exact_binary_architectures() {
+    local architectures="$1"
+    local label="$2"
+    local actual_normalized
+    local expected_normalized
+
+    shift 2
+    actual_normalized="$(printf '%s\n' "$architectures" \
+        | tr -s '[:space:]' '\n' \
+        | sed '/^$/d' \
+        | LC_ALL=C sort \
+        | paste -sd ' ' -)"
+    expected_normalized="$(printf '%s\n' "$@" \
+        | LC_ALL=C sort \
+        | paste -sd ' ' -)"
+
+    if [[ -z "$expected_normalized" \
+        || "$actual_normalized" != "$expected_normalized" ]]; then
+        echo "$label architectures are not exactly $expected_normalized: $actual_normalized" >&2
         return 1
     fi
 }
