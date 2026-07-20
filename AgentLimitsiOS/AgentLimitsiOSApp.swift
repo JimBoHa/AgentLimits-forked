@@ -7,20 +7,14 @@ struct AgentLimitsiOSApp: App {
     private let watchCompanionBridge: MobileWatchCompanionBridge?
 
     init() {
-        #if DEBUG
-        if ProcessInfo.processInfo.arguments.contains("-ui-testing-reset") {
-            try? MobileSessionCredentialStore().deleteAllCredentials()
-            UserDefaults.standard.removeObject(
-                forKey: MobileAccountStore.persistenceKey
+        let runtime = MobileAppRuntime.make()
+        _model = StateObject(wrappedValue: runtime.model)
+        watchCompanionBridge = runtime.watchConnectivityEnabled
+            ? MobileWatchCompanionBridge(
+                accountStore: runtime.model.accountStore,
+                activityController: runtime.model.activityController
             )
-        }
-        #endif
-        let model = MobileAppModel()
-        _model = StateObject(wrappedValue: model)
-        watchCompanionBridge = MobileWatchCompanionBridge(
-            accountStore: model.accountStore,
-            activityController: model.activityController
-        )
+            : nil
     }
 
     var body: some Scene {
