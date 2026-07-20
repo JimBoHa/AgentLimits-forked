@@ -46,7 +46,9 @@ final class AppUpdateController: ObservableObject {
         )
         updater = controller.updater
         // Trust only fork build configuration, never a persisted feed override.
-        updater.clearFeedURLFromUserDefaults()
+        if !AppRuntimeEnvironment.isUITesting {
+            updater.clearFeedURLFromUserDefaults()
+        }
         if isConfigured {
             controller.startUpdater()
         }

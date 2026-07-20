@@ -55,6 +55,7 @@ struct CCUsageSettingsView: View {
             }
         }
         .formStyle(.grouped)
+        .accessibilityIdentifier("mac.ccusage.root")
         .onChange(of: refreshIntervalMinutes) { _, _ in
             viewModel.restartAutoRefresh()
             WidgetCenter.shared.reloadAllTimelines()

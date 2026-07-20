@@ -89,7 +89,7 @@ final class DefaultAccountUsageSnapshotRepository:
 
     init(
         visibilityStore: (any SnapshotVisibilityControlling)? = nil,
-        migrationDefaults: UserDefaults = .standard,
+        migrationDefaults: UserDefaults = AppDefaults.shared,
         makeAccountStore:
             ((ProviderAccount, Bool) -> UsageSnapshotStore)? = nil,
         projectionStore: UsageSnapshotStore? = nil

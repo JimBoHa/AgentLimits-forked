@@ -14,7 +14,7 @@ final class UsageDisplayModeStore {
 
     init(
         store: UsageSnapshotStore = UsageSnapshotStore.shared,
-        userDefaults: UserDefaults = .standard,
+        userDefaults: UserDefaults = AppDefaults.shared,
         appGroupDefaults: UserDefaults? = AppGroupDefaults.shared
     ) {
         self.store = store

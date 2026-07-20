@@ -16,17 +16,38 @@ struct ContentView: View {
     @ObservedObject private var sessionActivityViewModel:
         SessionActivityViewModel
     private let accountRemovalManager: ProviderAccountRemovalManager
-    @AppStorage(UserDefaultsKeys.displayMode) private var displayMode: UsageDisplayMode = .used
+    @AppStorage(
+        UserDefaultsKeys.displayMode,
+        store: AppDefaults.shared
+    ) private var displayMode: UsageDisplayMode = .used
     @AppStorage(
         AppGroupConfig.usageRefreshIntervalMinutesKey,
         store: AppGroupDefaults.shared
     ) private var refreshIntervalMinutes: Int = RefreshIntervalConfig.defaultMinutes
-    @AppStorage(UserDefaultsKeys.menuBarStatusCodexEnabled) private var menuBarCodexEnabled = false
-    @AppStorage(UserDefaultsKeys.menuBarStatusClaudeEnabled) private var menuBarClaudeEnabled = false
-    @AppStorage(UserDefaultsKeys.menuBarStatusCopilotEnabled) private var menuBarCopilotEnabled = false
-    @AppStorage(UserDefaultsKeys.menuBarDashboardCodexEnabled) private var menuBarDashboardCodexEnabled = true
-    @AppStorage(UserDefaultsKeys.menuBarDashboardClaudeEnabled) private var menuBarDashboardClaudeEnabled = true
-    @AppStorage(UserDefaultsKeys.menuBarDashboardCopilotEnabled) private var menuBarDashboardCopilotEnabled = true
+    @AppStorage(
+        UserDefaultsKeys.menuBarStatusCodexEnabled,
+        store: AppDefaults.shared
+    ) private var menuBarCodexEnabled = false
+    @AppStorage(
+        UserDefaultsKeys.menuBarStatusClaudeEnabled,
+        store: AppDefaults.shared
+    ) private var menuBarClaudeEnabled = false
+    @AppStorage(
+        UserDefaultsKeys.menuBarStatusCopilotEnabled,
+        store: AppDefaults.shared
+    ) private var menuBarCopilotEnabled = false
+    @AppStorage(
+        UserDefaultsKeys.menuBarDashboardCodexEnabled,
+        store: AppDefaults.shared
+    ) private var menuBarDashboardCodexEnabled = true
+    @AppStorage(
+        UserDefaultsKeys.menuBarDashboardClaudeEnabled,
+        store: AppDefaults.shared
+    ) private var menuBarDashboardClaudeEnabled = true
+    @AppStorage(
+        UserDefaultsKeys.menuBarDashboardCopilotEnabled,
+        store: AppDefaults.shared
+    ) private var menuBarDashboardCopilotEnabled = true
     @State private var orderedProviders: [UsageProvider] = ProviderOrderStore.loadProviderOrder()
     @State private var isShowingClearDataConfirm = false
     @State private var isClearingData = false
@@ -37,6 +58,9 @@ struct ContentView: View {
     @State private var isShowingAccountManager = false
     @State private var activityCredentialAccount: ProviderAccount?
     @State private var accountErrorMessage: String?
+#if DEBUG
+    @State private var uiTestingClearDataCompletionCount = 0
+#endif
 
     init(
         viewModel: UsageViewModel,
@@ -180,11 +204,17 @@ struct ContentView: View {
                     defer { isClearingData = false }
                     do {
                         try await viewModel.clearData()
+#if DEBUG
+                        if AppRuntimeEnvironment.isUITesting {
+                            uiTestingClearDataCompletionCount &+= 1
+                        }
+#endif
                     } catch {
                         clearDataErrorMessage = error.localizedDescription
                     }
                 }
             }
+            .accessibilityIdentifier("mac.usage.confirmClearData")
             Button("content.clearDataCancel".localized(), role: .cancel) {}
         } message: {
             Text("content.clearDataConfirmMessage".localized())
@@ -266,6 +296,7 @@ struct ContentView: View {
             popupWebViewStore = nil
             popupWebView = nil
         }
+        .accessibilityIdentifier("mac.usage.root")
     }
 
     // MARK: - Provider Picker
@@ -275,12 +306,16 @@ struct ContentView: View {
             ForEach(UsageProvider.allCases) { provider in
                 Text(provider.displayName)
                     .tag(provider)
+                    .accessibilityIdentifier(
+                        "mac.usage.provider.\(provider.rawValue)"
+                    )
             }
         }
         .pickerStyle(.segmented)
         .frame(maxWidth: 260)
         .labelsHidden()
         .accessibilityLabel(Text("content.provider".localized()))
+        .accessibilityIdentifier("mac.usage.providerPicker")
     }
 
     private var selectedAccount: ProviderAccount {
@@ -316,11 +351,13 @@ struct ContentView: View {
             .frame(maxWidth: 190)
             .labelsHidden()
             .accessibilityLabel(Text("content.account".localized()))
+            .accessibilityIdentifier("mac.usage.accountPicker")
 
             Button("accounts.manage".localized()) {
                 isShowingAccountManager = true
             }
             .settingsButtonStyle(.secondary)
+            .accessibilityIdentifier("mac.usage.manageAccounts")
         }
     }
 
@@ -332,17 +369,14 @@ struct ContentView: View {
                 }
                 .disabled(viewModel.isFetching)
                 .settingsButtonStyle(.primary)
+                .accessibilityIdentifier("mac.usage.refresh")
 
                 if viewModel.isFetching {
                     ProgressView()
                         .controlSize(.small)
                 }
 
-                Button("content.clearData".localized(), role: .destructive) {
-                    isShowingClearDataConfirm = true
-                }
-                .disabled(isClearingData)
-                .settingsButtonStyle(.destructive)
+                clearDataButton
 
                 if isClearingData {
                     ProgressView()
@@ -356,6 +390,30 @@ struct ContentView: View {
                     .foregroundStyle(.secondary)
             }
         }
+    }
+
+    private var clearDataButton: some View {
+        let button = Button(
+            "content.clearData".localized(),
+            role: .destructive
+        ) {
+            isShowingClearDataConfirm = true
+        }
+        .disabled(isClearingData)
+        .settingsButtonStyle(.destructive)
+        .accessibilityIdentifier("mac.usage.clearData")
+
+#if DEBUG
+        return button.accessibilityValue(
+            Text(
+                AppRuntimeEnvironment.isUITesting
+                    ? "completed-\(uiTestingClearDataCompletionCount)"
+                    : ""
+            )
+        )
+#else
+        return button
+#endif
     }
 
     private var menuBarToggleRow: some View {

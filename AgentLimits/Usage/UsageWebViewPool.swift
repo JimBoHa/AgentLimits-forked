@@ -85,6 +85,15 @@ struct UsageWebViewActivationPolicy {
 
 // MARK: - WebView Pool
 
+enum UsageWebViewNavigationPolicy {
+    case enabled
+    case disabled
+
+    var allowsProviderNavigation: Bool {
+        self == .enabled
+    }
+}
+
 /// Manages WebViewStore instances for each provider.
 /// Provides shared access and handles data clearing.
 @MainActor
@@ -189,6 +198,7 @@ final class UsageWebViewPool: ObservableObject {
     private let websiteDataClearer: any WebsiteDataClearing
     private let websiteDataStoreProvider: (ProviderAccount) -> WKWebsiteDataStore
     private let quiescenceTimeout: Duration
+    private let navigationPolicy: UsageWebViewNavigationPolicy
 
     /// Called after a newly registered account WebViewStore is ready to observe.
     var onWebViewStoreCreated: ((WebViewStore) -> Void)?
@@ -218,7 +228,8 @@ final class UsageWebViewPool: ObservableObject {
         accountStore: ProviderAccountStore,
         websiteDataClearer: (any WebsiteDataClearing)? = nil,
         websiteDataStoreProvider: ((ProviderAccount) -> WKWebsiteDataStore)? = nil,
-        quiescenceTimeout: Duration = .seconds(5)
+        quiescenceTimeout: Duration = .seconds(5),
+        navigationPolicy: UsageWebViewNavigationPolicy = .enabled
     ) {
         self.managedProviders = Set(providers)
         self.accountStore = accountStore
@@ -235,6 +246,7 @@ final class UsageWebViewPool: ObservableObject {
             self.websiteDataStoreProvider = { _ in .nonPersistent() }
         }
         self.quiescenceTimeout = quiescenceTimeout
+        self.navigationPolicy = navigationPolicy
         registerCurrentAccounts()
     }
 
@@ -688,7 +700,8 @@ final class UsageWebViewPool: ObservableObject {
         let accountID = store.account.id
         store.isNavigationAllowed = { [weak self] in
             guard let self else { return false }
-            return self.activeDataClear == nil
+            return self.navigationPolicy.allowsProviderNavigation
+                && self.activeDataClear == nil
                 && !self.retiringOrRemovedAccountIDs.contains(accountID)
         }
     }
