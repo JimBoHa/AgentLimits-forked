@@ -55,6 +55,7 @@
 "settings.hideMenuBarIcon" = "隱藏選單列圖示";
 "settings.hideMenuBarIcon.hint" = "隱藏後，雙擊應用程式圖示即可暫時顯示。";
 "settings.menuBar.sectionTitle" = "選單列";
+"accessibility.menuBar.noProviders" = "選單列中未顯示任何供應商。";
 
 /* Display Mode */
 "displayMode.used" = "使用率";
@@ -257,6 +258,7 @@
 "activity.observed" = "觀測於";
 "activity.refresh" = "重新整理工作階段";
 "activity.credentialTitle" = "GitHub 工作階段憑證";
+"activity.manageCredential" = "管理 GitHub 工作階段憑證";
 "activity.credentialPlaceholder" = "貼上憑證";
 "activity.credentialHelp" = "請使用僅有儲存庫「Agent tasks」讀取權限的細部 PAT 或 GitHub App 使用者存取權杖。它只會保留在此裝置的鑰匙圈中。此 API 正處於公開預覽階段。";
 "activity.credentialStored" = "已為此帳號儲存憑證。";

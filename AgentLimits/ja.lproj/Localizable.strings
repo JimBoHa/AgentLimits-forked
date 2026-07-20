@@ -56,6 +56,7 @@
 "settings.hideMenuBarIcon" = "メニューバーアイコンを隠す";
 "settings.hideMenuBarIcon.hint" = "隠している間は、起動中のままアプリアイコンをダブルクリックすると一時的に再表示されます。";
 "settings.menuBar.sectionTitle" = "メニューバー";
+"accessibility.menuBar.noProviders" = "メニューバーに表示中のプロバイダーはありません。";
 
 /* Display Mode */
 "displayMode.used" = "使用率";
@@ -256,6 +257,7 @@
 "activity.observed" = "確認日時";
 "activity.refresh" = "セッションを更新";
 "activity.credentialTitle" = "GitHubセッション認証情報";
+"activity.manageCredential" = "GitHubセッション認証情報を管理";
 "activity.credentialPlaceholder" = "認証情報を貼り付け";
 "activity.credentialHelp" = "リポジトリの「Agent tasks」読み取り権限だけを付与したFine-grained PATまたはGitHub Appのユーザーアクセストークンを使用してください。このデバイスのキーチェーン内だけに保存されます。このAPIはパブリックプレビューです。";
 "activity.credentialStored" = "このアカウントの認証情報が保存されています。";

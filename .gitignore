@@ -46,6 +46,9 @@ fastlane/test_output
 
 # Local tools
 .*/
+!.github/
+!.github/workflows/
+!.github/workflows/*.yml
 # Logs / temp
 *.log
 *.tmp

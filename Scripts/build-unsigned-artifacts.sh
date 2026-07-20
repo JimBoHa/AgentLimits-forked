@@ -56,6 +56,7 @@ if ! xcodebuild archive \
     -scheme AgentLimits \
     -configuration Release \
     -destination 'generic/platform=macOS' \
+    -onlyUsePackageVersionsFromResolvedFile \
     -archivePath "$mac_archive" \
     CODE_SIGNING_ALLOWED=NO \
     CODE_SIGNING_REQUIRED=NO \
@@ -74,6 +75,7 @@ if ! xcodebuild archive \
     -scheme AgentLimitsiOS \
     -configuration Release \
     -destination 'generic/platform=iOS' \
+    -onlyUsePackageVersionsFromResolvedFile \
     -archivePath "$ios_archive" \
     CODE_SIGNING_ALLOWED=NO \
     CODE_SIGNING_REQUIRED=NO \

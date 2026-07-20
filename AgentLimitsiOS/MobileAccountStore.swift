@@ -79,6 +79,7 @@ final class MobileAccountStore: ObservableObject, MobileAccountResolving {
 
     @Published private(set) var accounts: [MobileProviderAccount]
     @Published private(set) var didRecoverCorruptData = false
+    @Published private(set) var didClearCredentialsDuringRecovery = false
     @Published private(set) var unsupportedStoredVersion: Int?
     @Published private(set) var recoveryFailure: MobileAccountStoreError?
     private(set) var pendingCredentialDeletionIDs: Set<UUID> = []
@@ -308,22 +309,38 @@ final class MobileAccountStore: ObservableObject, MobileAccountResolving {
         accounts = sanitized
         pendingCredentialDeletionIDs = pending
 
-        if sanitized != payload.accounts
-            || pendingSanitization.exceededMaximumCount {
+        let accountsChanged = sanitized != payload.accounts
+        let requiresCredentialPurge =
+            !Self.hasSameAccountIdentity(sanitized, payload.accounts)
+            || pendingSanitization.exceededMaximumCount
+        if accountsChanged || pendingSanitization.exceededMaximumCount {
             didRecoverCorruptData = true
             do {
-                try purgeOrphanedCredentials()
-                pendingCredentialDeletionIDs.removeAll()
-                try persist(
-                    sanitized,
-                    pendingCredentialDeletionIDs: []
-                )
+                if requiresCredentialPurge {
+                    try purgeOrphanedCredentials()
+                    didClearCredentialsDuringRecovery = true
+                    pendingCredentialDeletionIDs.removeAll()
+                    try persist(
+                        sanitized,
+                        pendingCredentialDeletionIDs: []
+                    )
+                } else {
+                    // Labels and ordering are not part of the Keychain
+                    // namespace. Repair them without deleting reachable
+                    // credentials keyed by the unchanged account UUIDs.
+                    try persist(
+                        sanitized,
+                        pendingCredentialDeletionIDs: pending
+                    )
+                }
             } catch let error as MobileAccountStoreError {
                 recoveryFailure = error
+                return
             } catch {
                 recoveryFailure = .orphanedCredentialCleanupFailed
+                return
             }
-            return
+            if requiresCredentialPurge { return }
         }
 
         guard !pending.isEmpty else {
@@ -345,6 +362,7 @@ final class MobileAccountStore: ObservableObject, MobileAccountResolving {
         pendingCredentialDeletionIDs.removeAll()
         do {
             try purgeOrphanedCredentials()
+            didClearCredentialsDuringRecovery = true
             try persist(
                 recovered,
                 pendingCredentialDeletionIDs: []
@@ -430,6 +448,13 @@ final class MobileAccountStore: ObservableObject, MobileAccountResolving {
         }
     }
 
+    private static func hasSameAccountIdentity(
+        _ lhs: [MobileProviderAccount],
+        _ rhs: [MobileProviderAccount]
+    ) -> Bool {
+        lhs.count == rhs.count && Set(lhs.map(\.id)) == Set(rhs.map(\.id))
+    }
+
     private func commit(_ updated: [MobileProviderAccount]) throws {
         try commitState(
             updated,
@@ -467,6 +492,9 @@ final class MobileAccountStore: ObservableObject, MobileAccountResolving {
                 }
         )
         guard let data = try? encoder.encode(payload) else {
+            throw MobileAccountStoreError.persistenceFailed
+        }
+        guard data.count <= Self.maximumPayloadBytes else {
             throw MobileAccountStoreError.persistenceFailed
         }
         guard persistenceWriter(data, key, defaults) else {

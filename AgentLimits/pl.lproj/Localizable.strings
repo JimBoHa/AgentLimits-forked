@@ -55,6 +55,7 @@
 "settings.hideMenuBarIcon" = "Ukryj ikonę paska menu";
 "settings.hideMenuBarIcon.hint" = "Gdy jest ukryta, kliknij dwukrotnie ikonę aplikacji, aby tymczasowo ją wyświetlić.";
 "settings.menuBar.sectionTitle" = "Pasek menu";
+"accessibility.menuBar.noProviders" = "Na pasku menu nie są wyświetlani żadni dostawcy.";
 
 /* Display Mode */
 "displayMode.used" = "Wskaźnik użycia";
@@ -257,6 +258,7 @@
 "activity.observed" = "Zaobserwowano";
 "activity.refresh" = "Odśwież sesje";
 "activity.credentialTitle" = "Dane uwierzytelniające sesji GitHub";
+"activity.manageCredential" = "Zarządzaj danymi uwierzytelniającymi sesji GitHub";
 "activity.credentialPlaceholder" = "Wklej dane uwierzytelniające";
 "activity.credentialHelp" = "Użyj szczegółowego tokenu PAT lub tokenu dostępu użytkownika GitHub App wyłącznie z uprawnieniem do odczytu „Agent tasks” w repozytoriach. Pozostaje on w pęku kluczy tego urządzenia. Interfejs API jest w publicznej wersji zapoznawczej.";
 "activity.credentialStored" = "Dane uwierzytelniające tego konta są zapisane.";

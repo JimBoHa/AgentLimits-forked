@@ -55,6 +55,7 @@
 "settings.hideMenuBarIcon" = "Menü çubuğu simgesini gizle";
 "settings.hideMenuBarIcon.hint" = "Gizliyken uygulama simgesine çift tıklayarak geçici olarak gösterebilirsiniz.";
 "settings.menuBar.sectionTitle" = "Menü çubuğu";
+"accessibility.menuBar.noProviders" = "Menü çubuğunda hiçbir sağlayıcı gösterilmiyor.";
 
 /* Display Mode */
 "displayMode.used" = "Kullanım oranı";
@@ -257,6 +258,7 @@
 "activity.observed" = "Gözlemlendi";
 "activity.refresh" = "Oturumları yenile";
 "activity.credentialTitle" = "GitHub oturum kimlik bilgisi";
+"activity.manageCredential" = "GitHub oturum kimlik bilgisini yönet";
 "activity.credentialPlaceholder" = "Kimlik bilgisini yapıştırın";
 "activity.credentialHelp" = "Yalnızca depolarda “Agent tasks” okuma iznine sahip ayrıntılı bir PAT veya GitHub App kullanıcı erişim belirteci kullanın. Bu aygıtın Anahtar Zinciri’nde kalır. API herkese açık önizlemededir.";
 "activity.credentialStored" = "Bu hesap için bir kimlik bilgisi saklanıyor.";

@@ -73,6 +73,124 @@ final class MobileAccountStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testUnicodeLabelsFitPersistenceAndWatchTransportBudgets() throws {
+        try withDefaults { defaults in
+            let family = "👨‍👩‍👧‍👦"
+            let oversizedLabel = String(
+                repeating: family,
+                count: MobileProviderAccount.maximumLabelLength
+            )
+            let store = MobileAccountStore(defaults: defaults)
+            let account = try store.addAccount(
+                provider: .copilot,
+                label: oversizedLabel
+            )
+
+            XCTAssertFalse(account.label.isEmpty)
+            XCTAssertLessThanOrEqual(
+                account.label.count,
+                MobileProviderAccount.maximumLabelLength
+            )
+            XCTAssertLessThanOrEqual(
+                account.label.utf8.count,
+                MobileProviderAccount.maximumLabelUTF8Bytes
+            )
+            XCTAssertEqual(
+                MobileProviderAccount.maximumLabelUTF8Bytes,
+                WatchCompanionAccountStatus.maximumLabelUTF8Bytes
+            )
+            XCTAssertNoThrow(
+                try WatchCompanionAccountStatus(
+                    id: account.id,
+                    provider: .copilot,
+                    label: account.label,
+                    isEnabled: true,
+                    availability: .unsupported,
+                    working: nil,
+                    waiting: nil,
+                    open: nil,
+                    observedAt: nil,
+                    retryAt: nil
+                )
+            )
+
+            let reloaded = MobileAccountStore(defaults: defaults)
+            XCTAssertEqual(reloaded.account(id: account.id), account)
+        }
+    }
+
+    @MainActor
+    func testLegacyUnicodeLabelRepairPreservesReachableCredentials() throws {
+        try withDefaults { defaults in
+            let baseline = MobileAccountStore(defaults: defaults)
+            let target = try XCTUnwrap(
+                baseline.accounts(for: .copilot).first
+            )
+            let legacyLabel = String(
+                repeating: "👨‍👩‍👧‍👦",
+                count: MobileProviderAccount.maximumLabelLength
+            )
+            XCTAssertGreaterThan(
+                legacyLabel.utf8.count,
+                MobileProviderAccount.maximumLabelUTF8Bytes
+            )
+            let legacyAccounts = baseline.accounts.map { account in
+                LegacyAccount(
+                    id: account.id,
+                    provider: account.provider,
+                    createdAt: account.createdAt,
+                    label: account.id == target.id
+                        ? legacyLabel
+                        : account.label,
+                    isEnabled: account.isEnabled
+                )
+            }
+            defaults.set(
+                try JSONEncoder().encode(
+                    LegacyPayload(version: 1, accounts: legacyAccounts)
+                ),
+                forKey: MobileAccountStore.persistenceKey
+            )
+            var credentialPurgeCount = 0
+
+            let recovered = MobileAccountStore(
+                defaults: defaults,
+                purgeOrphanedCredentials: {
+                    credentialPurgeCount += 1
+                }
+            )
+
+            XCTAssertTrue(recovered.didRecoverCorruptData)
+            XCTAssertFalse(recovered.didClearCredentialsDuringRecovery)
+            XCTAssertEqual(credentialPurgeCount, 0)
+            XCTAssertEqual(
+                Set(recovered.accounts.map(\.id)),
+                Set(baseline.accounts.map(\.id))
+            )
+            XCTAssertLessThanOrEqual(
+                try XCTUnwrap(recovered.account(id: target.id))
+                    .label.utf8.count,
+                MobileProviderAccount.maximumLabelUTF8Bytes
+            )
+        }
+    }
+
+    func testSingleOversizedGraphemeFallsBackToProviderName() {
+        let oversizedGrapheme = "a" + String(
+            repeating: "\u{301}",
+            count: MobileProviderAccount.maximumLabelUTF8Bytes
+        )
+        XCTAssertEqual(oversizedGrapheme.count, 1)
+
+        let account = MobileProviderAccount(
+            provider: .copilot,
+            label: oversizedGrapheme
+        )
+
+        XCTAssertEqual(account.label, MobileProvider.copilot.displayName)
+    }
+
+    @MainActor
     func testRemovalKeepsAtLeastOneAccountPerProvider() throws {
         try withDefaults { defaults in
             let store = MobileAccountStore(defaults: defaults)
@@ -447,6 +565,19 @@ final class MobileAccountStoreTests: XCTestCase {
             self.accounts = accounts
             self.pendingCredentialDeletionIDs = pendingCredentialDeletionIDs
         }
+    }
+
+    private struct LegacyPayload: Encodable {
+        let version: Int
+        let accounts: [LegacyAccount]
+    }
+
+    private struct LegacyAccount: Encodable {
+        let id: UUID
+        let provider: MobileProvider
+        let createdAt: Date
+        let label: String
+        let isEnabled: Bool
     }
 
     private func withDefaults(

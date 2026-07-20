@@ -10,6 +10,7 @@ import WidgetKit
 
 /// Settings window content displaying usage data and login WebView
 struct ContentView: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject private var viewModel: UsageViewModel
     @ObservedObject private var webViewPool: UsageWebViewPool
     @ObservedObject private var sessionActivityViewModel:
@@ -477,12 +478,12 @@ struct ContentView: View {
         .shadow(color: .black.opacity(isWebViewExpanded ? 0.16 : 0.08), radius: isWebViewExpanded ? 10 : 4, y: 2)
         .padding(.horizontal, panelPadding)
         .padding(.bottom, panelPadding)
-        .animation(.easeInOut(duration: 0.2), value: isWebViewExpanded)
+        .animation(loginPanelAnimation, value: isWebViewExpanded)
     }
 
     private var webViewPanelHandle: some View {
         Button {
-            withAnimation(.easeInOut(duration: 0.2)) {
+            withAnimation(loginPanelAnimation) {
                 isWebViewExpanded.toggle()
             }
         } label: {
@@ -513,9 +514,13 @@ struct ContentView: View {
 
     private func collapseWebViewPanel() {
         guard isWebViewExpanded else { return }
-        withAnimation(.easeInOut(duration: 0.2)) {
+        withAnimation(loginPanelAnimation) {
             isWebViewExpanded = false
         }
+    }
+
+    private var loginPanelAnimation: Animation? {
+        reduceMotion ? nil : .easeInOut(duration: 0.2)
     }
 
     private var loginWebViewSection: some View {
