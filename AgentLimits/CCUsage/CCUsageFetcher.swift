@@ -339,12 +339,13 @@ final class CCUsageFetcher {
         isTodayEntry: (InternalDailyEntry) -> Bool,
         parseDate: (InternalDailyEntry) -> Date?,
         normalizeToISO: (InternalDailyEntry) -> String
-    ) -> TokenUsageSnapshot {
+    ) throws -> TokenUsageSnapshot {
         let endOfToday = calendar.date(
             byAdding: .day,
             value: 1,
             to: calendar.startOfDay(for: now)
         ) ?? now
+        try dailyEntries.forEach { try Self.validateNumericFields($0) }
         let datedEntries = dailyEntries.compactMap { entry -> (InternalDailyEntry, Date)? in
             guard let date = parseDate(entry), date < endOfToday else { return nil }
             return (entry, date)
@@ -361,17 +362,19 @@ final class CCUsageFetcher {
 
         // Aggregate week totals from the start-of-week date.
         let weekEntries = datedEntries.filter { $0.1 >= startOfWeek }.map(\.0)
+        let weekTotals = try Self.aggregate(weekEntries)
         let thisWeek = TokenUsagePeriod(
-            costUSD: weekEntries.reduce(0) { $0 + $1.costUSD },
-            totalTokens: weekEntries.reduce(0) { $0 + $1.totalTokens }
+            costUSD: weekTotals.costUSD,
+            totalTokens: weekTotals.totalTokens
         )
 
         let monthComponents = calendar.dateComponents([.year, .month], from: now)
         let startOfMonth = calendar.date(from: monthComponents) ?? startOfWeek
         let monthEntries = datedEntries.filter { $0.1 >= startOfMonth }.map(\.0)
+        let monthTotals = try Self.aggregate(monthEntries)
         let thisMonth = TokenUsagePeriod(
-            costUSD: monthEntries.reduce(0) { $0 + $1.costUSD },
-            totalTokens: monthEntries.reduce(0) { $0 + $1.totalTokens }
+            costUSD: monthTotals.costUSD,
+            totalTokens: monthTotals.totalTokens
         )
 
         // Build daily usage entries with normalized ISO8601 dates for heatmap.
@@ -390,6 +393,40 @@ final class CCUsageFetcher {
             thisMonth: thisMonth,
             dailyUsage: dailyUsage
         )
+    }
+
+    private static func validateNumericFields(
+        _ entry: InternalDailyEntry
+    ) throws {
+        guard entry.totalTokens >= 0,
+              entry.costUSD.isFinite,
+              entry.costUSD >= 0 else {
+            throw CCUsageFetcherError.parseError(
+                "Daily usage contains invalid numeric values"
+            )
+        }
+    }
+
+    private static func aggregate(
+        _ entries: [InternalDailyEntry]
+    ) throws -> (costUSD: Double, totalTokens: Int) {
+        var costUSD = 0.0
+        var totalTokens = 0
+
+        for entry in entries {
+            let (updatedTokens, tokenOverflow) = totalTokens
+                .addingReportingOverflow(entry.totalTokens)
+            let updatedCost = costUSD + entry.costUSD
+            guard !tokenOverflow, updatedCost.isFinite else {
+                throw CCUsageFetcherError.parseError(
+                    "Daily usage totals exceed supported numeric bounds"
+                )
+            }
+            totalTokens = updatedTokens
+            costUSD = updatedCost
+        }
+
+        return (costUSD, totalTokens)
     }
 
     /// Parses Claude (ccusage) response
@@ -413,7 +450,7 @@ final class CCUsageFetcher {
         }
         // Build standardized snapshot from normalized entries.
         // Claude dates are already in ISO8601 format, so return as-is.
-        return buildSnapshot(
+        return try buildSnapshot(
             provider: provider,
             dailyEntries: dailyEntries,
             startOfWeek: startOfWeek,
@@ -443,7 +480,7 @@ final class CCUsageFetcher {
                 costUSD: entry.costUSD
             )
         }
-        return buildSnapshot(
+        return try buildSnapshot(
             provider: provider,
             dailyEntries: dailyEntries,
             startOfWeek: startOfWeek,
