@@ -84,6 +84,31 @@ final class DistributionScriptTests: XCTestCase {
         }
     }
 
+    func testReleaseBuildsUseOnlyResolvedPackageVersions() throws {
+        let lockFlag = "-onlyUsePackageVersionsFromResolvedFile"
+        for name in [
+            "build-unsigned-artifacts.sh",
+            "package-macos.sh",
+            "export-ios.sh"
+        ] {
+            let script = try releaseScript(named: name)
+            let commands = xcodebuildCommands(in: script)
+            let dependencyResolvingCommands = commands.filter {
+                $0.contains("xcodebuild archive") || $0.contains("-showBuildSettings")
+            }
+            XCTAssertEqual(dependencyResolvingCommands.count, 2, name)
+            XCTAssertTrue(
+                dependencyResolvingCommands.allSatisfy { $0.contains(lockFlag) },
+                name
+            )
+            XCTAssertTrue(
+                commands.filter { $0.contains("-exportArchive") }
+                    .allSatisfy { !$0.contains(lockFlag) },
+                name
+            )
+        }
+    }
+
     func testHostileXcodeEnvironmentIsReplaced() throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -682,6 +707,30 @@ final class DistributionScriptTests: XCTestCase {
             contentsOf: repositoryRoot.appendingPathComponent("Scripts/\(name)"),
             encoding: .utf8
         )
+    }
+
+    private func xcodebuildCommands(in script: String) -> [String] {
+        let lines = script.split(separator: "\n", omittingEmptySubsequences: false)
+            .map(String.init)
+        var commands: [String] = []
+        var index = 0
+
+        while index < lines.count {
+            guard lines[index].contains("xcodebuild") else {
+                index += 1
+                continue
+            }
+
+            var command = lines[index]
+            while lines[index].trimmingCharacters(in: .whitespaces).hasSuffix("\\"),
+                  index + 1 < lines.count {
+                index += 1
+                command += "\n" + lines[index]
+            }
+            commands.append(command)
+            index += 1
+        }
+        return commands
     }
 
     private func temporaryDirectory() throws -> URL {
