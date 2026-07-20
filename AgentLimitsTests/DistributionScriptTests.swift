@@ -2,6 +2,42 @@ import Foundation
 import XCTest
 
 final class DistributionScriptTests: XCTestCase {
+    func testDependencySecurityConfigurationStaysEnforced() throws {
+        let workflow = try repositoryFile(".github/workflows/dependency-review.yml")
+        XCTAssertTrue(workflow.contains("pull_request:"))
+        XCTAssertFalse(workflow.contains("pull_request_target"))
+        XCTAssertTrue(workflow.contains("permissions:\n  contents: read"))
+        XCTAssertFalse(workflow.contains("pull-requests: write"))
+        XCTAssertFalse(workflow.contains("secrets."))
+        XCTAssertFalse(workflow.contains("actions/checkout"))
+        XCTAssertTrue(workflow.contains("fail-on-severity: moderate"))
+        XCTAssertTrue(
+            workflow.contains("fail-on-scopes: runtime, development, unknown")
+        )
+        XCTAssertTrue(workflow.contains("vulnerability-check: true"))
+        XCTAssertTrue(workflow.contains("warn-only: false"))
+        XCTAssertTrue(workflow.contains("comment-summary-in-pr: never"))
+        let pinnedActionPattern =
+            #"uses: actions/dependency-review-action@[0-9a-f]{40} # v[0-9]+\.[0-9]+\.[0-9]+"#
+        XCTAssertNotNil(
+            workflow.range(of: pinnedActionPattern, options: .regularExpression)
+        )
+        XCTAssertFalse(workflow.contains("actions/dependency-review-action@v"))
+
+        let dependabot = try repositoryFile(".github/dependabot.yml")
+        XCTAssertTrue(dependabot.contains("version: 2"))
+        XCTAssertEqual(
+            occurrences(of: "package-ecosystem: swift", in: dependabot),
+            1
+        )
+        XCTAssertEqual(
+            occurrences(of: "package-ecosystem: github-actions", in: dependabot),
+            1
+        )
+        XCTAssertEqual(occurrences(of: "directory: /", in: dependabot), 2)
+        XCTAssertEqual(occurrences(of: "interval: weekly", in: dependabot), 2)
+    }
+
     func testSigningConfigAcceptsOnlyCanonicalTeamAssignment() throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -707,6 +743,17 @@ final class DistributionScriptTests: XCTestCase {
             contentsOf: repositoryRoot.appendingPathComponent("Scripts/\(name)"),
             encoding: .utf8
         )
+    }
+
+    private func repositoryFile(_ path: String) throws -> String {
+        try String(
+            contentsOf: repositoryRoot.appendingPathComponent(path),
+            encoding: .utf8
+        )
+    }
+
+    private func occurrences(of needle: String, in haystack: String) -> Int {
+        haystack.components(separatedBy: needle).count - 1
     }
 
     private func xcodebuildCommands(in script: String) -> [String] {
