@@ -13,6 +13,7 @@ dependency_exception_error() {
 
 validate_dependency_exception_registry() {
   local registry="$1"
+  local allow_ghsas
   local today
 
   [[ -f "$registry" && ! -L "$registry" ]] \
@@ -23,7 +24,7 @@ validate_dependency_exception_registry() {
     || dependency_exception_error "jq is required"
 
   today="$(date -u +%F)"
-  if ! jq -e --arg today "$today" '
+  if ! allow_ghsas="$(jq -er --slurp --arg today "$today" '
     def nonempty_string:
       type == "string" and test("[^[:space:]]");
     def valid_date($minimum):
@@ -76,25 +77,32 @@ validate_dependency_exception_registry() {
       and (.compensating_controls | nonempty_string)
       and (.expires_on | valid_date($minimum));
 
-    type == "object"
-    and keys == ["exceptions", "schema_version"]
-    and .schema_version == 1
-    and (.exceptions | type == "array")
-    and (.exceptions | all(.[]; valid_exception($today)))
-    and (
-      [.exceptions[].ghsa]
-      | length == (unique | length)
-    )
-    and (
-      [.exceptions[].ghsa]
-      | . == sort
-    )
-  ' "$registry" >/dev/null; then
+    def valid_registry($minimum):
+      type == "object"
+      and keys == ["exceptions", "schema_version"]
+      and .schema_version == 1
+      and (.exceptions | type == "array")
+      and (.exceptions | all(.[]; valid_exception($minimum)))
+      and (
+        [.exceptions[].ghsa]
+        | length == (unique | length)
+      )
+      and (
+        [.exceptions[].ghsa]
+        | . == sort
+      );
+
+    if length == 1 and (.[0] | valid_registry($today)) then
+      .[0] | [.exceptions[].ghsa] | join(",")
+    else
+      empty
+    end
+  ' "$registry")"; then
     dependency_exception_error \
       "registry is malformed, duplicated, unsorted, or contains an expired record"
   fi
 
-  jq -r '[.exceptions[].ghsa] | join(",")' "$registry"
+  printf '%s\n' "$allow_ghsas"
 }
 
 prepare_dependency_exceptions_for_pull_request() {

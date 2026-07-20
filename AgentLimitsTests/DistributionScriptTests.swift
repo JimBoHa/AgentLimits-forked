@@ -101,6 +101,25 @@ final class DistributionScriptTests: XCTestCase {
         XCTAssertTrue(result.output.contains("expired record"), result.output)
     }
 
+    func testDependencyExceptionRegistryRejectsHiddenExpiredRecord() throws {
+        let contents = dependencyExceptionRegistry(expiresOn: "2000-01-01") + "\n" + """
+        {
+          "schema_version": 1,
+          "exceptions": []
+        }
+        """
+        let fixture = try temporaryFile(
+            named: "dependency-review-exceptions.json",
+            contents: contents
+        )
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+        let result = try runDependencyExceptionValidator(registry: fixture.file)
+
+        XCTAssertEqual(result.status, 78, result.output)
+        XCTAssertTrue(result.output.contains("expired record"), result.output)
+    }
+
     func testDependencyExceptionRegistryEmitsOnlyRegisteredAdvisories() throws {
         let fixture = try temporaryFile(
             named: "dependency-review-exceptions.json",
