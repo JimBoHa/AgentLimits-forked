@@ -70,6 +70,9 @@ jobs:
             exit 1
           fi
 
+      - name: Reject committed Apple credential artifacts
+        run: Scripts/reject-apple-credential-artifacts.sh
+
   tests:
     name: Test — ${{ matrix.name }}
     needs: source-gates

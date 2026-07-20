@@ -2,6 +2,120 @@ import Foundation
 import XCTest
 
 final class DistributionScriptTests: XCTestCase {
+    func testAppleCredentialArtifactGuardIsLiveAndCaseInsensitive() throws {
+        let gitignore = try repositoryText(".gitignore")
+        let workflow = try repositoryText(".github/workflows/apple-ci.yml")
+        let ignoredPatterns = [
+            "*.[pP]8",
+            "*.[pP]12",
+            "*.[pP][fF][xX]",
+            "*.[pP][eE][mM]",
+            "*.[kK][eE][yY]",
+            "*.[kK][eE][yY][cC][hH][aA][iI][nN]",
+            "*.[kK][eE][yY][cC][hH][aA][iI][nN]-[dD][bB]",
+            "*.[mM][oO][bB][iI][lL][eE][pP][rR][oO][vV][iI][sS][iI][oO][nN]",
+            "*.[pP][rR][oO][vV][iI][sS][iI][oO][nN][pP][rR][oO][fF][iI][lL][eE]",
+            "*.[xX][cC][aA][rR][cC][hH][iI][vV][eE]/"
+        ]
+
+        for pattern in ignoredPatterns {
+            XCTAssertTrue(
+                gitignore.components(separatedBy: .newlines).contains(pattern),
+                pattern
+            )
+        }
+
+        let lines = workflow.components(separatedBy: .newlines)
+        let sourceGates = try XCTUnwrap(
+            lines.firstIndex(of: "  source-gates:")
+        )
+        let testMatrix = try XCTUnwrap(lines.firstIndex(of: "  tests:"))
+        let sourceGateLines = Array(lines[sourceGates..<testMatrix])
+        let step = try XCTUnwrap(
+            sourceGateLines.firstIndex(
+                of: "      - name: Reject committed Apple credential artifacts"
+            )
+        )
+        XCTAssertEqual(
+            sourceGateLines[step + 1],
+            "        run: Scripts/reject-apple-credential-artifacts.sh"
+        )
+
+        let guardScript = try releaseScript(
+            named: "reject-apple-credential-artifacts.sh"
+        )
+        XCTAssertTrue(guardScript.contains("git -C \"$repository\" ls-files -z"))
+        XCTAssertEqual(
+            guardScript.components(separatedBy: ":(icase,glob)").count - 1,
+            10
+        )
+        XCTAssertTrue(guardScript.contains("printf 'Tracked Apple credential artifact rejected: %q"))
+    }
+
+    func testAppleCredentialGuardRejectsForcedTrackedPathologicalNames() throws {
+        let repository = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: repository) }
+        _ = try runGit(["init", "-q", "-b", "main"], in: repository)
+        _ = try runGit(
+            ["config", "user.name", "Apple Credential Guard Fixture"],
+            in: repository
+        )
+        _ = try runGit(
+            ["config", "user.email", "fixture@example.invalid"],
+            in: repository
+        )
+        try Data(try repositoryText(".gitignore").utf8).write(
+            to: repository.appendingPathComponent(".gitignore")
+        )
+        try Data("safe\n".utf8).write(
+            to: repository.appendingPathComponent("README.md")
+        )
+        _ = try runGit(["add", ".gitignore", "README.md"], in: repository)
+        _ = try runGit(["commit", "-q", "-m", "base"], in: repository)
+
+        var result = try runAppleCredentialGuard(repository: repository)
+        XCTAssertEqual(result.status, 0, result.output)
+        XCTAssertEqual(result.output, "")
+
+        let trackedArtifacts = [
+            "Secrets/AuthKey.P8",
+            "Secrets/Distribution.P12",
+            "Profiles/Review.mobileProvision",
+            "Archives/App.XcArChIvE/Info.plist",
+            "Secrets/private.Pem",
+            "Secrets/line\nbreak.PEM"
+        ]
+        for path in trackedArtifacts {
+            let file = repository.appendingPathComponent(path)
+            try FileManager.default.createDirectory(
+                at: file.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            try Data("fixture\n".utf8).write(to: file)
+        }
+
+        let ordinaryPaths = Array(trackedArtifacts.dropLast())
+        let ignored = try runGit(
+            ["check-ignore", "--no-index", "--"] + ordinaryPaths,
+            in: repository
+        )
+        for path in ordinaryPaths {
+            XCTAssertTrue(ignored.contains(path), path)
+        }
+        _ = try runGit(["add", "-f", "--"] + trackedArtifacts, in: repository)
+
+        result = try runAppleCredentialGuard(repository: repository)
+        XCTAssertEqual(result.status, 78, result.output)
+        XCTAssertEqual(
+            result.output.components(
+                separatedBy: "Tracked Apple credential artifact rejected:"
+            ).count - 1,
+            trackedArtifacts.count,
+            result.output
+        )
+        XCTAssertTrue(result.output.contains(#"line\nbreak.PEM"#), result.output)
+    }
+
     func testDependencySecurityConfigurationStaysEnforced() throws {
         let configResult = try runDependencySecurityConfigValidator(
             workflow: repositoryRoot.appendingPathComponent(
@@ -3434,6 +3548,27 @@ final class DistributionScriptTests: XCTestCase {
             environment,
             uniquingKeysWith: { _, override in override }
         )
+        let output = Pipe()
+        process.standardOutput = output
+        process.standardError = output
+        try process.run()
+        process.waitUntilExit()
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        return (
+            process.terminationStatus,
+            String(decoding: data, as: UTF8.self)
+        )
+    }
+
+    private func runAppleCredentialGuard(
+        repository: URL
+    ) throws -> (status: Int32, output: String) {
+        let process = Process()
+        process.executableURL = repositoryRoot.appendingPathComponent(
+            "Scripts/reject-apple-credential-artifacts.sh"
+        )
+        process.arguments = [repository.path]
+        process.environment = dependencyPolicyProcessEnvironment()
         let output = Pipe()
         process.standardOutput = output
         process.standardError = output
