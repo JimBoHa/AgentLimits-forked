@@ -318,6 +318,7 @@ struct MobileRootView: View {
             )
         )
         .disabled(!accountStore.canMutate)
+        .accessibilityLabel("Refresh \(account.label) when active")
     }
 
     private func refreshButton(
@@ -332,6 +333,7 @@ struct MobileRootView: View {
         }
         .buttonStyle(.bordered)
         .disabled(activityController.isFetching(accountID: account.id))
+        .accessibilityLabel("Refresh \(account.label)")
         .accessibilityIdentifier(
             "mobile.refresh.\(account.id.uuidString.lowercased())"
         )

@@ -1,0 +1,220 @@
+name: Apple CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DEVELOPER_DIR: /Applications/Xcode.app/Contents/Developer
+  LANG: en_US.UTF-8
+  TZ: America/Los_Angeles
+
+jobs:
+  source-gates:
+    name: Source gates
+    runs-on: macos-26
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Record toolchain
+        run: xcodebuild -version
+
+      - name: Validate shell syntax
+        run: |
+          for script in Scripts/*.sh AgentLimits/Scripts/*.sh; do
+            bash -n "$script"
+          done
+
+      - name: Validate property lists and privacy manifests
+        run: |
+          while IFS= read -r -d '' plist; do
+            plutil -lint "$plist"
+          done < <(find . -path './.git' -prune -o -type f \
+            \( -name '*.plist' -o -name '*.xcprivacy' -o -name '*.entitlements' \) \
+            -print0)
+
+      - name: Reject whitespace errors
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          BEFORE_SHA: ${{ github.event.before }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          if [[ "$EVENT_NAME" == "pull_request" ]]; then
+            comparison_base="$(git merge-base "origin/$BASE_REF" HEAD)"
+          elif [[ -n "$BEFORE_SHA" && ! "$BEFORE_SHA" =~ ^0+$ ]]; then
+            comparison_base="$BEFORE_SHA"
+          else
+            comparison_base="HEAD^"
+          fi
+          git diff --check "$comparison_base" HEAD
+
+      - name: Reject common committed secrets
+        run: |
+          if git grep -nE '(ghp_[[:alnum:]]{20,}|github_pat_[[:alnum:]_]{20,}|-----BEGIN ((RSA|EC|OPENSSH|ENCRYPTED) )?PRIVATE KEY-----)' -- .; then
+            echo 'Possible credential or private key committed to source.' >&2
+            exit 1
+          fi
+
+  tests:
+    name: Test — ${{ matrix.name }}
+    needs: source-gates
+    runs-on: macos-26
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS
+            scheme: AgentLimits
+            destination: platform=macOS
+            result: macOS
+          - name: iPhone
+            scheme: AgentLimitsiOS
+            destination: platform=iOS Simulator,name=iPhone 17 Pro,OS=latest
+            result: iPhone
+          - name: iPad
+            scheme: AgentLimitsiOS
+            destination: platform=iOS Simulator,name=iPad Pro 13-inch (M5),OS=latest
+            result: iPad
+          - name: Apple Watch
+            scheme: AgentLimitsWatch
+            destination: platform=watchOS Simulator,name=Apple Watch Series 11 (46mm),OS=latest
+            result: Watch
+    steps:
+      - name: Check out source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Run tests
+        run: |
+          xcodebuild test \
+            -project AgentLimits.xcodeproj \
+            -scheme "${{ matrix.scheme }}" \
+            -configuration Debug \
+            -destination "${{ matrix.destination }}" \
+            -onlyUsePackageVersionsFromResolvedFile \
+            -resultBundlePath "$RUNNER_TEMP/${{ matrix.result }}.xcresult" \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData-${{ matrix.result }}" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY= \
+            DEVELOPMENT_TEAM= \
+            COMPILER_INDEX_STORE_ENABLE=NO \
+            SWIFT_TREAT_WARNINGS_AS_ERRORS=YES \
+            GCC_TREAT_WARNINGS_AS_ERRORS=YES
+
+      - name: Upload test result
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: test-result-${{ matrix.result }}
+          path: ${{ runner.temp }}/${{ matrix.result }}.xcresult
+          if-no-files-found: error
+          retention-days: 14
+
+  analyze:
+    name: Analyze — ${{ matrix.name }}
+    needs: source-gates
+    runs-on: macos-26
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS
+            scheme: AgentLimits
+            destination: generic/platform=macOS
+            result: Analyze-macOS
+          - name: macOS widget
+            scheme: AgentLimitsWidgetExtension
+            destination: generic/platform=macOS
+            result: Analyze-Widget
+          - name: iOS and embedded Watch
+            scheme: AgentLimitsiOS
+            destination: generic/platform=iOS
+            result: Analyze-iOS
+          - name: standalone Watch
+            scheme: AgentLimitsWatch
+            destination: generic/platform=watchOS
+            result: Analyze-Watch
+    steps:
+      - name: Check out source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Run static analyzer
+        run: |
+          xcodebuild analyze \
+            -project AgentLimits.xcodeproj \
+            -scheme "${{ matrix.scheme }}" \
+            -configuration Release \
+            -destination "${{ matrix.destination }}" \
+            -onlyUsePackageVersionsFromResolvedFile \
+            -resultBundlePath "$RUNNER_TEMP/${{ matrix.result }}.xcresult" \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData-${{ matrix.result }}" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY= \
+            DEVELOPMENT_TEAM= \
+            COMPILER_INDEX_STORE_ENABLE=NO \
+            SWIFT_TREAT_WARNINGS_AS_ERRORS=YES \
+            GCC_TREAT_WARNINGS_AS_ERRORS=YES
+
+      - name: Upload analyzer result
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ matrix.result }}
+          path: ${{ runner.temp }}/${{ matrix.result }}.xcresult
+          if-no-files-found: error
+          retention-days: 14
+
+  unsigned-release-preflight:
+    name: Unsigned Release preflight
+    needs:
+      - source-gates
+      - tests
+      - analyze
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - name: Check out source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Build and inspect unsigned release artifacts
+        run: |
+          Scripts/build-unsigned-artifacts.sh "$RUNNER_TEMP/preflight"
+          cd "$RUNNER_TEMP/preflight"
+          shasum -a 256 -c SHA256SUMS
+
+      - name: Upload non-distributable build evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: unsigned-release-preflight-evidence
+          path: |
+            ${{ runner.temp }}/preflight/BUILD-METADATA.txt
+            ${{ runner.temp }}/preflight/SHA256SUMS
+            ${{ runner.temp }}/preflight/build-macOS.log
+            ${{ runner.temp }}/preflight/build-iOS-watchOS.log
+          if-no-files-found: error
+          retention-days: 14
