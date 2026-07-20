@@ -46,6 +46,30 @@ final class SystemThresholdNotificationCenterClient: ThresholdNotificationCenter
     }
 }
 
+#if DEBUG
+@MainActor
+private final class UITestingThresholdNotificationCenterClient:
+    ThresholdNotificationCenterClient {
+    func isAuthorized() async -> Bool { false }
+
+    func requestAuthorization(
+        options: UNAuthorizationOptions
+    ) async throws -> Bool {
+        false
+    }
+
+    func add(_ request: UNNotificationRequest) async throws {}
+
+    func removePendingNotificationRequests(
+        withIdentifiers identifiers: [String]
+    ) {}
+
+    func removeDeliveredNotifications(
+        withIdentifiers identifiers: [String]
+    ) {}
+}
+#endif
+
 // MARK: - Notification Identifiers
 
 /// Identifiers for threshold notifications
@@ -65,7 +89,17 @@ private enum NotificationIdentifier {
 /// Manages usage threshold notifications
 @MainActor
 final class ThresholdNotificationManager: ObservableObject {
-    static let shared = ThresholdNotificationManager()
+    static let shared: ThresholdNotificationManager = {
+#if DEBUG
+        if AppRuntimeEnvironment.isUITesting {
+            return ThresholdNotificationManager(
+                notificationCenter:
+                    UITestingThresholdNotificationCenterClient()
+            )
+        }
+#endif
+        return ThresholdNotificationManager()
+    }()
 
     @Published private(set) var settings: [UsageProvider: ProviderThresholdSettings]
     @Published private(set) var isNotificationAuthorized: Bool = false

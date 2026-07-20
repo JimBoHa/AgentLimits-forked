@@ -26,7 +26,7 @@ enum ProviderOrderStore {
     /// UserDefaults から表示順を読み込む。未設定の場合は allCases 順を返す。
     /// 将来プロバイダが増えた場合、保存済みリストにない分を末尾に追加する。
     static func loadProviderOrder() -> [UsageProvider] {
-        guard let rawValues = UserDefaults.standard.stringArray(
+        guard let rawValues = AppDefaults.shared.stringArray(
             forKey: UserDefaultsKeys.providerDisplayOrder
         ), !rawValues.isEmpty else {
             return UsageProvider.allCases
@@ -38,7 +38,7 @@ enum ProviderOrderStore {
 
     /// 表示順を UserDefaults に保存する。
     static func saveProviderOrder(_ providers: [UsageProvider]) {
-        UserDefaults.standard.set(
+        AppDefaults.shared.set(
             providers.map(\.rawValue),
             forKey: UserDefaultsKeys.providerDisplayOrder
         )

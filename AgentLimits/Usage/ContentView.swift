@@ -15,17 +15,38 @@ struct ContentView: View {
     @ObservedObject private var sessionActivityViewModel:
         SessionActivityViewModel
     private let accountRemovalManager: ProviderAccountRemovalManager
-    @AppStorage(UserDefaultsKeys.displayMode) private var displayMode: UsageDisplayMode = .used
+    @AppStorage(
+        UserDefaultsKeys.displayMode,
+        store: AppDefaults.shared
+    ) private var displayMode: UsageDisplayMode = .used
     @AppStorage(
         AppGroupConfig.usageRefreshIntervalMinutesKey,
         store: AppGroupDefaults.shared
     ) private var refreshIntervalMinutes: Int = RefreshIntervalConfig.defaultMinutes
-    @AppStorage(UserDefaultsKeys.menuBarStatusCodexEnabled) private var menuBarCodexEnabled = false
-    @AppStorage(UserDefaultsKeys.menuBarStatusClaudeEnabled) private var menuBarClaudeEnabled = false
-    @AppStorage(UserDefaultsKeys.menuBarStatusCopilotEnabled) private var menuBarCopilotEnabled = false
-    @AppStorage(UserDefaultsKeys.menuBarDashboardCodexEnabled) private var menuBarDashboardCodexEnabled = true
-    @AppStorage(UserDefaultsKeys.menuBarDashboardClaudeEnabled) private var menuBarDashboardClaudeEnabled = true
-    @AppStorage(UserDefaultsKeys.menuBarDashboardCopilotEnabled) private var menuBarDashboardCopilotEnabled = true
+    @AppStorage(
+        UserDefaultsKeys.menuBarStatusCodexEnabled,
+        store: AppDefaults.shared
+    ) private var menuBarCodexEnabled = false
+    @AppStorage(
+        UserDefaultsKeys.menuBarStatusClaudeEnabled,
+        store: AppDefaults.shared
+    ) private var menuBarClaudeEnabled = false
+    @AppStorage(
+        UserDefaultsKeys.menuBarStatusCopilotEnabled,
+        store: AppDefaults.shared
+    ) private var menuBarCopilotEnabled = false
+    @AppStorage(
+        UserDefaultsKeys.menuBarDashboardCodexEnabled,
+        store: AppDefaults.shared
+    ) private var menuBarDashboardCodexEnabled = true
+    @AppStorage(
+        UserDefaultsKeys.menuBarDashboardClaudeEnabled,
+        store: AppDefaults.shared
+    ) private var menuBarDashboardClaudeEnabled = true
+    @AppStorage(
+        UserDefaultsKeys.menuBarDashboardCopilotEnabled,
+        store: AppDefaults.shared
+    ) private var menuBarDashboardCopilotEnabled = true
     @State private var orderedProviders: [UsageProvider] = ProviderOrderStore.loadProviderOrder()
     @State private var isShowingClearDataConfirm = false
     @State private var isClearingData = false
@@ -265,6 +286,7 @@ struct ContentView: View {
             popupWebViewStore = nil
             popupWebView = nil
         }
+        .accessibilityIdentifier("mac.usage.root")
     }
 
     // MARK: - Provider Picker
@@ -280,6 +302,7 @@ struct ContentView: View {
         .frame(maxWidth: 260)
         .labelsHidden()
         .accessibilityLabel(Text("content.provider".localized()))
+        .accessibilityIdentifier("mac.usage.providerPicker")
     }
 
     private var selectedAccount: ProviderAccount {
@@ -315,11 +338,13 @@ struct ContentView: View {
             .frame(maxWidth: 190)
             .labelsHidden()
             .accessibilityLabel(Text("content.account".localized()))
+            .accessibilityIdentifier("mac.usage.accountPicker")
 
             Button("accounts.manage".localized()) {
                 isShowingAccountManager = true
             }
             .settingsButtonStyle(.secondary)
+            .accessibilityIdentifier("mac.usage.manageAccounts")
         }
     }
 
@@ -331,6 +356,7 @@ struct ContentView: View {
                 }
                 .disabled(viewModel.isFetching)
                 .settingsButtonStyle(.primary)
+                .accessibilityIdentifier("mac.usage.refresh")
 
                 if viewModel.isFetching {
                     ProgressView()
@@ -342,6 +368,7 @@ struct ContentView: View {
                 }
                 .disabled(isClearingData)
                 .settingsButtonStyle(.destructive)
+                .accessibilityIdentifier("mac.usage.clearData")
 
                 if isClearingData {
                     ProgressView()

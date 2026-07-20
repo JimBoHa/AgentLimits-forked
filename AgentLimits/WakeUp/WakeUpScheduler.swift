@@ -1428,7 +1428,7 @@ final class WakeUpScheduleStore {
     private let userDefaults: UserDefaults
     private let key = "wake_up_schedules"
 
-    init(userDefaults: UserDefaults = .standard) {
+    init(userDefaults: UserDefaults = AppDefaults.shared) {
         self.userDefaults = userDefaults
     }
 
@@ -1462,7 +1462,39 @@ final class WakeUpScheduleStore {
 /// Manages scheduled wake-up calls for AI coding assistants via LaunchAgent
 @MainActor
 final class WakeUpScheduler: ObservableObject {
-    static let shared = WakeUpScheduler()
+    static let shared: WakeUpScheduler = {
+#if DEBUG
+        if AppRuntimeEnvironment.isUITesting,
+           let containerURL =
+            AppRuntimeEnvironment.uiTestingContainerURL {
+            let homeDirectory = containerURL.appendingPathComponent(
+                "home",
+                isDirectory: true
+            )
+            return WakeUpScheduler(
+                launchAgentManager: LaunchAgentManager(
+                    homeDirectory: homeDirectory,
+                    launchCtlRunner: { _ in
+                        LaunchCtlResult(
+                            terminationStatus: 0,
+                            standardError: ""
+                        )
+                    }
+                ),
+                executor: CLIExecutor(
+                    timeout: 1,
+                    homeDirectory: homeDirectory,
+                    shellPath: "/usr/bin/false"
+                ),
+                store: WakeUpScheduleStore(
+                    userDefaults: AppDefaults.shared
+                ),
+                syncOnInit: false
+            )
+        }
+#endif
+        return WakeUpScheduler()
+    }()
 
     /// Providers that support WakeUp CLI scheduling
     static let supportedProviders: [UsageProvider] = UsageProvider.allCases.filter { $0 != .githubCopilot }

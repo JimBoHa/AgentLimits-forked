@@ -54,9 +54,10 @@ final class SettingsWindowController: NSWindowController {
     private func prepareSettingsState() {
         appState.viewModel.updateDisplayMode(
             UsageDisplayMode.makeSelectableMode(
-                from: UserDefaults.standard.string(forKey: UserDefaultsKeys.displayMode)
+                from: AppDefaults.shared.string(forKey: UserDefaultsKeys.displayMode)
             )
         )
+        guard !AppRuntimeEnvironment.isUITesting else { return }
         appState.startBackgroundRefresh()
         appState.resumeWebViewForSettings()
         LoginItemManager.shared.updateStatus()
