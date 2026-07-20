@@ -25,6 +25,7 @@ nonisolated enum MobileProvider: String, Codable, CaseIterable, Identifiable, Se
 
 nonisolated struct MobileProviderAccount: Codable, Equatable, Hashable, Identifiable, Sendable {
     static let maximumLabelLength = 80
+    static let maximumLabelUTF8Bytes = maximumLabelLength * 4
 
     let id: UUID
     let provider: MobileProvider
@@ -62,7 +63,18 @@ nonisolated struct MobileProviderAccount: Codable, Equatable, Hashable, Identifi
     ) -> String {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         let resolved = trimmed.isEmpty ? provider.displayName : trimmed
-        return String(resolved.prefix(maximumLabelLength))
+        var normalized = ""
+        var byteCount = 0
+        for character in resolved.prefix(maximumLabelLength) {
+            let characterText = String(character)
+            let characterBytes = characterText.utf8.count
+            guard characterBytes <= maximumLabelUTF8Bytes - byteCount else {
+                break
+            }
+            normalized.append(character)
+            byteCount += characterBytes
+        }
+        return normalized.isEmpty ? provider.displayName : normalized
     }
 }
 

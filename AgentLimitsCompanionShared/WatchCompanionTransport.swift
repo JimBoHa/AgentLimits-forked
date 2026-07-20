@@ -69,6 +69,7 @@ nonisolated struct WatchCompanionAccountStatus:
     Identifiable,
     Sendable {
     static let maximumLabelLength = 80
+    static let maximumLabelUTF8Bytes = maximumLabelLength * 4
 
     let id: UUID
     let provider: WatchCompanionProvider
@@ -171,7 +172,7 @@ nonisolated struct WatchCompanionAccountStatus:
         return !trimmed.isEmpty
             && trimmed == label
             && label.count <= maximumLabelLength
-            && label.utf8.count <= maximumLabelLength * 4
+            && label.utf8.count <= maximumLabelUTF8Bytes
     }
 
     private static func hasValidStatus(
