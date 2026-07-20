@@ -102,6 +102,7 @@ settings="$(xcodebuild \
     -project "$build_root/AgentLimits.xcodeproj" \
     -scheme AgentLimitsiOS \
     -configuration Release \
+    -onlyUsePackageVersionsFromResolvedFile \
     -showBuildSettings 2>/dev/null)"
 resolved_team_id="$(printf '%s\n' "$settings" \
     | sed -n 's/^[[:space:]]*DEVELOPMENT_TEAM = //p' \
@@ -125,6 +126,7 @@ if ! xcodebuild archive \
     -scheme AgentLimitsiOS \
     -configuration Release \
     -destination 'generic/platform=iOS' \
+    -onlyUsePackageVersionsFromResolvedFile \
     -archivePath "$archive" \
     SWIFT_TREAT_WARNINGS_AS_ERRORS=YES \
     GCC_TREAT_WARNINGS_AS_ERRORS=YES \
