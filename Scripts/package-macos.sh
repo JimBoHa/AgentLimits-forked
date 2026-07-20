@@ -379,12 +379,23 @@ validate_developer_id_profile() {
 
 validate_profiles_at_final_publication_fence() {
     local validation_epoch
+    local macos_expiration_epoch
+    local widget_expiration_epoch
+
+    validated_final_profile_expiration_epoch=""
 
     validation_epoch="$(/bin/date -u '+%s')" || return $?
     validate_provisioning_profile_validity_window \
         "$work_dir/macos-profile.plist" macos "$validation_epoch" || return $?
+    macos_expiration_epoch="$validated_profile_expiration_epoch"
     validate_provisioning_profile_validity_window \
-        "$work_dir/widget-profile.plist" widget "$validation_epoch"
+        "$work_dir/widget-profile.plist" widget "$validation_epoch" || return $?
+    widget_expiration_epoch="$validated_profile_expiration_epoch"
+    if (( macos_expiration_epoch < widget_expiration_epoch )); then
+        validated_final_profile_expiration_epoch="$macos_expiration_epoch"
+    else
+        validated_final_profile_expiration_epoch="$widget_expiration_epoch"
+    fi
 }
 
 application_identity="$(codesign -dvvv "$app" 2>&1 \
@@ -1014,6 +1025,7 @@ EOF
 verify_source_unchanged
 # Both profiles use one timestamp, after every other fallible release check.
 validate_profiles_at_final_publication_fence || exit $?
+profile_publication_headroom_seconds=300
 publish_staged_release_directory \
     "$staging_dir" \
     "$staging_dir_identity" \
@@ -1023,6 +1035,8 @@ publish_staged_release_directory \
     "$atomic_publisher" \
     "$atomic_publisher_identity" \
     "$atomic_publisher_hash" \
+    "$validated_final_profile_expiration_epoch" \
+    "$profile_publication_headroom_seconds" \
     || exit $?
 staging_dir=""
 rmdir "$staging_parent"

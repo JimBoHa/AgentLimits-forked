@@ -356,6 +356,8 @@ validate_dsym_matches_binary() {
         "$binary_details" "$dsym_details" "$label" "$@"
 }
 
+validated_profile_expiration_epoch=""
+
 profile_rfc3339_epoch() {
     local value="$1"
     local label="$2"
@@ -389,6 +391,8 @@ validate_profile_validity_values() {
     local creation_epoch
     local expiration_epoch
 
+    validated_profile_expiration_epoch=""
+
     if [[ ! "$validation_epoch" =~ ^[0-9]+$ ]]; then
         echo "$label validation time is invalid" >&2
         return 1
@@ -409,6 +413,9 @@ validate_profile_validity_values() {
         echo "$label provisioning profile is expired" >&2
         return 1
     fi
+    # Read by signed release scripts after sourcing this helper.
+    # shellcheck disable=SC2034
+    validated_profile_expiration_epoch="$expiration_epoch"
 }
 
 validate_provisioning_profile_validity_window() {

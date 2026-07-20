@@ -357,12 +357,23 @@ validate_profile() {
 
 validate_profiles_at_final_publication_fence() {
     local validation_epoch
+    local ios_expiration_epoch
+    local watch_expiration_epoch
+
+    validated_final_profile_expiration_epoch=""
 
     validation_epoch="$(/bin/date -u '+%s')" || return $?
     validate_provisioning_profile_validity_window \
         "$work_dir/ios-profile.plist" ios "$validation_epoch" || return $?
+    ios_expiration_epoch="$validated_profile_expiration_epoch"
     validate_provisioning_profile_validity_window \
-        "$work_dir/watch-profile.plist" watch "$validation_epoch"
+        "$work_dir/watch-profile.plist" watch "$validation_epoch" || return $?
+    watch_expiration_epoch="$validated_profile_expiration_epoch"
+    if (( ios_expiration_epoch < watch_expiration_epoch )); then
+        validated_final_profile_expiration_epoch="$ios_expiration_epoch"
+    else
+        validated_final_profile_expiration_epoch="$watch_expiration_epoch"
+    fi
 }
 
 verify_distribution_signature "$ios_app" "iOS app"
@@ -492,6 +503,7 @@ EOF
 verify_source_unchanged
 # Both profiles use one timestamp, after every other fallible release check.
 validate_profiles_at_final_publication_fence || exit $?
+profile_publication_headroom_seconds=300
 publish_staged_release_directory \
     "$staging_dir" \
     "$staging_dir_identity" \
@@ -501,6 +513,8 @@ publish_staged_release_directory \
     "$atomic_publisher" \
     "$atomic_publisher_identity" \
     "$atomic_publisher_hash" \
+    "$validated_final_profile_expiration_epoch" \
+    "$profile_publication_headroom_seconds" \
     || exit $?
 staging_dir=""
 rmdir "$staging_parent"

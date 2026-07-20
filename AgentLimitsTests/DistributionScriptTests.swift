@@ -327,6 +327,31 @@ final class DistributionScriptTests: XCTestCase {
         XCTAssertNotEqual(result.status, 0, result.output)
     }
 
+    func testReleasePublicationRequiresProfileValidityHeadroom() throws {
+        let command = #"source "$1"; validate_release_publication_validity_headroom "$2" "$3" "$4""#
+
+        var result = try runReleaseOutputHelper(
+            command: command,
+            arguments: ["401", "300", "100"]
+        )
+        XCTAssertEqual(result.status, 0, result.output)
+
+        for arguments in [
+            ["400", "300", "100"],
+            ["399", "300", "100"],
+            ["100", "300", "101"],
+            ["not-an-epoch", "300", "100"],
+            ["401", "0", "100"],
+            ["401", "300", "invalid"]
+        ] {
+            result = try runReleaseOutputHelper(
+                command: command,
+                arguments: arguments
+            )
+            XCTAssertNotEqual(result.status, 0, result.output)
+        }
+    }
+
     func testProfileFileGuardRejectsLinksAndDetectsMutation() throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -385,7 +410,14 @@ final class DistributionScriptTests: XCTestCase {
                         "# Both profiles use one timestamp, after every other " +
                         "fallible release check.\n" +
                         "validate_profiles_at_final_publication_fence || exit $?\n" +
+                        "profile_publication_headroom_seconds=300\n" +
                         "publish_staged_release_directory"
+                ),
+                name
+            )
+            XCTAssertTrue(
+                script.contains(
+                    #""$validated_final_profile_expiration_epoch" \"#
                 ),
                 name
             )
@@ -414,6 +446,18 @@ final class DistributionScriptTests: XCTestCase {
         XCTAssertTrue(publisher.contains("RENAME_NOFOLLOW_ANY"))
         XCTAssertTrue(helper.contains("/usr/bin/xcrun --sdk macosx clang"))
         XCTAssertTrue(helper.contains("verify_atomic_release_publisher"))
+        XCTAssertTrue(
+            helper.contains(
+                "validate_release_publication_validity_headroom"
+            )
+        )
+        XCTAssertTrue(
+            helper.contains(
+                "|| return $?\n" +
+                    "    fi\n" +
+                    "    \"$atomic_publisher\" \"$staged_directory\""
+            )
+        )
         XCTAssertFalse(helper.contains("/bin/mv -n"))
         for name in ["package-macos.sh", "export-ios.sh"] {
             let script = try releaseScript(named: name)

@@ -126,8 +126,9 @@ internally inconsistent validity windows fail closed. An embedded profile must
 also be a single-link regular file that remains unchanged while its signed CMS
 payload is decoded. Both profiles are checked again with one timestamp after
 checksums, metadata, and the final source fence, immediately before atomic
-publication, so a near-expiry profile cannot age out during validation and still
-be published.
+publication. The earliest bound expiration must still have at least five minutes
+of validity at the atomic rename, so a near-expiry profile cannot age out during
+validation and still be published.
 
 After local verification, validate and upload through Xcode Organizer or App
 Store Connect. TestFlight and a physical paired iPhone/Apple Watch smoke test
@@ -173,6 +174,8 @@ profiles must come from unchanged, single-link regular files and be currently
 valid, with typed creation and expiration dates. Both profiles are checked again
 with one timestamp after notarization, checksums, metadata, and the final source
 fence, immediately before atomic publication.
+The earliest bound expiration must still have at least five minutes of validity
+at the atomic rename.
 It then reopens the final ZIP, expanded product PKG, and read-only DMG; rejects
 unexpected layout or installer metadata; and rechecks the contained app's
 per-slice Code Directory hashes, signatures, stapled ticket, and Gatekeeper

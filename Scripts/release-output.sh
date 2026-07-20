@@ -463,6 +463,29 @@ cleanup_private_release_directory() {
     rm -rf "$directory"
 }
 
+validate_release_publication_validity_headroom() {
+    local expiration_epoch="$1"
+    local headroom_seconds="$2"
+    local validation_epoch="${3:-}"
+
+    if [[ ! "$expiration_epoch" =~ ^[1-9][0-9]*$ \
+        || ! "$headroom_seconds" =~ ^[1-9][0-9]*$ ]]; then
+        echo "Release publication profile validity fence is invalid" >&2
+        return 73
+    fi
+    if [[ -z "$validation_epoch" ]]; then
+        validation_epoch="$(/bin/date -u '+%s')" || return 73
+    fi
+    if [[ ! "$validation_epoch" =~ ^[1-9][0-9]*$ ]]; then
+        echo "Release publication time is invalid" >&2
+        return 73
+    fi
+    if (( validation_epoch + headroom_seconds >= expiration_epoch )); then
+        echo "Provisioning profile validity headroom was exhausted before publication" >&2
+        return 73
+    fi
+}
+
 publish_staged_release_directory() {
     local staged_directory="$1"
     local expected_staged_identity="$2"
@@ -472,11 +495,14 @@ publish_staged_release_directory() {
     local atomic_publisher="$6"
     local expected_publisher_identity="$7"
     local expected_publisher_hash="$8"
+    local profile_expiration_epoch="${9:-}"
+    local profile_validity_headroom_seconds="${10:-}"
     local output_directory="$output_parent/$expected_name"
     local staged_device
     local output_device
     local actual_staged_identity
     local published_identity
+    local publish_status=0
 
     if [[ -z "$expected_name" || "$expected_name" == "." \
         || "$expected_name" == ".." || "$expected_name" == */* \
@@ -508,7 +534,13 @@ publish_staged_release_directory() {
         "$expected_publisher_identity" \
         "$expected_publisher_hash" \
         || return $?
-    local publish_status=0
+    if [[ -n "$profile_expiration_epoch" \
+        || -n "$profile_validity_headroom_seconds" ]]; then
+        validate_release_publication_validity_headroom \
+            "$profile_expiration_epoch" \
+            "$profile_validity_headroom_seconds" \
+            || return $?
+    fi
     "$atomic_publisher" "$staged_directory" "$output_directory" \
         || publish_status=$?
     if [[ "$publish_status" != "0" ]]; then
