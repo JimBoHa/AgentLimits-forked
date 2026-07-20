@@ -145,35 +145,39 @@ struct MobileCredentialEditorView: View {
     private func saveCredential() {
         guard !isSaving else { return }
         isSaving = true
-        defer { isSaving = false }
-        do {
-            try activityController.saveCredential(
-                trimmedCredential,
-                for: account.id
-            )
-            credential = ""
-            hasStoredCredential = true
-            storedCredentialIsInvalid = false
-            Task {
-                await activityController.refresh(accountID: account.id)
+        Task { @MainActor in
+            defer { isSaving = false }
+            do {
+                try await activityController.saveCredential(
+                    trimmedCredential,
+                    for: account.id
+                )
+                credential = ""
+                hasStoredCredential = true
+                storedCredentialIsInvalid = false
+                dismiss()
+                Task { @MainActor in
+                    await activityController.refresh(accountID: account.id)
+                }
+            } catch {
+                errorMessage = error.localizedDescription
             }
-            dismiss()
-        } catch {
-            errorMessage = error.localizedDescription
         }
     }
 
     private func removeCredential() {
         guard !isSaving else { return }
         isSaving = true
-        defer { isSaving = false }
-        do {
-            try activityController.deleteCredential(for: account.id)
-            credential = ""
-            hasStoredCredential = false
-            storedCredentialIsInvalid = false
-        } catch {
-            errorMessage = error.localizedDescription
+        Task { @MainActor in
+            defer { isSaving = false }
+            do {
+                try await activityController.deleteCredential(for: account.id)
+                credential = ""
+                hasStoredCredential = false
+                storedCredentialIsInvalid = false
+            } catch {
+                errorMessage = error.localizedDescription
+            }
         }
     }
 }

@@ -130,6 +130,7 @@ final class MobileSessionActivityControllerTests: XCTestCase {
             let credentials = FakeMobileCredentialStore(events: events)
             credentials.values[account.id] = "old-token"
             let fetcher = BlockingMobileActivityFetcher(events: events)
+            defer { fetcher.allowCancellationToFinish() }
             let controller = MobileSessionActivityController(
                 accountResolver: store,
                 credentialStore: credentials,
@@ -138,14 +139,29 @@ final class MobileSessionActivityControllerTests: XCTestCase {
             let refresh = Task { @MainActor in
                 await controller.refresh(accountID: account.id)
             }
-            await fetcher.waitUntilStarted()
+            try await fetcher.waitUntilStarted()
 
-            try controller.saveCredential("new-token", for: account.id)
+            let replacement = Task { @MainActor in
+                try await controller.saveCredential(
+                    "new-token",
+                    for: account.id
+                )
+            }
+            try await fetcher.waitUntilCancellationRequested()
+
+            XCTAssertEqual(
+                events.snapshot(),
+                [.started, .cancellationRequested]
+            )
+            XCTAssertEqual(credentials.values[account.id], "old-token")
+
+            fetcher.allowCancellationToFinish()
+            try await replacement.value
             await refresh.value
 
             XCTAssertEqual(
                 events.snapshot(),
-                [.started, .cancelled, .saved]
+                [.started, .cancellationRequested, .cancelled, .saved]
             )
             XCTAssertEqual(credentials.values[account.id], "new-token")
         }
@@ -159,6 +175,7 @@ final class MobileSessionActivityControllerTests: XCTestCase {
             let credentials = FakeMobileCredentialStore(events: events)
             credentials.values[account.id] = "token"
             let fetcher = BlockingMobileActivityFetcher(events: events)
+            defer { fetcher.allowCancellationToFinish() }
             let controller = MobileSessionActivityController(
                 accountResolver: store,
                 credentialStore: credentials,
@@ -167,14 +184,353 @@ final class MobileSessionActivityControllerTests: XCTestCase {
             let refresh = Task { @MainActor in
                 await controller.refresh(accountID: account.id)
             }
-            await fetcher.waitUntilStarted()
+            try await fetcher.waitUntilStarted()
 
-            try controller.clearAllSessionData()
+            let clear = Task { @MainActor in
+                try await controller.clearAllSessionData()
+            }
+            try await fetcher.waitUntilCancellationRequested()
+
+            XCTAssertEqual(
+                events.snapshot(),
+                [.started, .cancellationRequested]
+            )
+            XCTAssertEqual(credentials.values[account.id], "token")
+
+            fetcher.allowCancellationToFinish()
+            try await clear.value
             await refresh.value
 
             XCTAssertEqual(
                 events.snapshot(),
-                [.started, .cancelled, .deletedAll]
+                [.started, .cancellationRequested, .cancelled, .deletedAll]
+            )
+        }
+    }
+
+    @MainActor
+    func testDeletingCredentialWaitsForFetchCancellationAcknowledgement()
+        async throws {
+        try await withStore { store in
+            let account = try XCTUnwrap(store.accounts(for: .copilot).first)
+            let events = MobileActivityEventRecorder()
+            let credentials = FakeMobileCredentialStore(events: events)
+            credentials.values[account.id] = "token"
+            let fetcher = BlockingMobileActivityFetcher(events: events)
+            defer { fetcher.allowCancellationToFinish() }
+            let controller = MobileSessionActivityController(
+                accountResolver: store,
+                credentialStore: credentials,
+                fetcher: fetcher
+            )
+            let refresh = Task { @MainActor in
+                await controller.refresh(accountID: account.id)
+            }
+            try await fetcher.waitUntilStarted()
+
+            let deletion = Task { @MainActor in
+                try await controller.deleteCredential(for: account.id)
+            }
+            try await fetcher.waitUntilCancellationRequested()
+
+            XCTAssertEqual(credentials.values[account.id], "token")
+            XCTAssertTrue(credentials.deletedAccountIDs.isEmpty)
+
+            fetcher.allowCancellationToFinish()
+            try await deletion.value
+            await refresh.value
+
+            XCTAssertEqual(
+                events.snapshot(),
+                [.started, .cancellationRequested, .cancelled, .deleted]
+            )
+            XCTAssertNil(credentials.values[account.id])
+        }
+    }
+
+    @MainActor
+    func testRemovalWaitsForFetchCancellationBeforeRegistryAndKeychain()
+        async throws {
+        try await withStore { store in
+            let account = try store.addAccount(
+                provider: .copilot,
+                label: "Work"
+            )
+            let events = MobileActivityEventRecorder()
+            let credentials = FakeMobileCredentialStore(events: events)
+            credentials.values[account.id] = "token"
+            let fetcher = BlockingMobileActivityFetcher(events: events)
+            defer { fetcher.allowCancellationToFinish() }
+            let model = MobileAppModel(
+                accountStore: store,
+                credentialStore: credentials,
+                fetcher: fetcher
+            )
+            let refresh = Task { @MainActor in
+                await model.activityController.refresh(accountID: account.id)
+            }
+            try await fetcher.waitUntilStarted()
+
+            let removal = Task { @MainActor in
+                try await model.removeAccount(id: account.id)
+            }
+            try await fetcher.waitUntilCancellationRequested()
+
+            XCTAssertNotNil(store.account(id: account.id))
+            XCTAssertEqual(credentials.values[account.id], "token")
+
+            fetcher.allowCancellationToFinish()
+            try await removal.value
+            await refresh.value
+
+            XCTAssertEqual(
+                events.snapshot(),
+                [.started, .cancellationRequested, .cancelled, .deleted]
+            )
+            XCTAssertNil(store.account(id: account.id))
+            XCTAssertNil(credentials.values[account.id])
+        }
+    }
+
+    @MainActor
+    func testRemovalRollbackMergesConcurrentRegistryMutations()
+        async throws {
+        try await withStore { store in
+            let primary = try XCTUnwrap(
+                store.accounts(for: .copilot).first
+            )
+            let target = try store.addAccount(
+                provider: .copilot,
+                label: "Work"
+            )
+            let disposable = try store.addAccount(
+                provider: .claude,
+                label: "Temporary"
+            )
+            let events = MobileActivityEventRecorder()
+            let credentials = FakeMobileCredentialStore(events: events)
+            credentials.values[target.id] = "work-token"
+            credentials.failAccountDeletion = true
+            let fetcher = BlockingMobileActivityFetcher(events: events)
+            defer { fetcher.allowCancellationToFinish() }
+            let model = MobileAppModel(
+                accountStore: store,
+                credentialStore: credentials,
+                fetcher: fetcher
+            )
+            let refresh = Task { @MainActor in
+                await model.activityController.refresh(accountID: target.id)
+            }
+            try await fetcher.waitUntilStarted()
+
+            let removal = Task { @MainActor in
+                try await model.removeAccount(id: target.id)
+            }
+            try await fetcher.waitUntilCancellationRequested()
+
+            _ = try model.updateAccount(
+                id: primary.id,
+                label: "Personal",
+                isEnabled: false
+            )
+            _ = try model.updateAccount(
+                id: target.id,
+                label: "Renamed Work",
+                isEnabled: true
+            )
+            let added = try model.addAccount(
+                provider: .codex,
+                label: "Added During Removal"
+            )
+            try await model.removeAccount(id: disposable.id)
+
+            fetcher.allowCancellationToFinish()
+            do {
+                try await removal.value
+                XCTFail("Expected credential deletion to fail")
+            } catch {
+                XCTAssertEqual(
+                    error as? FakeMobileCredentialStoreError,
+                    .deletionFailed
+                )
+            }
+            await refresh.value
+
+            XCTAssertEqual(store.account(id: primary.id)?.label, "Personal")
+            XCTAssertEqual(store.account(id: primary.id)?.isEnabled, false)
+            XCTAssertEqual(
+                store.account(id: target.id)?.label,
+                "Renamed Work"
+            )
+            XCTAssertEqual(
+                store.account(id: added.id)?.label,
+                "Added During Removal"
+            )
+            XCTAssertNil(store.account(id: disposable.id))
+            XCTAssertEqual(credentials.values[target.id], "work-token")
+            XCTAssertTrue(store.pendingCredentialDeletionIDs.isEmpty)
+        }
+    }
+
+    @MainActor
+    func testSameAccountCredentialMutationsCannotOverlap() async throws {
+        try await withStore { store in
+            let account = try XCTUnwrap(store.accounts(for: .copilot).first)
+            let events = MobileActivityEventRecorder()
+            let credentials = FakeMobileCredentialStore(events: events)
+            credentials.values[account.id] = "old-token"
+            let fetcher = BlockingMobileActivityFetcher(events: events)
+            defer { fetcher.allowCancellationToFinish() }
+            let controller = MobileSessionActivityController(
+                accountResolver: store,
+                credentialStore: credentials,
+                fetcher: fetcher
+            )
+            let refresh = Task { @MainActor in
+                await controller.refresh(accountID: account.id)
+            }
+            try await fetcher.waitUntilStarted()
+
+            let replacement = Task { @MainActor in
+                try await controller.saveCredential(
+                    "new-token",
+                    for: account.id
+                )
+            }
+            try await fetcher.waitUntilCancellationRequested()
+
+            do {
+                try await controller.deleteCredential(for: account.id)
+                XCTFail("Expected overlapping mutation to fail")
+            } catch {
+                XCTAssertEqual(
+                    error as? MobileSessionActivityError,
+                    .accountMutationInProgress
+                )
+            }
+            XCTAssertEqual(credentials.values[account.id], "old-token")
+
+            fetcher.allowCancellationToFinish()
+            try await replacement.value
+            await refresh.value
+
+            XCTAssertEqual(credentials.values[account.id], "new-token")
+            XCTAssertEqual(
+                events.snapshot(),
+                [.started, .cancellationRequested, .cancelled, .saved]
+            )
+        }
+    }
+
+    @MainActor
+    func testClearInvalidatesReplacementEvenWhenClearFinishesFirst()
+        async throws {
+        try await withStore { store in
+            let account = try XCTUnwrap(store.accounts(for: .copilot).first)
+            let events = MobileActivityEventRecorder()
+            let credentials = FakeMobileCredentialStore(events: events)
+            credentials.values[account.id] = "old-token"
+            let fetcher = BlockingMobileActivityFetcher(events: events)
+            defer { fetcher.allowCancellationToFinish() }
+            let controller = MobileSessionActivityController(
+                accountResolver: store,
+                credentialStore: credentials,
+                fetcher: fetcher
+            )
+            let refresh = Task { @MainActor in
+                await controller.refresh(accountID: account.id)
+            }
+            try await fetcher.waitUntilStarted()
+
+            let replacement = Task { @MainActor in
+                try await controller.saveCredential(
+                    "new-token",
+                    for: account.id
+                )
+            }
+            try await fetcher.waitUntilCancellationRequested()
+            let token = try XCTUnwrap(controller.beginClear())
+            let clear = Task { @MainActor in
+                defer { _ = controller.finishClear(token) }
+                try await controller.clearSessionData(during: token)
+            }
+
+            fetcher.allowCancellationToFinish()
+            try await clear.value
+            do {
+                try await replacement.value
+                XCTFail("Expected clear to invalidate replacement")
+            } catch {
+                XCTAssertEqual(
+                    error as? MobileSessionActivityError,
+                    .clearInProgress
+                )
+            }
+            await refresh.value
+
+            XCTAssertTrue(credentials.values.isEmpty)
+            XCTAssertEqual(
+                events.snapshot(),
+                [.started, .cancellationRequested, .cancelled, .deletedAll]
+            )
+        }
+    }
+
+    @MainActor
+    func testClearInvalidatesRemovalAndKeepsAccountRegistered()
+        async throws {
+        try await withStore { store in
+            let account = try store.addAccount(
+                provider: .copilot,
+                label: "Work"
+            )
+            let events = MobileActivityEventRecorder()
+            let credentials = FakeMobileCredentialStore(events: events)
+            credentials.values[account.id] = "token"
+            let fetcher = BlockingMobileActivityFetcher(events: events)
+            defer { fetcher.allowCancellationToFinish() }
+            let model = MobileAppModel(
+                accountStore: store,
+                credentialStore: credentials,
+                fetcher: fetcher
+            )
+            let refresh = Task { @MainActor in
+                await model.activityController.refresh(accountID: account.id)
+            }
+            try await fetcher.waitUntilStarted()
+
+            let removal = Task { @MainActor in
+                try await model.removeAccount(id: account.id)
+            }
+            try await fetcher.waitUntilCancellationRequested()
+            let token = try XCTUnwrap(
+                model.activityController.beginClear()
+            )
+            let clear = Task { @MainActor in
+                defer { _ = model.activityController.finishClear(token) }
+                try await model.activityController.clearSessionData(
+                    during: token
+                )
+            }
+
+            fetcher.allowCancellationToFinish()
+            try await clear.value
+            do {
+                try await removal.value
+                XCTFail("Expected clear to invalidate removal")
+            } catch {
+                XCTAssertEqual(
+                    error as? MobileSessionActivityError,
+                    .clearInProgress
+                )
+            }
+            await refresh.value
+
+            XCTAssertNotNil(store.account(id: account.id))
+            XCTAssertTrue(credentials.values.isEmpty)
+            XCTAssertEqual(
+                events.snapshot(),
+                [.started, .cancellationRequested, .cancelled, .deletedAll]
             )
         }
     }
@@ -277,7 +633,7 @@ final class MobileSessionActivityControllerTests: XCTestCase {
                 fetcher: StubMobileActivityFetcher()
             )
 
-            try model.removeAccount(id: work.id)
+            try await model.removeAccount(id: work.id)
 
             XCTAssertNil(store.account(id: work.id))
             XCTAssertNil(credentials.values[work.id])
@@ -302,7 +658,7 @@ final class MobileSessionActivityControllerTests: XCTestCase {
             )
             await controller.refresh(accountID: account.id)
 
-            try controller.clearAllSessionData()
+            try await controller.clearAllSessionData()
 
             XCTAssertTrue(credentials.values.isEmpty)
             XCTAssertEqual(credentials.deleteAllCount, 1)
@@ -342,6 +698,7 @@ final class MobileSessionActivityControllerTests: XCTestCase {
 @MainActor
 private final class FakeMobileCredentialStore: MobileSessionCredentialStoring {
     var values: [UUID: String] = [:]
+    var failAccountDeletion = false
     private(set) var deletedAccountIDs: [UUID] = []
     private(set) var deleteAllCount = 0
     private let events: MobileActivityEventRecorder?
@@ -361,6 +718,10 @@ private final class FakeMobileCredentialStore: MobileSessionCredentialStoring {
 
     func deleteCredential(for accountID: UUID) throws {
         deletedAccountIDs.append(accountID)
+        events?.record(.deleted)
+        if failAccountDeletion {
+            throw FakeMobileCredentialStoreError.deletionFailed
+        }
         values.removeValue(forKey: accountID)
     }
 
@@ -371,11 +732,17 @@ private final class FakeMobileCredentialStore: MobileSessionCredentialStoring {
     }
 }
 
+private enum FakeMobileCredentialStoreError: Error, Equatable {
+    case deletionFailed
+}
+
 private final class MobileActivityEventRecorder: @unchecked Sendable {
     enum Event: Equatable {
         case started
+        case cancellationRequested
         case cancelled
         case saved
+        case deleted
         case deletedAll
     }
 
@@ -397,17 +764,36 @@ private final class BlockingMobileActivityFetcher:
     GitHubAgentTaskFetching,
     @unchecked Sendable {
     private let events: MobileActivityEventRecorder
+    private let cancellationGate = MobileActivityCancellationGate()
     private let lock = NSLock()
     private var continuation: CheckedContinuation<Void, Never>?
+    private var isFinished = false
 
     init(events: MobileActivityEventRecorder) {
         self.events = events
     }
 
-    func waitUntilStarted() async {
-        while !events.snapshot().contains(.started) {
-            await Task.yield()
+    func waitUntilStarted(
+        timeout: Duration = .seconds(5)
+    ) async throws {
+        try await wait(until: .started, timeout: timeout)
+    }
+
+    func waitUntilCancellationRequested(
+        timeout: Duration = .seconds(5)
+    ) async throws {
+        try await wait(until: .cancellationRequested, timeout: timeout)
+    }
+
+    func allowCancellationToFinish() {
+        cancellationGate.open()
+        let continuation = lock.withLock {
+            isFinished = true
+            let pending = self.continuation
+            self.continuation = nil
+            return pending
         }
+        continuation?.resume()
     }
 
     func fetchCurrentActivity(
@@ -417,7 +803,7 @@ private final class BlockingMobileActivityFetcher:
         await withTaskCancellationHandler {
             await withCheckedContinuation { continuation in
                 let resumeImmediately = lock.withLock {
-                    if Task.isCancelled {
+                    if Task.isCancelled || isFinished {
                         return true
                     }
                     self.continuation = continuation
@@ -426,7 +812,7 @@ private final class BlockingMobileActivityFetcher:
                 if resumeImmediately { continuation.resume() }
             }
         } onCancel: {
-            events.record(.cancelled)
+            events.record(.cancellationRequested)
             let continuation = lock.withLock {
                 let pending = self.continuation
                 self.continuation = nil
@@ -434,8 +820,64 @@ private final class BlockingMobileActivityFetcher:
             }
             continuation?.resume()
         }
-        try Task.checkCancellation()
+        do {
+            try Task.checkCancellation()
+        } catch {
+            await cancellationGate.waitUntilOpen()
+            events.record(.cancelled)
+            throw error
+        }
         return .init(working: 0, waiting: 0)
+    }
+
+    private func wait(
+        until event: MobileActivityEventRecorder.Event,
+        timeout: Duration
+    ) async throws {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: timeout)
+        while !events.snapshot().contains(event) {
+            guard clock.now < deadline else {
+                throw BlockingMobileActivityFetcherError.timedOut(event)
+            }
+            try await Task.sleep(for: .milliseconds(1))
+        }
+    }
+}
+
+private enum BlockingMobileActivityFetcherError: Error {
+    case timedOut(MobileActivityEventRecorder.Event)
+}
+
+private final class MobileActivityCancellationGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var isOpen = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func waitUntilOpen() async {
+        await withCheckedContinuation { continuation in
+            let resumeImmediately = lock.withLock {
+                guard !isOpen else { return true }
+                waiters.append(continuation)
+                return false
+            }
+            if resumeImmediately {
+                continuation.resume()
+            }
+        }
+    }
+
+    func open() {
+        let pending: [CheckedContinuation<Void, Never>] = lock.withLock {
+            guard !isOpen else { return [] }
+            isOpen = true
+            let pending = waiters
+            waiters.removeAll()
+            return pending
+        }
+        for waiter in pending {
+            waiter.resume()
+        }
     }
 }
 

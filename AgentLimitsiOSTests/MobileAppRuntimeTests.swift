@@ -21,7 +21,7 @@ final class MobileAppRuntimeTests: XCTestCase {
             provider: .copilot,
             label: "Work Copilot"
         )
-        try runtime.model.activityController.saveCredential(
+        try await runtime.model.activityController.saveCredential(
             "ui-test-credential",
             for: account.id
         )

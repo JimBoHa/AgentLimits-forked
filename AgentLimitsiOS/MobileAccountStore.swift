@@ -29,7 +29,6 @@ enum MobileAccountStoreError: LocalizedError, Equatable {
 
 nonisolated struct MobileAccountRemovalPlan: Equatable, Sendable {
     let target: MobileProviderAccount
-    fileprivate let originalAccounts: [MobileProviderAccount]
 }
 
 @MainActor
@@ -188,10 +187,7 @@ final class MobileAccountStore: ObservableObject, MobileAccountResolving {
                 target.provider
             )
         }
-        return MobileAccountRemovalPlan(
-            target: target,
-            originalAccounts: accounts
-        )
+        return MobileAccountRemovalPlan(target: target)
     }
 
     func commitRemoval(_ plan: MobileAccountRemovalPlan) throws {
@@ -213,7 +209,10 @@ final class MobileAccountStore: ObservableObject, MobileAccountResolving {
     /// Persists the registry deletion and cleanup tombstone together. If the
     /// process exits after this boundary, the next launch retries exact
     /// credential deletion before allowing more mutations.
-    func beginRemoval(_ plan: MobileAccountRemovalPlan) throws {
+    @discardableResult
+    func beginRemoval(
+        _ plan: MobileAccountRemovalPlan
+    ) throws -> MobileProviderAccount {
         try requireMutable()
         guard let current = account(id: plan.target.id),
               current.provider == plan.target.provider else {
@@ -232,6 +231,7 @@ final class MobileAccountStore: ObservableObject, MobileAccountResolving {
             accounts.filter { $0.id != current.id },
             pendingCredentialDeletionIDs: pending
         )
+        return current
     }
 
     func finishRemoval(_ plan: MobileAccountRemovalPlan) throws {
@@ -252,13 +252,25 @@ final class MobileAccountStore: ObservableObject, MobileAccountResolving {
         try commitRemoval(prepareRemoval(id: id))
     }
 
-    func restoreRemoval(_ plan: MobileAccountRemovalPlan) throws {
+    /// Merges the exact removed account into the current registry so rollback
+    /// cannot overwrite mutations that completed during credential cleanup.
+    func restoreRemoval(
+        _ plan: MobileAccountRemovalPlan,
+        removedAccount restored: MobileProviderAccount
+    ) throws {
         try requireMutable()
-        guard account(id: plan.target.id) == nil else { return }
+        guard restored.id == plan.target.id,
+              restored.provider == plan.target.provider else {
+            throw MobileAccountStoreError.accountNotFound
+        }
         var pending = pendingCredentialDeletionIDs
         pending.remove(plan.target.id)
+        var updated = accounts
+        if account(id: plan.target.id) == nil {
+            updated.append(restored)
+        }
         try commitState(
-            plan.originalAccounts,
+            updated,
             pendingCredentialDeletionIDs: pending
         )
     }
