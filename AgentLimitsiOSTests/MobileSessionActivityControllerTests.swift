@@ -338,6 +338,10 @@ final class MobileSessionActivityControllerTests: XCTestCase {
                 label: "Renamed Work",
                 isEnabled: true
             )
+            let added = try model.addAccount(
+                provider: .codex,
+                label: "Added During Removal"
+            )
             try await model.removeAccount(id: disposable.id)
 
             fetcher.allowCancellationToFinish()
@@ -357,6 +361,10 @@ final class MobileSessionActivityControllerTests: XCTestCase {
             XCTAssertEqual(
                 store.account(id: target.id)?.label,
                 "Renamed Work"
+            )
+            XCTAssertEqual(
+                store.account(id: added.id)?.label,
+                "Added During Removal"
             )
             XCTAssertNil(store.account(id: disposable.id))
             XCTAssertEqual(credentials.values[target.id], "work-token")
