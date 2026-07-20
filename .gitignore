@@ -20,6 +20,18 @@ artifacts/
 *.xcodeproj/project.xcworkspace/xcuserdata/
 Configurations/DevelopmentTeam.local.xcconfig
 
+# Apple signing credentials, profiles, and local archives
+*.[pP]8
+*.[pP]12
+*.[pP][fF][xX]
+*.[pP][eE][mM]
+*.[kK][eE][yY]
+*.[kK][eE][yY][cC][hH][aA][iI][nN]
+*.[kK][eE][yY][cC][hH][aA][iI][nN]-[dD][bB]
+*.[mM][oO][bB][iI][lL][eE][pP][rR][oO][vV][iI][sS][iI][oO][nN]
+*.[pP][rR][oO][vV][iI][sS][iI][oO][nN][pP][rR][oO][fF][iI][lL][eE]
+*.[xX][cC][aA][rR][cC][hH][iI][vV][eE]/
+
 # Playgrounds
 timeline.xctimeline
 playground.xcworkspace

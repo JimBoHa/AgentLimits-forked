@@ -35,6 +35,120 @@ final class DistributionScriptTests: XCTestCase {
         )
     }
 
+    func testAppleCredentialArtifactGuardIsLiveAndCaseInsensitive() throws {
+        let gitignore = try repositoryText(".gitignore")
+        let workflow = try repositoryText(".github/workflows/apple-ci.yml")
+        let ignoredPatterns = [
+            "*.[pP]8",
+            "*.[pP]12",
+            "*.[pP][fF][xX]",
+            "*.[pP][eE][mM]",
+            "*.[kK][eE][yY]",
+            "*.[kK][eE][yY][cC][hH][aA][iI][nN]",
+            "*.[kK][eE][yY][cC][hH][aA][iI][nN]-[dD][bB]",
+            "*.[mM][oO][bB][iI][lL][eE][pP][rR][oO][vV][iI][sS][iI][oO][nN]",
+            "*.[pP][rR][oO][vV][iI][sS][iI][oO][nN][pP][rR][oO][fF][iI][lL][eE]",
+            "*.[xX][cC][aA][rR][cC][hH][iI][vV][eE]/"
+        ]
+
+        for pattern in ignoredPatterns {
+            XCTAssertTrue(
+                gitignore.components(separatedBy: .newlines).contains(pattern),
+                pattern
+            )
+        }
+
+        let lines = workflow.components(separatedBy: .newlines)
+        let sourceGates = try XCTUnwrap(
+            lines.firstIndex(of: "  source-gates:")
+        )
+        let testMatrix = try XCTUnwrap(lines.firstIndex(of: "  tests:"))
+        let sourceGateLines = Array(lines[sourceGates..<testMatrix])
+        let step = try XCTUnwrap(
+            sourceGateLines.firstIndex(
+                of: "      - name: Reject committed Apple credential artifacts"
+            )
+        )
+        XCTAssertEqual(
+            sourceGateLines[step + 1],
+            "        run: Scripts/reject-apple-credential-artifacts.sh"
+        )
+
+        let guardScript = try releaseScript(
+            named: "reject-apple-credential-artifacts.sh"
+        )
+        XCTAssertTrue(guardScript.contains("git -C \"$repository\" ls-files -z"))
+        XCTAssertEqual(
+            guardScript.components(separatedBy: ":(icase,glob)").count - 1,
+            10
+        )
+        XCTAssertTrue(guardScript.contains("printf 'Tracked Apple credential artifact rejected: %q"))
+    }
+
+    func testAppleCredentialGuardRejectsForcedTrackedPathologicalNames() throws {
+        let repository = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: repository) }
+        _ = try runGit(["init", "-q", "-b", "main"], in: repository)
+        _ = try runGit(
+            ["config", "user.name", "Apple Credential Guard Fixture"],
+            in: repository
+        )
+        _ = try runGit(
+            ["config", "user.email", "fixture@example.invalid"],
+            in: repository
+        )
+        try Data(try repositoryText(".gitignore").utf8).write(
+            to: repository.appendingPathComponent(".gitignore")
+        )
+        try Data("safe\n".utf8).write(
+            to: repository.appendingPathComponent("README.md")
+        )
+        _ = try runGit(["add", ".gitignore", "README.md"], in: repository)
+        _ = try runGit(["commit", "-q", "-m", "base"], in: repository)
+
+        var result = try runAppleCredentialGuard(repository: repository)
+        XCTAssertEqual(result.status, 0, result.output)
+        XCTAssertEqual(result.output, "")
+
+        let trackedArtifacts = [
+            "Secrets/AuthKey.P8",
+            "Secrets/Distribution.P12",
+            "Profiles/Review.mobileProvision",
+            "Archives/App.XcArChIvE/Info.plist",
+            "Secrets/private.Pem",
+            "Secrets/line\nbreak.PEM"
+        ]
+        for path in trackedArtifacts {
+            let file = repository.appendingPathComponent(path)
+            try FileManager.default.createDirectory(
+                at: file.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            try Data("fixture\n".utf8).write(to: file)
+        }
+
+        let ordinaryPaths = Array(trackedArtifacts.dropLast())
+        let ignored = try runGit(
+            ["check-ignore", "--no-index", "--"] + ordinaryPaths,
+            in: repository
+        )
+        for path in ordinaryPaths {
+            XCTAssertTrue(ignored.contains(path), path)
+        }
+        _ = try runGit(["add", "-f", "--"] + trackedArtifacts, in: repository)
+
+        result = try runAppleCredentialGuard(repository: repository)
+        XCTAssertEqual(result.status, 78, result.output)
+        XCTAssertEqual(
+            result.output.components(
+                separatedBy: "Tracked Apple credential artifact rejected:"
+            ).count - 1,
+            trackedArtifacts.count,
+            result.output
+        )
+        XCTAssertTrue(result.output.contains(#"line\nbreak.PEM"#), result.output)
+    }
+
     func testDependencySecurityConfigurationStaysEnforced() throws {
         let configResult = try runDependencySecurityConfigValidator(
             workflow: repositoryRoot.appendingPathComponent(
@@ -3876,6 +3990,84 @@ final class DistributionScriptTests: XCTestCase {
         )
     }
 
+    func testAppleCIProvisionsDedicatedIOSSimulators() throws {
+        let workflow = try repositoryText(".github/workflows/apple-ci.yml")
+
+        XCTAssertTrue(workflow.contains("device_name: iPhone 17 Pro"))
+        XCTAssertTrue(
+            workflow.contains("device_name: iPad Pro 13-inch (M5)")
+        )
+        XCTAssertTrue(
+            workflow.contains(
+                "Scripts/create-ci-ios-simulator.sh \"$IOS_DEVICE_NAME\""
+            )
+        )
+        XCTAssertTrue(
+            workflow.contains(
+                "RESOLVED_IOS_DESTINATION: ${{ steps.ios-destination.outputs.destination }}"
+            )
+        )
+        XCTAssertTrue(
+            workflow.contains(
+                "xcrun simctl delete \"$IOS_SIMULATOR_UDID\""
+            )
+        )
+        XCTAssertFalse(
+            workflow.contains(
+                "platform=iOS Simulator,name=iPad Pro 13-inch (M5),OS=latest"
+            )
+        )
+    }
+
+    func testCISimulatorProvisionerCreatesLatestRequestedDevice() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let fakeXcrun = directory.appendingPathComponent("xcrun")
+        let log = directory.appendingPathComponent("xcrun.log")
+        let fakeScript = #"""
+        #!/bin/bash
+        set -euo pipefail
+        printf '%s\n' "$*" >> "$AGENTLIMITS_FAKE_XCRUN_LOG"
+        if [[ "$1 $2 $3" == "simctl list runtimes" ]]; then
+          printf '%s\n' '{"runtimes":[{"identifier":"com.apple.CoreSimulator.SimRuntime.iOS-26-4","version":"26.4","name":"iOS 26.4","platform":"iOS","isAvailable":true},{"identifier":"com.apple.CoreSimulator.SimRuntime.iOS-27-0","version":"27.0","name":"iOS 27.0","platform":"iOS","isAvailable":false},{"identifier":"com.apple.CoreSimulator.SimRuntime.iOS-26-5","version":"26.5","name":"iOS 26.5","platform":"iOS","isAvailable":true}]}'
+        elif [[ "$1 $2 $3" == "simctl list devicetypes" ]]; then
+          printf '%s\n' '{"devicetypes":[{"identifier":"com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro","name":"iPhone 17 Pro"},{"identifier":"com.apple.CoreSimulator.SimDeviceType.iPad-Pro-13-inch-M5-12GB","name":"iPad Pro 13-inch (M5)"}]}'
+        elif [[ "$1 $2" == "simctl create" ]]; then
+          printf '%s\n' '01234567-89AB-CDEF-0123-456789ABCDEF'
+        elif [[ "$1 $2" == "simctl delete" ]]; then
+          exit 0
+        else
+          exit 99
+        fi
+        """#
+        try Data(fakeScript.utf8).write(to: fakeXcrun)
+        try setPermissions(0o700, for: fakeXcrun)
+
+        let result = try runReleaseScript(
+            relativePath: "Scripts/create-ci-ios-simulator.sh",
+            arguments: ["iPad Pro 13-inch (M5)"],
+            environment: [
+                "AGENTLIMITS_FAKE_XCRUN_LOG": log.path,
+                "GITHUB_RUN_ATTEMPT": "3",
+                "GITHUB_RUN_ID": "12345",
+                "PATH": "\(directory.path):/usr/bin:/bin"
+            ]
+        )
+
+        XCTAssertEqual(result.status, 0, result.output)
+        XCTAssertEqual(
+            result.output,
+            "platform=iOS Simulator,id=01234567-89AB-CDEF-0123-456789ABCDEF\n"
+        )
+        let calls = try String(contentsOf: log, encoding: .utf8)
+        XCTAssertTrue(
+            calls.contains(
+                "simctl create AgentLimits CI - iPad Pro 13-inch (M5) - 12345-3 com.apple.CoreSimulator.SimDeviceType.iPad-Pro-13-inch-M5-12GB com.apple.CoreSimulator.SimRuntime.iOS-26-5"
+            ),
+            calls
+        )
+    }
+
     func testDependentWatchSchemeCannotArchiveStandaloneInstaller() throws {
         let scheme = try schemeDocument(named: "AgentLimitsWatch")
         let watchEntries = try scheme.nodes(
@@ -4459,6 +4651,27 @@ final class DistributionScriptTests: XCTestCase {
             environment,
             uniquingKeysWith: { _, override in override }
         )
+        let output = Pipe()
+        process.standardOutput = output
+        process.standardError = output
+        try process.run()
+        process.waitUntilExit()
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        return (
+            process.terminationStatus,
+            String(decoding: data, as: UTF8.self)
+        )
+    }
+
+    private func runAppleCredentialGuard(
+        repository: URL
+    ) throws -> (status: Int32, output: String) {
+        let process = Process()
+        process.executableURL = repositoryRoot.appendingPathComponent(
+            "Scripts/reject-apple-credential-artifacts.sh"
+        )
+        process.arguments = [repository.path]
+        process.environment = dependencyPolicyProcessEnvironment()
         let output = Pipe()
         process.standardOutput = output
         process.standardError = output
