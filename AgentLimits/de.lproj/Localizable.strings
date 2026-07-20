@@ -56,6 +56,7 @@
 "settings.hideMenuBarIcon" = "Menüleistensymbol ausblenden";
 "settings.hideMenuBarIcon.hint" = "Während das Symbol ausgeblendet ist, doppelklicken Sie auf das App-Symbol, um es vorübergehend anzuzeigen.";
 "settings.menuBar.sectionTitle" = "Menüleiste";
+"accessibility.menuBar.noProviders" = "In der Menüleiste werden keine Anbieter angezeigt.";
 
 /* Display Mode */
 "displayMode.used" = "Nutzungsrate";
@@ -257,6 +258,7 @@
 "activity.observed" = "Erfasst";
 "activity.refresh" = "Sitzungen aktualisieren";
 "activity.credentialTitle" = "GitHub-Sitzungsanmeldedaten";
+"activity.manageCredential" = "GitHub-Sitzungsanmeldedaten verwalten";
 "activity.credentialPlaceholder" = "Anmeldedaten einfügen";
 "activity.credentialHelp" = "Verwende ein fein abgestuftes PAT oder ein GitHub-App-Benutzerzugriffstoken ausschließlich mit der Repository-Leseberechtigung „Agent tasks“. Es bleibt im Schlüsselbund dieses Geräts. Die API befindet sich in der öffentlichen Vorschau.";
 "activity.credentialStored" = "Für dieses Konto sind Anmeldedaten gespeichert.";

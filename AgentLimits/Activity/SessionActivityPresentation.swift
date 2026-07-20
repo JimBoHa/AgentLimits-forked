@@ -103,6 +103,7 @@ struct SessionActivitySummaryView: View {
                         Image(systemName: "key")
                     }
                     .help("activity.credentialTitle".localized())
+                    .accessibilityLabel("activity.manageCredential".localized())
                 }
             }
         }

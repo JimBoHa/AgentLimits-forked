@@ -47,6 +47,17 @@ struct DashboardMenuItemView: View {
                 .padding(.horizontal, 5)
         )
         .onHover { isHovered = $0 }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(
+            MenuBarAccessibilityPresentation.dashboardLabel(provider: provider)
+        )
+        .accessibilityValue(
+            MenuBarAccessibilityPresentation.dashboardValue(
+                provider: provider,
+                snapshot: snapshot,
+                displayMode: displayMode
+            )
+        )
     }
 
     // MARK: - ヘッダー行

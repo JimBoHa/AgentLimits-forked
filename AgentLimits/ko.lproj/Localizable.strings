@@ -55,6 +55,7 @@
 "settings.hideMenuBarIcon" = "메뉴 막대 아이콘 숨기기";
 "settings.hideMenuBarIcon.hint" = "숨김 중에는 앱 아이콘을 더블 클릭하면 일시적으로 표시됩니다.";
 "settings.menuBar.sectionTitle" = "메뉴 막대";
+"accessibility.menuBar.noProviders" = "메뉴 막대에 표시되는 제공업체가 없습니다.";
 
 /* Display Mode */
 "displayMode.used" = "사용률";
@@ -257,6 +258,7 @@
 "activity.observed" = "확인 시각";
 "activity.refresh" = "세션 새로 고침";
 "activity.credentialTitle" = "GitHub 세션 인증 정보";
+"activity.manageCredential" = "GitHub 세션 인증 정보 관리";
 "activity.credentialPlaceholder" = "인증 정보 붙여넣기";
 "activity.credentialHelp" = "저장소의 ‘Agent tasks’ 읽기 권한만 부여한 세분화된 PAT 또는 GitHub App 사용자 액세스 토큰을 사용하세요. 이 기기의 키체인에만 보관됩니다. 이 API는 공개 미리 보기 상태입니다.";
 "activity.credentialStored" = "이 계정의 인증 정보가 저장되어 있습니다.";

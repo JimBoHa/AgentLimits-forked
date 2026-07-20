@@ -80,6 +80,11 @@ final class MenuBarController: NSObject {
     private func configureButton() {
         statusItem.button?.imageScaling = .scaleProportionallyDown
         statusItem.button?.imagePosition = .imageOnly
+        statusItem.button?.setAccessibilityLabel(
+            MenuBarAccessibilityPresentation.statusItemLabel
+        )
+        statusItem.button?.toolTip =
+            MenuBarAccessibilityPresentation.statusItemLabel
         updateButtonImage()
     }
 
@@ -88,6 +93,25 @@ final class MenuBarController: NSObject {
         let displayMode = loadDisplayMode()
         let colorScheme = resolveButtonColorScheme()
         let orderedProviders = ProviderOrderStore.loadProviderOrder()
+
+        let accessibilityStates: [MenuBarAccessibilityProviderState] =
+            orderedProviders.compactMap { provider in
+                guard isMenuBarEnabled(provider) else { return nil }
+                let account = appState.viewModel.selectedAccount(for: provider)
+                return MenuBarAccessibilityProviderState(
+                    account: account,
+                    usageSnapshot: snapshots[provider],
+                    sessionSnapshot: appState.sessionActivityViewModel.snapshot(
+                        for: account.id
+                    )
+                )
+            }
+        statusItem.button?.setAccessibilityValue(
+            MenuBarAccessibilityPresentation.statusValue(
+                states: accessibilityStates,
+                displayMode: displayMode
+            )
+        )
 
         // 前回の描画入力と同一であれば ImageRenderer をスキップする
         let cacheKey = MenuBarIconCacheKey(
@@ -153,6 +177,10 @@ final class MenuBarController: NSObject {
 
     private func observeChanges() {
         appState.viewModel.objectWillChange
+            .sink { [weak self] _ in self?.scheduleImageUpdate() }
+            .store(in: &cancellables)
+
+        appState.sessionActivityViewModel.objectWillChange
             .sink { [weak self] _ in self?.scheduleImageUpdate() }
             .store(in: &cancellables)
 
@@ -406,9 +434,22 @@ extension MenuBarController: NSMenuDelegate {
         hosting.frame = NSRect(x: 0, y: 0, width: max(300, fittingSize.width), height: fittingSize.height)
         hosting.autoresizingMask = [.width]
 
-        let item = NSMenuItem()
+        let item = MenuBarDashboardMenuItem(
+            title: MenuBarAccessibilityPresentation.dashboardMenuItemTitle(
+                provider: provider,
+                snapshot: snapshot,
+                displayMode: displayMode
+            ),
+            action: nil,
+            keyEquivalent: ""
+        )
+        MenuBarDashboardActivation.configure(
+            item,
+            provider: provider,
+            target: self,
+            action: #selector(openDashboardProvider(_:))
+        )
         item.view = hosting
-        item.isEnabled = true
         return item
     }
 
@@ -551,6 +592,13 @@ extension MenuBarController: NSMenuDelegate {
     @objc private func setLanguage(_ sender: NSMenuItem) {
         guard let language = sender.representedObject as? AppLanguageOption else { return }
         LanguageManager.shared.setLanguage(language)
+        scheduleImageUpdate()
+    }
+
+    @objc private func openDashboardProvider(_ sender: NSMenuItem) {
+        guard let provider = MenuBarDashboardActivation.provider(from: sender)
+        else { return }
+        NSWorkspace.shared.open(provider.usageURL)
     }
 
     @objc private func triggerWakeUp(_ sender: NSMenuItem) {
