@@ -1,6 +1,6 @@
 name: Dependency Review
 
-on:
+"on":
   pull_request:
 
 permissions:
@@ -16,9 +16,38 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
+      - name: Check out dependency policy
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate dependency exceptions
+        id: dependency-exceptions
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+
+          validator="$RUNNER_TEMP/dependency-exceptions.sh"
+          validator_path="Scripts/dependency-exceptions.sh"
+          if git cat-file -e "$BASE_SHA:$validator_path" 2>/dev/null; then
+            git show "$BASE_SHA:$validator_path" > "$validator"
+          else
+            cp "$validator_path" "$validator"
+          fi
+          chmod 500 "$validator"
+          "$validator" prepare-pull-request \
+            ".github/dependency-review-exceptions.json" \
+            "$BASE_SHA" \
+            "$HEAD_SHA" \
+            "$GITHUB_OUTPUT"
+
       - name: Review dependency changes
         uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
         with:
+          allow-ghsas: ${{ steps.dependency-exceptions.outputs.allow-ghsas }}
           fail-on-severity: moderate
           fail-on-scopes: runtime, development, unknown
           vulnerability-check: true

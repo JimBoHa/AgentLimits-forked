@@ -28,21 +28,29 @@ check required in the repository's branch rules to prevent a failed review from
 being merged.
 
 The dependency review workflow uses the read-only `pull_request` event. It does
-not use `pull_request_target`, write permissions, repository secrets, or a
-checkout of contributor-controlled code, so it is safe to run for forked pull
-requests. GitHub's dependency review API must be available for the repository;
-public repositories are supported, while private repositories require the
-applicable GitHub Advanced Security entitlement.
+not use `pull_request_target`, write permissions, repository secrets, or stored
+checkout credentials, so it is safe to run for forked pull requests. The
+exception-validation step executes the validator from the pull request's base
+commit and treats the proposed registry as data. GitHub's dependency review API
+must be available for the repository; public repositories are supported, while
+private repositories require the applicable GitHub Advanced Security
+entitlement.
 
 An advisory may be suppressed only when it is a confirmed false positive or
 when no safer version exists and the exposure has a documented compensating
 control. Submit the suppression as a separate pull request that:
 
-1. Adds the advisory ID to an `allow-ghsas` input in
-   `.github/workflows/dependency-review.yml`.
-2. Links the upstream advisory and a tracking issue.
-3. Documents affected versions, risk, compensating controls, owner, and an
-   expiration or review date.
+1. Changes only `.github/dependency-review-exceptions.json`.
+2. Adds the advisory ID, canonical advisory URL, affected package URLs, tracking
+   issue, justification, compensating controls, owner, and expiration date.
+3. Uses an expiration date that has not passed. The date is inclusive and is
+   evaluated in UTC.
 4. Receives maintainer approval before merge.
+
+The workflow validates every field, rejects duplicate or expired entries, and
+derives `allow-ghsas` only from the registry. A new exception is not active in
+the pull request that registers it; it can apply only after that registry-only
+pull request is reviewed and merged. Direct `allow-ghsas` values in the
+workflow are prohibited.
 
 Remove the suppression as soon as a safe dependency version is available.

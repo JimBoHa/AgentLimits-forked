@@ -3,39 +3,115 @@ import XCTest
 
 final class DistributionScriptTests: XCTestCase {
     func testDependencySecurityConfigurationStaysEnforced() throws {
-        let workflow = try repositoryFile(".github/workflows/dependency-review.yml")
-        XCTAssertTrue(workflow.contains("pull_request:"))
-        XCTAssertFalse(workflow.contains("pull_request_target"))
-        XCTAssertTrue(workflow.contains("permissions:\n  contents: read"))
-        XCTAssertFalse(workflow.contains("pull-requests: write"))
-        XCTAssertFalse(workflow.contains("secrets."))
-        XCTAssertFalse(workflow.contains("actions/checkout"))
-        XCTAssertTrue(workflow.contains("fail-on-severity: moderate"))
-        XCTAssertTrue(
-            workflow.contains("fail-on-scopes: runtime, development, unknown")
+        let configResult = try runDependencySecurityConfigValidator(
+            workflow: repositoryRoot.appendingPathComponent(
+                ".github/workflows/dependency-review.yml"
+            )
         )
-        XCTAssertTrue(workflow.contains("vulnerability-check: true"))
-        XCTAssertTrue(workflow.contains("warn-only: false"))
-        XCTAssertTrue(workflow.contains("comment-summary-in-pr: never"))
-        let pinnedActionPattern =
-            #"uses: actions/dependency-review-action@[0-9a-f]{40} # v[0-9]+\.[0-9]+\.[0-9]+"#
-        XCTAssertNotNil(
-            workflow.range(of: pinnedActionPattern, options: .regularExpression)
-        )
-        XCTAssertFalse(workflow.contains("actions/dependency-review-action@v"))
+        XCTAssertEqual(configResult.status, 0, configResult.output)
 
-        let dependabot = try repositoryFile(".github/dependabot.yml")
-        XCTAssertTrue(dependabot.contains("version: 2"))
-        XCTAssertEqual(
-            occurrences(of: "package-ecosystem: swift", in: dependabot),
-            1
+        let registryResult = try runDependencyExceptionValidator(
+            registry: repositoryRoot.appendingPathComponent(
+                ".github/dependency-review-exceptions.json"
+            )
         )
-        XCTAssertEqual(
-            occurrences(of: "package-ecosystem: github-actions", in: dependabot),
-            1
+        XCTAssertEqual(registryResult.status, 0, registryResult.output)
+        XCTAssertEqual(registryResult.output, "\n")
+    }
+
+    func testDependencyWorkflowRejectsCommentedSecurityDecoy() throws {
+        let workflow = try repositoryFile(".github/workflows/dependency-review.yml")
+            .replacingOccurrences(
+                of: "warn-only: false",
+                with: "warn-only: true # warn-only: false"
+            )
+        let fixture = try temporaryFile(
+            named: "dependency-review.yml",
+            contents: workflow
         )
-        XCTAssertEqual(occurrences(of: "directory: /", in: dependabot), 2)
-        XCTAssertEqual(occurrences(of: "interval: weekly", in: dependabot), 2)
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+        let result = try runDependencySecurityConfigValidator(
+            workflow: fixture.file
+        )
+
+        XCTAssertEqual(result.status, 78, result.output)
+        XCTAssertTrue(
+            result.output.contains("dependency-review inputs changed"),
+            result.output
+        )
+    }
+
+    func testDependencyWorkflowRejectsSeverityWeakening() throws {
+        let workflow = try repositoryFile(".github/workflows/dependency-review.yml")
+            .replacingOccurrences(
+                of: "fail-on-severity: moderate",
+                with: "fail-on-severity: critical # fail-on-severity: moderate"
+            )
+        let fixture = try temporaryFile(
+            named: "dependency-review.yml",
+            contents: workflow
+        )
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+        let result = try runDependencySecurityConfigValidator(
+            workflow: fixture.file
+        )
+
+        XCTAssertEqual(result.status, 78, result.output)
+        XCTAssertTrue(
+            result.output.contains("dependency-review inputs changed"),
+            result.output
+        )
+    }
+
+    func testDependencyWorkflowRejectsUnregisteredException() throws {
+        let workflow = try repositoryFile(".github/workflows/dependency-review.yml")
+            .replacingOccurrences(
+                of: "${{ steps.dependency-exceptions.outputs.allow-ghsas }}",
+                with: "GHSA-2345-6789-cfgh"
+            )
+        let fixture = try temporaryFile(
+            named: "dependency-review.yml",
+            contents: workflow
+        )
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+        let result = try runDependencySecurityConfigValidator(
+            workflow: fixture.file
+        )
+
+        XCTAssertEqual(result.status, 78, result.output)
+        XCTAssertTrue(
+            result.output.contains("dependency-review inputs changed"),
+            result.output
+        )
+    }
+
+    func testDependencyExceptionRegistryRejectsExpiredRecord() throws {
+        let fixture = try temporaryFile(
+            named: "dependency-review-exceptions.json",
+            contents: dependencyExceptionRegistry(expiresOn: "2000-01-01")
+        )
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+        let result = try runDependencyExceptionValidator(registry: fixture.file)
+
+        XCTAssertEqual(result.status, 78, result.output)
+        XCTAssertTrue(result.output.contains("expired record"), result.output)
+    }
+
+    func testDependencyExceptionRegistryEmitsOnlyRegisteredAdvisories() throws {
+        let fixture = try temporaryFile(
+            named: "dependency-review-exceptions.json",
+            contents: dependencyExceptionRegistry(expiresOn: "2099-01-01")
+        )
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+        let result = try runDependencyExceptionValidator(registry: fixture.file)
+
+        XCTAssertEqual(result.status, 0, result.output)
+        XCTAssertEqual(result.output, "GHSA-2345-6789-cfgh\n")
     }
 
     func testSigningConfigAcceptsOnlyCanonicalTeamAssignment() throws {
@@ -1114,8 +1190,34 @@ final class DistributionScriptTests: XCTestCase {
         )
     }
 
-    private func occurrences(of needle: String, in haystack: String) -> Int {
-        haystack.components(separatedBy: needle).count - 1
+    private func temporaryFile(
+        named name: String,
+        contents: String
+    ) throws -> (directory: URL, file: URL) {
+        let directory = try temporaryDirectory()
+        let file = directory.appendingPathComponent(name)
+        try Data(contents.utf8).write(to: file)
+        return (directory, file)
+    }
+
+    private func dependencyExceptionRegistry(expiresOn: String) -> String {
+        """
+        {
+          "schema_version": 1,
+          "exceptions": [
+            {
+              "advisory_url": "https://github.com/advisories/GHSA-2345-6789-cfgh",
+              "affected_packages": ["pkg:swift/sparkle-project/Sparkle@2.9.4"],
+              "compensating_controls": "Affected path is disabled until upgrade.",
+              "expires_on": "\(expiresOn)",
+              "ghsa": "GHSA-2345-6789-cfgh",
+              "justification": "No patched release is currently available.",
+              "owner": "@JimBoHa",
+              "tracking_issue": "https://github.com/JimBoHa/AgentLimits-forked/issues/1"
+            }
+          ]
+        }
+        """
     }
 
     private func xcodebuildCommands(in script: String) -> [String] {
@@ -1234,6 +1336,54 @@ final class DistributionScriptTests: XCTestCase {
             "signing-config-test",
             repositoryRoot.appendingPathComponent("Scripts/signing-config.sh").path,
             config.path
+        ]
+        let output = Pipe()
+        process.standardOutput = output
+        process.standardError = output
+        try process.run()
+        process.waitUntilExit()
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        return (
+            process.terminationStatus,
+            String(decoding: data, as: UTF8.self)
+        )
+    }
+
+    private func runDependencySecurityConfigValidator(
+        workflow: URL
+    ) throws -> (status: Int32, output: String) {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/ruby")
+        process.arguments = [
+            repositoryRoot.appendingPathComponent(
+                "Scripts/validate-dependency-security-config.rb"
+            ).path,
+            workflow.path,
+            repositoryRoot.appendingPathComponent(".github/dependabot.yml").path
+        ]
+        let output = Pipe()
+        process.standardOutput = output
+        process.standardError = output
+        try process.run()
+        process.waitUntilExit()
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        return (
+            process.terminationStatus,
+            String(decoding: data, as: UTF8.self)
+        )
+    }
+
+    private func runDependencyExceptionValidator(
+        registry: URL
+    ) throws -> (status: Int32, output: String) {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/bash")
+        process.arguments = [
+            repositoryRoot.appendingPathComponent(
+                "Scripts/dependency-exceptions.sh"
+            ).path,
+            "validate",
+            registry.path
         ]
         let output = Pipe()
         process.standardOutput = output
