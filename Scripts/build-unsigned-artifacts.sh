@@ -1,4 +1,45 @@
-#!/bin/bash
+#!/bin/bash -p
+# shellcheck disable=SC2154
+
+release_environment_needs_reset=false
+if [[ "${AGENTLIMITS_RELEASE_ENV_PID:-}" != "$$" ]]; then
+    release_environment_needs_reset=true
+else
+    while IFS= read -r -d '' inherited_environment_entry; do
+        case "$inherited_environment_entry" in
+            "AGENTLIMITS_RELEASE_ENV_PID=$$" \
+                | DEVELOPER_DIR=* \
+                | "LANG=C" \
+                | "LC_ALL=C" \
+                | "PATH=/usr/bin:/bin:/usr/sbin:/sbin" \
+                | PWD=* \
+                | SHLVL=* \
+                | _=*)
+                ;;
+            *)
+                release_environment_needs_reset=true
+                break
+                ;;
+        esac
+    done < <(/usr/bin/env -0)
+fi
+if [[ "$release_environment_needs_reset" == "true" ]]; then
+    exec /usr/bin/env -i \
+        AGENTLIMITS_RELEASE_ENV_PID="$$" \
+        DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}" \
+        LANG=C \
+        LC_ALL=C \
+        PATH=/usr/bin:/bin:/usr/sbin:/sbin \
+        /bin/bash -p "$0" "$@"
+    echo "Could not create a sanitized release environment" >&2
+    exit 70
+fi
+unset \
+    AGENTLIMITS_RELEASE_ENV_PID \
+    inherited_environment_entry \
+    release_environment_needs_reset
+HOME="$(cd ~ >/dev/null && pwd -P)" || exit 70
+export HOME
 
 set -euo pipefail
 
@@ -27,13 +68,18 @@ requested_output="$1"
 developer_dir="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}"
 validated_container_app=""
 validated_dmg_device=""
+validated_artifact_path=""
 # shellcheck disable=SC1091
 source "$script_dir/signing-config.sh"
 sanitize_release_git_environment
 # shellcheck disable=SC1091
+source "$script_dir/release-output.sh"
+# shellcheck disable=SC1091
 source "$script_dir/macos-container-validation.sh"
 # shellcheck disable=SC1091
 source "$script_dir/macos-code-signing.sh"
+# shellcheck disable=SC1091
+source "$script_dir/release-artifact-validation.sh"
 # shellcheck disable=SC1091
 source "$script_dir/app-store-product-validation.sh"
 
@@ -41,62 +87,19 @@ if [[ ! -x "$developer_dir/usr/bin/xcodebuild" ]]; then
     echo "Xcode not found at $developer_dir" >&2
     exit 69
 fi
-if [[ "$requested_output" != /* ]]; then
-    echo "Output directory must be an absolute path" >&2
-    exit 64
-fi
+validate_release_output_request "$requested_output" "$project_root" || exit $?
+output_parent="$validated_release_output_parent"
+output_parent_identity="$validated_release_output_parent_identity"
+output_name="$validated_release_output_name"
+output_dir="$validated_release_output_directory"
 
-output_name="$(basename "$requested_output")"
-requested_parent="$(dirname "$requested_output")"
-if [[ -z "$output_name" || "$output_name" == "." \
-    || "$output_name" == ".." || "$output_name" == "/" ]]; then
-    echo "Output directory name is unsafe" >&2
-    exit 64
-fi
-if [[ -L "$requested_parent" || ! -d "$requested_parent" ]]; then
-    echo "Output parent must already be one regular directory: $requested_parent" >&2
-    exit 73
-fi
-output_parent="$(cd "$requested_parent" && pwd -P)"
-output_dir="$output_parent/$output_name"
-output_parent_owner="$(stat -f '%u' "$output_parent")"
-output_parent_mode="$(stat -f '%Lp' "$output_parent")"
-# shellcheck disable=SC2012
-output_parent_mutating_acl_entries="$(ls -lde "$output_parent" \
-    | awk 'NR > 1 && / allow / && \
-        /(write|append|delete|add_file|add_subdirectory|chown)/ \
-        { count += 1 } END { print count + 0 }')"
-if [[ "$output_parent_owner" != "$(id -u)" \
-    || $((8#$output_parent_mode & 8#022)) -ne 0 \
-    || "$output_parent_mutating_acl_entries" != "0" ]]; then
-    echo "Output parent must be current-user-owned without external write access" >&2
-    exit 73
-fi
-if [[ -e "$output_dir" || -L "$output_dir" ]]; then
-    echo "Refusing to overwrite existing path: $output_dir" >&2
-    exit 73
-fi
-case "$output_dir/" in
-    "$project_root/"*)
-        echo "Output directory must be outside the source tree" >&2
-        exit 73
-        ;;
-esac
-
-source_commit="$(git -C "$project_root" rev-parse HEAD)"
-if [[ -n "$(git -C "$project_root" status --porcelain \
-        --untracked-files=normal)" ]]; then
-    echo "Refusing unsigned artifacts from a dirty Git working tree" >&2
-    exit 65
-fi
+pin_clean_release_source "$project_root" || exit $?
+source_commit="$validated_release_source_commit"
+source_tree="$validated_release_source_tree"
 
 verify_source_unchanged() {
-    if [[ "$(git -C "$project_root" rev-parse HEAD)" != "$source_commit" \
-        || -n "$(git -C "$project_root" status --porcelain \
-            --untracked-files=normal)" ]]; then
-        echo "Source changed while building; discard these artifacts" >&2
-        return 65
-    fi
+    verify_pinned_release_source_unchanged \
+        "$project_root" "$source_commit" "$source_tree"
 }
 
 verify_no_distribution_material() {
@@ -210,27 +213,28 @@ verify_unsigned_disk_image() {
 }
 
 work_dir=""
+work_dir_identity=""
+source_snapshot=""
+source_snapshot_identity=""
 staging_parent=""
+staging_parent_identity=""
 staging_dir=""
-publication_lock="$output_parent/.$output_name.AgentLimits-unsigned.lock"
-publication_lock_acquired=0
+staging_dir_identity=""
+publication_lock=""
+publication_lock_identity=""
+atomic_publisher=""
+atomic_publisher_identity=""
+atomic_publisher_hash=""
 dmg_attached_device=""
 dmg_mount=""
 
-release_publication_lock() {
-    if [[ "${publication_lock_acquired:-0}" == "1" \
-        && -n "${publication_lock:-}" \
-        && "$publication_lock" == "$output_parent/."*".AgentLimits-unsigned.lock" \
-        && -d "$publication_lock" ]]; then
-        if rmdir "$publication_lock" 2>/dev/null; then
-            publication_lock_acquired=0
-        else
-            echo "Could not remove publication lock: $publication_lock" >&2
-        fi
-    fi
-}
-
 cleanup() {
+    local exit_status=$?
+    local staging_cleanup_allowed=true
+    local work_cleanup_allowed=true
+
+    trap - EXIT
+    set +e
     if [[ -n "${dmg_attached_device:-}" ]]; then
         if ! hdiutil detach "$dmg_attached_device" -quiet 2>/dev/null \
             && [[ -n "${dmg_mount:-}" ]]; then
@@ -244,41 +248,83 @@ cleanup() {
         && mount | grep -Fq " on $dmg_mount "; then
         echo "DMG remains mounted; preserving temporary work at $work_dir" >&2
         echo "Preserving staged output at $staging_dir" >&2
-        release_publication_lock
-        return
+        staging_cleanup_allowed=false
+        work_cleanup_allowed=false
     fi
-    if [[ -n "${staging_parent:-}" && -d "$staging_parent" \
-        && "$staging_parent" == "$output_parent/.AgentLimits-unsigned-stage."* ]]; then
-        rm -rf "$staging_parent"
+    if [[ "$staging_cleanup_allowed" == "true" ]] \
+        && ! cleanup_private_release_directory \
+            "${staging_parent:-}" \
+            "${staging_parent_identity:-}" \
+            "$output_parent" \
+            '^\.AgentLimits-unsigned-stage\.[A-Za-z0-9]{6}$'; then
+        staging_cleanup_allowed=false
     fi
-    if [[ -n "${work_dir:-}" && -d "$work_dir" \
-        && "$work_dir" == "/private/tmp/AgentLimits-unsigned-build."* ]]; then
-        rm -rf "$work_dir"
+    if [[ -n "${source_snapshot:-}" ]] \
+        && ! unlock_immutable_release_source_snapshot_for_cleanup \
+            "$source_snapshot" \
+            "$source_snapshot_identity" \
+            "$work_dir" \
+            "$project_root" \
+            "$source_tree"; then
+        work_cleanup_allowed=false
     fi
-    release_publication_lock
+    if [[ "$work_cleanup_allowed" == "true" ]] \
+        && ! cleanup_private_release_directory \
+            "${work_dir:-}" \
+            "${work_dir_identity:-}" \
+            /private/tmp \
+            '^AgentLimits-unsigned-build\.[A-Za-z0-9]{6}$'; then
+        work_cleanup_allowed=false
+    fi
+    if [[ -n "${publication_lock:-}" ]]; then
+        release_release_publication_lock \
+            "$publication_lock" \
+            "$publication_lock_identity" \
+            "$output_parent" \
+            "$output_name" \
+            || true
+    fi
+    return "$exit_status"
 }
 trap cleanup EXIT
 
-work_dir="$(mktemp -d "/private/tmp/AgentLimits-unsigned-build.XXXXXX")"
-staging_parent="$(mktemp -d "$output_parent/.AgentLimits-unsigned-stage.XXXXXX")"
-staging_dir="$staging_parent/$output_name"
-mkdir -m 700 "$staging_dir"
-if ! mkdir -m 700 "$publication_lock" 2>/dev/null; then
-    echo "Another build may already target this output directory" >&2
-    exit 73
-fi
-publication_lock_acquired=1
-chmod 700 "$work_dir" "$staging_parent" "$staging_dir"
+acquire_release_publication_lock \
+    "$output_parent" "$output_name" "$output_parent_identity" || exit $?
+publication_lock="$validated_release_publication_lock"
+publication_lock_identity="$validated_release_publication_lock_identity"
+create_release_staging_directory \
+    "$output_parent" \
+    "$output_name" \
+    "$output_parent_identity" \
+    unsigned \
+    || exit $?
+staging_parent="$validated_release_staging_parent"
+staging_parent_identity="$validated_release_staging_parent_identity"
+staging_dir="$validated_release_staging_directory"
+staging_dir_identity="$validated_release_staging_directory_identity"
+create_private_release_work_directory AgentLimits-unsigned-build || exit $?
+work_dir="$validated_release_work_directory"
+work_dir_identity="$validated_release_work_directory_identity"
+configure_private_release_temporary_directory "$work_dir" || exit $?
 export DEVELOPER_DIR="$developer_dir"
 
-build_root="$work_dir/source"
-mkdir -m 700 "$build_root"
-git -C "$project_root" archive --format=tar "$source_commit" \
-    | tar -xf - -C "$build_root"
-snapshot_config="$build_root/Configurations/UnsignedBuild.xcconfig"
+create_immutable_release_source_snapshot \
+    "$project_root" "$source_commit" "$source_tree" "$work_dir" || exit $?
+source_snapshot="$validated_release_source_snapshot"
+source_snapshot_identity="$validated_release_source_snapshot_identity"
+build_root="$source_snapshot"
+snapshot_config="$work_dir/UnsignedBuild.xcconfig"
 printf '%s\n' '// Sanitized, unsigned build environment.' >"$snapshot_config"
 chmod 600 "$snapshot_config"
 prepare_xcode_signing_environment "$snapshot_config"
+verify_source_unchanged
+build_atomic_release_publisher \
+    "$build_root/Scripts/atomic-release-publish.c" \
+    "$work_dir/atomic-release-publish" \
+    || exit $?
+atomic_publisher="$validated_release_atomic_publisher"
+atomic_publisher_identity="$validated_release_atomic_publisher_identity"
+atomic_publisher_hash="$validated_release_atomic_publisher_hash"
 verify_source_unchanged
 
 derived_data="$work_dir/DerivedData"
@@ -330,10 +376,26 @@ if ! xcodebuild archive \
 fi
 verify_source_unchanged
 
-mac_app="$mac_archive/Products/Applications/AgentLimitsForked.app"
-ios_app="$ios_archive/Products/Applications/AgentLimits.app"
-watch_app="$ios_app/Watch/AgentLimitsWatch.app"
-widget="$mac_app/Contents/PlugIns/AgentLimitsWidgetExtension.appex"
+validate_only_named_directory_entry \
+    "$mac_archive/Products/Applications" \
+    AgentLimitsForked.app \
+    "unsigned macOS archive products" || exit $?
+mac_app="$validated_artifact_path"
+validate_only_named_directory_entry \
+    "$mac_app/Contents/PlugIns" \
+    AgentLimitsWidgetExtension.appex \
+    "unsigned macOS archive plug-ins" || exit $?
+widget="$validated_artifact_path"
+validate_only_named_directory_entry \
+    "$ios_archive/Products/Applications" \
+    AgentLimits.app \
+    "unsigned iOS archive products" || exit $?
+ios_app="$validated_artifact_path"
+validate_only_named_directory_entry \
+    "$ios_app/Watch" \
+    AgentLimitsWatch.app \
+    "unsigned iOS archive Watch products" || exit $?
+watch_app="$validated_artifact_path"
 
 app_store_validate_applications_root \
     "$mac_archive/Products/Applications" "$mac_app" \
@@ -417,6 +479,22 @@ validate_exact_binary_architectures \
     "$ios_archs" "iOS app" arm64 || exit $?
 validate_exact_binary_architectures \
     "$watch_archs" "watchOS app" arm64 arm64_32 || exit $?
+validate_dsym_matches_binary \
+    "$mac_app/Contents/MacOS/$mac_executable" \
+    "$mac_archive/dSYMs/AgentLimitsForked.app.dSYM" \
+    "unsigned macOS app" arm64 x86_64 || exit $?
+validate_dsym_matches_binary \
+    "$widget/Contents/MacOS/$widget_executable" \
+    "$mac_archive/dSYMs/AgentLimitsWidgetExtension.appex.dSYM" \
+    "unsigned macOS widget" arm64 x86_64 || exit $?
+validate_dsym_matches_binary \
+    "$ios_app/$ios_executable" \
+    "$ios_archive/dSYMs/AgentLimits.app.dSYM" \
+    "unsigned iOS app" arm64 || exit $?
+validate_dsym_matches_binary \
+    "$watch_app/$watch_executable" \
+    "$ios_archive/dSYMs/AgentLimitsWatch.app.dSYM" \
+    "unsigned Watch app" arm64 arm64_32 || exit $?
 if [[ "$(plutil -extract WKRunsIndependentlyOfCompanionApp raw \
         "$watch_info")" != "false" ]]; then
     echo "Watch app unexpectedly declares independent distribution" >&2
@@ -596,6 +674,8 @@ PKG/DMG: no distribution signature
 Third-party Sparkle code: upstream signatures retained
 Container verification: ZIP, archive ZIPs, PKG, and DMG reopened and matched
 Archive integrity: canonical tree manifests in ARCHIVE-MANIFESTS
+Archive/product cardinality: passed
+dSYM UUID and architecture identity: passed
 
 These files are preflight artifacts only. Do not re-sign, upload, or publicly
 distribute them. Rebuild with signing enabled for release. They will not install
@@ -621,8 +701,17 @@ verify_source_unchanged
 )
 verify_source_unchanged
 
-publish_staged_directory \
-    "$staging_dir" "$output_parent" "$output_name" || exit $?
+publish_staged_release_directory \
+    "$staging_dir" \
+    "$staging_dir_identity" \
+    "$output_parent" \
+    "$output_parent_identity" \
+    "$output_name" \
+    "$atomic_publisher" \
+    "$atomic_publisher_identity" \
+    "$atomic_publisher_hash" \
+    "$staging_parent_identity" \
+    || exit $?
 staging_dir=""
 rmdir "$staging_parent"
 staging_parent=""
