@@ -76,6 +76,13 @@ sanitize_release_git_environment() {
         LC_ALL
 }
 
+run_release_git() (
+    # Apple /usr/bin/git is selected through xcrun. Repository validation must
+    # not be redirected or disabled by the Xcode chosen for the later build.
+    unset DEVELOPER_DIR
+    /usr/bin/git "$@"
+)
+
 verify_release_tracked_worktree_against_tree() {
     local project_root="$1"
     local expected_tree="$2"
@@ -121,7 +128,7 @@ verify_release_tracked_worktree_against_tree() {
 
     index_path="$validation_directory/index"
     flags_path="$validation_directory/index-flags"
-    if ! /usr/bin/git -C "$project_root" ls-files -v -z \
+    if ! run_release_git -C "$project_root" ls-files -v -z \
             >"$flags_path"; then
         echo "Could not inspect release source index flags" >&2
         validation_status=65
@@ -130,11 +137,16 @@ verify_release_tracked_worktree_against_tree() {
         echo "Release source index contains hidden worktree flags" >&2
         validation_status=65
     elif ! GIT_INDEX_FILE="$index_path" \
-            /usr/bin/git -C "$project_root" read-tree "$expected_tree"; then
+            run_release_git -C "$project_root" read-tree "$expected_tree"; then
         echo "Could not create an independent release index" >&2
         validation_status=65
     elif ! GIT_INDEX_FILE="$index_path" \
-            /usr/bin/git -c core.filemode=true -C "$project_root" \
+            run_release_git -c core.filemode=true -C "$project_root" \
+                update-index --refresh --ignore-submodules; then
+        echo "Tracked release source differs from the pinned tree" >&2
+        validation_status=65
+    elif ! GIT_INDEX_FILE="$index_path" \
+            run_release_git -c core.filemode=true -C "$project_root" \
                 diff-files --quiet --ignore-submodules=all --; then
         echo "Tracked release source differs from the pinned tree" >&2
         validation_status=65
@@ -164,21 +176,21 @@ pin_clean_release_source() {
         return 65
     fi
     canonical_root="$(cd "$project_root" >/dev/null && pwd -P)" || return 65
-    repository_root="$(/usr/bin/git -C "$canonical_root" rev-parse \
+    repository_root="$(run_release_git -C "$canonical_root" rev-parse \
         --show-toplevel)" || return 65
     if [[ "$repository_root" != "$canonical_root" ]]; then
         echo "Release source root does not match the Git worktree" >&2
         return 65
     fi
-    source_commit="$(/usr/bin/git -C "$canonical_root" rev-parse \
+    source_commit="$(run_release_git -C "$canonical_root" rev-parse \
         --verify 'HEAD^{commit}')" || return 65
-    source_tree="$(/usr/bin/git -C "$canonical_root" rev-parse \
+    source_tree="$(run_release_git -C "$canonical_root" rev-parse \
         --verify "$source_commit^{tree}")" || return 65
     validate_release_git_repository_configuration "$canonical_root" \
         || return $?
     verify_release_tracked_worktree_against_tree \
         "$canonical_root" "$source_tree" || return $?
-    if ! status_output="$(/usr/bin/git \
+    if ! status_output="$(run_release_git \
             -c core.fsmonitor=false \
             -c core.untrackedCache=false \
             -C "$canonical_root" status --no-renames \
@@ -204,9 +216,9 @@ verify_pinned_release_source_unchanged() {
     local actual_tree
     local status_output
 
-    actual_commit="$(/usr/bin/git -C "$project_root" rev-parse \
+    actual_commit="$(run_release_git -C "$project_root" rev-parse \
         --verify 'HEAD^{commit}')" || return 65
-    actual_tree="$(/usr/bin/git -C "$project_root" rev-parse \
+    actual_tree="$(run_release_git -C "$project_root" rev-parse \
         --verify "$actual_commit^{tree}")" || return 65
     validate_release_git_repository_configuration "$project_root" \
         || return $?
@@ -215,7 +227,7 @@ verify_pinned_release_source_unchanged() {
         echo "Could not recheck the exact tracked release source" >&2
         return 65
     fi
-    if ! status_output="$(/usr/bin/git \
+    if ! status_output="$(run_release_git \
             -c core.fsmonitor=false \
             -c core.untrackedCache=false \
             -C "$project_root" status --no-renames \
@@ -237,7 +249,7 @@ validate_release_git_repository_configuration() {
     local unsafe_configuration
     local config_status=0
 
-    unsafe_configuration="$(/usr/bin/git -C "$project_root" config \
+    unsafe_configuration="$(run_release_git -C "$project_root" config \
         --includes --name-only --get-regexp \
         '^(core\.fsmonitor|core\.attributesfile|filter\..*\.(clean|process|required))$')" \
         || config_status=$?
