@@ -95,6 +95,9 @@ struct MobileRootView: View {
                                         account: nil
                                     )
                             }
+                            .accessibilityIdentifier(
+                                "mobile.addAccount.\(provider.rawValue)"
+                            )
                         }
                     } label: {
                         Label("Add Account", systemImage: "plus")
@@ -408,18 +411,22 @@ struct MobileRootView: View {
     private func removeCandidate() {
         guard let candidate = removalCandidate else { return }
         removalCandidate = nil
-        do {
-            try model.removeAccount(id: candidate.id)
-        } catch {
-            errorMessage = error.localizedDescription
+        Task { @MainActor in
+            do {
+                try await model.removeAccount(id: candidate.id)
+            } catch {
+                errorMessage = error.localizedDescription
+            }
         }
     }
 
     private func clearSessionData() {
-        do {
-            try model.clearAllSessionData()
-        } catch {
-            errorMessage = error.localizedDescription
+        Task { @MainActor in
+            do {
+                try await model.clearAllSessionData()
+            } catch {
+                errorMessage = error.localizedDescription
+            }
         }
     }
 }

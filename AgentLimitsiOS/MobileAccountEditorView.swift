@@ -15,6 +15,7 @@ struct MobileAccountEditorView: View {
     @State private var label: String
     @State private var isEnabled: Bool
     @State private var errorMessage: String?
+    @FocusState private var isLabelFocused: Bool
 
     init(
         configuration: MobileAccountEditorConfiguration,
@@ -38,6 +39,7 @@ struct MobileAccountEditorView: View {
                     TextField("Account name", text: $label)
                         .textContentType(.name)
                         .autocorrectionDisabled()
+                        .focused($isLabelFocused)
                         .accessibilityIdentifier("mobile.accountNameField")
                     Toggle("Refresh when the app is active", isOn: $isEnabled)
                 }
@@ -73,6 +75,14 @@ struct MobileAccountEditorView: View {
             }
         }
         .presentationDetents([.medium])
+        .onAppear {
+            #if DEBUG
+            if configuration.account == nil,
+               MobileAppRuntime.isUITesting() {
+                isLabelFocused = true
+            }
+            #endif
+        }
     }
 
     private var trimmedLabel: String {
