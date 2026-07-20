@@ -70,6 +70,9 @@ jobs:
             exit 1
           fi
 
+      - name: Reject committed Apple credential artifacts
+        run: Scripts/reject-apple-credential-artifacts.sh
+
   tests:
     name: Test — ${{ matrix.name }}
     needs: source-gates
@@ -100,7 +103,8 @@ jobs:
           - name: iPhone
             scheme: AgentLimitsiOS
             configuration: Debug
-            destination: platform=iOS Simulator,name=iPhone 17 Pro,OS=latest
+            destination: ""
+            device_name: iPhone 17 Pro
             result: iPhone
             code_signing_allowed: "NO"
             code_signing_required: "NO"
@@ -109,7 +113,8 @@ jobs:
           - name: iPad
             scheme: AgentLimitsiOS
             configuration: Debug
-            destination: platform=iOS Simulator,name=iPad Pro 13-inch (M5),OS=latest
+            destination: ""
+            device_name: iPad Pro 13-inch (M5)
             result: iPad
             code_signing_allowed: "NO"
             code_signing_required: "NO"
@@ -129,6 +134,19 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
+
+      - name: Provision dedicated iOS simulator
+        if: ${{ matrix.result == 'iPhone' || matrix.result == 'iPad' }}
+        id: ios-destination
+        env:
+          IOS_DEVICE_NAME: ${{ matrix.device_name }}
+        run: |
+          set -euo pipefail
+
+          destination="$(Scripts/create-ci-ios-simulator.sh "$IOS_DEVICE_NAME")"
+          udid="${destination##*,id=}"
+          printf 'destination=%s\nudid=%s\n' \
+            "$destination" "$udid" >> "$GITHUB_OUTPUT"
 
       - name: Resolve Apple Watch simulator
         if: ${{ matrix.result == 'Watch' }}
@@ -217,11 +235,14 @@ jobs:
           CODE_SIGNING_REQUIRED_VALUE: ${{ matrix.code_signing_required }}
           CODE_SIGN_IDENTITY_VALUE: ${{ matrix.code_sign_identity }}
           DEVELOPMENT_TEAM_VALUE: ${{ matrix.development_team }}
+          RESOLVED_IOS_DESTINATION: ${{ steps.ios-destination.outputs.destination }}
           RESOLVED_WATCH_DESTINATION: ${{ steps.watch-destination.outputs.destination }}
           TEST_RESULT: ${{ matrix.result }}
         run: |
           if [[ "$TEST_RESULT" == "Watch" ]]; then
             destination="$RESOLVED_WATCH_DESTINATION"
+          elif [[ "$TEST_RESULT" == "iPhone" || "$TEST_RESULT" == "iPad" ]]; then
+            destination="$RESOLVED_IOS_DESTINATION"
           else
             destination="$CONFIGURED_DESTINATION"
           fi
@@ -255,6 +276,17 @@ jobs:
           path: ${{ runner.temp }}/${{ matrix.result }}.xcresult
           if-no-files-found: error
           retention-days: 14
+
+      - name: Delete dedicated iOS simulator
+        if: ${{ always() && (matrix.result == 'iPhone' || matrix.result == 'iPad') }}
+        env:
+          IOS_SIMULATOR_UDID: ${{ steps.ios-destination.outputs.udid }}
+        run: |
+          if [[ -z "$IOS_SIMULATOR_UDID" ]]; then
+            exit 0
+          fi
+          xcrun simctl shutdown "$IOS_SIMULATOR_UDID" >/dev/null 2>&1 || true
+          xcrun simctl delete "$IOS_SIMULATOR_UDID"
 
   analyze:
     name: Analyze — ${{ matrix.name }}
