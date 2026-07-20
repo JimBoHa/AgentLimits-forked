@@ -66,10 +66,229 @@ final class DistributionScriptTests: XCTestCase {
         XCTAssertTrue(result.output.contains("changed while building"), result.output)
     }
 
+    func testReleaseGitEnvironmentDropsInheritedOverrides() throws {
+        let command = #"source "$1"; sanitize_release_git_environment; /usr/bin/env | LC_ALL=C /usr/bin/sort | /usr/bin/sed -n '/^GIT_/p'"#
+        let result = try runSigningConfigHelper(
+            command: command,
+            environment: [
+                "GIT_ATTR_NOSYSTEM": "0",
+                "GIT_COMMON_DIR": "/private/tmp/hostile-common",
+                "GIT_CONFIG_COUNT": "1",
+                "GIT_CONFIG_GLOBAL": "/private/tmp/hostile.gitconfig",
+                "GIT_CONFIG_KEY_0": "core.worktree",
+                "GIT_CONFIG_VALUE_0": "/private/tmp/hostile-worktree",
+                "GIT_DIR": "/private/tmp/hostile.git",
+                "GIT_INDEX_FILE": "/private/tmp/hostile-index",
+                "GIT_NO_REPLACE_OBJECTS": "0",
+                "GIT_REPLACE_REF_BASE": "refs/hostile-replacements",
+                "GIT_WORK_TREE": "/private/tmp/hostile-worktree"
+            ]
+        )
+
+        XCTAssertEqual(result.status, 0, result.output)
+        XCTAssertEqual(
+            result.output.split(separator: "\n").map(String.init),
+            [
+                "GIT_ATTR_NOSYSTEM=1",
+                "GIT_CONFIG_GLOBAL=/dev/null",
+                "GIT_CONFIG_NOSYSTEM=1",
+                "GIT_NO_REPLACE_OBJECTS=1"
+            ]
+        )
+    }
+
+    func testReleaseGitEnvironmentPinsRepositoryAndDisablesReplacementRefs() throws {
+        let repository = try temporaryDirectory()
+        let alternateRepository = try temporaryDirectory()
+        let hostileConfig = try temporaryDirectory()
+            .appendingPathComponent("hostile.gitconfig")
+        defer {
+            try? FileManager.default.removeItem(at: repository)
+            try? FileManager.default.removeItem(at: alternateRepository)
+            try? FileManager.default.removeItem(
+                at: hostileConfig.deletingLastPathComponent()
+            )
+        }
+
+        let trustedCommit = try initializeGitRepository(
+            at: repository,
+            fileName: "trusted.txt"
+        )
+        try FileManager.default.removeItem(
+            at: repository.appendingPathComponent("trusted.txt")
+        )
+        try Data("replacement".utf8).write(
+            to: repository.appendingPathComponent("replacement.txt")
+        )
+        _ = try git(["add", "-A"], at: repository)
+        _ = try git(["commit", "-qm", "replacement"], at: repository)
+        let replacementCommit = try git(["rev-parse", "HEAD"], at: repository)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        _ = try git(["checkout", "-q", "--detach", trustedCommit], at: repository)
+        _ = try git(
+            ["replace", trustedCommit, replacementCommit],
+            at: repository
+        )
+
+        _ = try initializeGitRepository(
+            at: alternateRepository,
+            fileName: "alternate.txt"
+        )
+        try Data(
+            "[core]\n\tworktree = \(alternateRepository.path)\n".utf8
+        ).write(to: hostileConfig)
+
+        let command = #"source "$1"; sanitize_release_git_environment; /usr/bin/git -C "$2" archive --format=tar HEAD | /usr/bin/tar -tf -"#
+        let result = try runSigningConfigHelper(
+            command: command,
+            arguments: [repository.path],
+            environment: [
+                "GIT_COMMON_DIR": alternateRepository
+                    .appendingPathComponent(".git").path,
+                "GIT_CONFIG_COUNT": "1",
+                "GIT_CONFIG_GLOBAL": hostileConfig.path,
+                "GIT_CONFIG_KEY_0": "core.worktree",
+                "GIT_CONFIG_VALUE_0": alternateRepository.path,
+                "GIT_DIR": alternateRepository.appendingPathComponent(".git").path,
+                "GIT_INDEX_FILE": alternateRepository
+                    .appendingPathComponent(".git/index").path,
+                "GIT_NO_REPLACE_OBJECTS": "0",
+                "GIT_REPLACE_REF_BASE": "refs/replace",
+                "GIT_WORK_TREE": alternateRepository.path
+            ]
+        )
+
+        XCTAssertEqual(result.status, 0, result.output)
+        XCTAssertEqual(
+            result.output.trimmingCharacters(in: .whitespacesAndNewlines),
+            "trusted.txt"
+        )
+    }
+
+    func testReleaseScriptsIgnoreHostileCDPATHWithNewlineTrap() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let cdPathRoot = directory.appendingPathComponent("cdpath")
+        let decoyScripts = cdPathRoot.appendingPathComponent("Scripts")
+        try FileManager.default.createDirectory(
+            at: decoyScripts,
+            withIntermediateDirectories: true
+        )
+        let poisonedScriptDirectory = URL(
+            fileURLWithPath: "\(decoyScripts.path)\n\(decoyScripts.path)",
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(
+            at: poisonedScriptDirectory,
+            withIntermediateDirectories: true
+        )
+        try Data(
+            #"printf 'sourced\n' >"$AGENTLIMITS_CDPATH_MARKER"; exit 99"#.utf8
+        ).write(
+            to: poisonedScriptDirectory.appendingPathComponent("signing-config.sh")
+        )
+        let missingDeveloperDirectory = directory.appendingPathComponent("missing-Xcode")
+        let invocations: [(String, [String])] = [
+            (
+                "Scripts/export-ios.sh",
+                [directory.appendingPathComponent("ios-output").path, "app-store-connect"]
+            ),
+            (
+                "Scripts/package-macos.sh",
+                [
+                    directory.appendingPathComponent("mac-output").path,
+                    "notary-profile",
+                    "Developer ID Installer: Example (ABCDE12345)"
+                ]
+            ),
+            (
+                "Scripts/build-unsigned-artifacts.sh",
+                [directory.appendingPathComponent("unsigned-output").path]
+            )
+        ]
+
+        for (index, invocation) in invocations.enumerated() {
+            let marker = directory.appendingPathComponent("marker-\(index)")
+            let result = try runReleaseScript(
+                relativePath: invocation.0,
+                arguments: invocation.1,
+                environment: [
+                    "AGENTLIMITS_CDPATH_MARKER": marker.path,
+                    "CDPATH": cdPathRoot.path,
+                    "DEVELOPER_DIR": missingDeveloperDirectory.path
+                ]
+            )
+
+            XCTAssertEqual(result.status, 69, "\(invocation.0): \(result.output)")
+            XCTAssertTrue(
+                result.output.contains(
+                    "Xcode not found at \(missingDeveloperDirectory.path)"
+                ),
+                "\(invocation.0): \(result.output)"
+            )
+            XCTAssertFalse(
+                FileManager.default.fileExists(atPath: marker.path),
+                invocation.0
+            )
+        }
+    }
+
+    func testReleaseScriptsRejectSymlinkInvocationBeforeSourcingHelpers() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let marker = directory.appendingPathComponent("sourced-marker")
+        try Data(
+            #"printf 'sourced\n' >"$AGENTLIMITS_SYMLINK_MARKER"; exit 99"#.utf8
+        ).write(to: directory.appendingPathComponent("signing-config.sh"))
+        let invocations: [(String, [String])] = [
+            (
+                "export-ios.sh",
+                [directory.appendingPathComponent("ios-output").path, "app-store-connect"]
+            ),
+            (
+                "package-macos.sh",
+                [
+                    directory.appendingPathComponent("mac-output").path,
+                    "notary-profile",
+                    "Developer ID Installer: Example (ABCDE12345)"
+                ]
+            ),
+            (
+                "build-unsigned-artifacts.sh",
+                [directory.appendingPathComponent("unsigned-output").path]
+            )
+        ]
+
+        for invocation in invocations {
+            let link = directory.appendingPathComponent(invocation.0)
+            try FileManager.default.createSymbolicLink(
+                at: link,
+                withDestinationURL: repositoryRoot
+                    .appendingPathComponent("Scripts")
+                    .appendingPathComponent(invocation.0)
+            )
+            let result = try runProcess(
+                executable: "/bin/bash",
+                arguments: [link.path] + invocation.1,
+                environment: ["AGENTLIMITS_SYMLINK_MARKER": marker.path]
+            )
+
+            XCTAssertEqual(result.status, 64, "\(invocation.0): \(result.output)")
+            XCTAssertTrue(result.output.contains("script symlink"), result.output)
+            XCTAssertFalse(FileManager.default.fileExists(atPath: marker.path))
+        }
+    }
+
     func testSignedReleaseScriptsUseCleanSnapshotAndRecheckConfig() throws {
         for name in ["package-macos.sh", "export-ios.sh"] {
             let script = try releaseScript(named: name)
             XCTAssertTrue(script.contains("source \"$script_dir/signing-config.sh\""), name)
+            XCTAssertTrue(script.contains("sanitize_release_git_environment"), name)
+            XCTAssertTrue(script.contains("unset CDPATH"), name)
+            XCTAssertTrue(
+                script.contains("Refusing to run a signed release through a script symlink"),
+                name
+            )
             XCTAssertTrue(script.contains("source \"$script_dir/release-output.sh\""), name)
             XCTAssertTrue(script.contains("git -C \"$project_root\" archive"), name)
             XCTAssertTrue(script.contains("$build_root/AgentLimits.xcodeproj"), name)
@@ -106,6 +325,12 @@ final class DistributionScriptTests: XCTestCase {
             XCTAssertTrue(script.contains("release_output_dir"), name)
             XCTAssertTrue(
                 script.contains("configure_private_release_temporary_directory"),
+                name
+            )
+            XCTAssertTrue(script.contains("derived_data=\"$work_dir/DerivedData\""), name)
+            XCTAssertTrue(script.contains("mkdir -m 700 \"$derived_data\""), name)
+            XCTAssertTrue(
+                script.contains("make_release_directory_private \"$derived_data\""),
                 name
             )
             XCTAssertFalse(script.contains("${TMPDIR:-"), name)
@@ -409,6 +634,9 @@ final class DistributionScriptTests: XCTestCase {
 
         XCTAssertTrue(script.contains("PATH=\"/usr/bin:/bin:/usr/sbin:/sbin\""))
         XCTAssertTrue(script.contains("source \"$script_dir/signing-config.sh\""))
+        XCTAssertTrue(script.contains("sanitize_release_git_environment"))
+        XCTAssertTrue(script.contains("unset CDPATH"))
+        XCTAssertTrue(script.contains("Refusing to run a release build through a script symlink"))
         XCTAssertTrue(script.contains("git -C \"$project_root\" archive"))
         XCTAssertTrue(script.contains("$build_root/AgentLimits.xcodeproj"))
         XCTAssertTrue(
@@ -473,6 +701,12 @@ final class DistributionScriptTests: XCTestCase {
             XCTAssertEqual(dependencyResolvingCommands.count, 2, name)
             XCTAssertTrue(
                 dependencyResolvingCommands.allSatisfy { $0.contains(lockFlag) },
+                name
+            )
+            XCTAssertTrue(
+                dependencyResolvingCommands.allSatisfy {
+                    $0.contains("-derivedDataPath \"$derived_data\"")
+                },
                 name
             )
             XCTAssertTrue(
@@ -1506,7 +1740,20 @@ final class DistributionScriptTests: XCTestCase {
 
     private func runSigningConfigValidator(
         config: URL,
-        command: String = #"source "$1"; validate_development_team_config "$2"; status=$?; if [[ $status -eq 0 ]]; then printf '%s\n' "$validated_development_team"; fi; exit "$status""#
+        command: String = #"source "$1"; validate_development_team_config "$2"; status=$?; if [[ $status -eq 0 ]]; then printf '%s\n' "$validated_development_team"; fi; exit "$status""#,
+        environment: [String: String] = [:]
+    ) throws -> (status: Int32, output: String) {
+        try runSigningConfigHelper(
+            command: command,
+            arguments: [config.path],
+            environment: environment
+        )
+    }
+
+    private func runSigningConfigHelper(
+        command: String,
+        arguments: [String] = [],
+        environment: [String: String] = [:]
     ) throws -> (status: Int32, output: String) {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/bash")
@@ -1514,9 +1761,37 @@ final class DistributionScriptTests: XCTestCase {
             "-c",
             command,
             "signing-config-test",
-            repositoryRoot.appendingPathComponent("Scripts/signing-config.sh").path,
-            config.path
-        ]
+            repositoryRoot.appendingPathComponent("Scripts/signing-config.sh").path
+        ] + arguments
+        process.environment = ProcessInfo.processInfo.environment.merging(
+            environment,
+            uniquingKeysWith: { _, override in override }
+        )
+        let output = Pipe()
+        process.standardOutput = output
+        process.standardError = output
+        try process.run()
+        process.waitUntilExit()
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        return (
+            process.terminationStatus,
+            String(decoding: data, as: UTF8.self)
+        )
+    }
+
+    private func runReleaseScript(
+        relativePath: String,
+        arguments: [String],
+        environment: [String: String]
+    ) throws -> (status: Int32, output: String) {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/bash")
+        process.arguments = [relativePath] + arguments
+        process.currentDirectoryURL = repositoryRoot
+        process.environment = ProcessInfo.processInfo.environment.merging(
+            environment,
+            uniquingKeysWith: { _, override in override }
+        )
         let output = Pipe()
         process.standardOutput = output
         process.standardError = output
@@ -1636,11 +1911,21 @@ final class DistributionScriptTests: XCTestCase {
 
     private func runProcess(
         executable: String,
-        arguments: [String]
+        arguments: [String],
+        currentDirectory: URL? = nil,
+        environment: [String: String] = [:],
+        inheritEnvironment: Bool = true
     ) throws -> (status: Int32, output: String) {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = arguments
+        process.currentDirectoryURL = currentDirectory
+        process.environment = inheritEnvironment
+            ? ProcessInfo.processInfo.environment.merging(
+                environment,
+                uniquingKeysWith: { _, override in override }
+            )
+            : environment
         let output = Pipe()
         process.standardOutput = output
         process.standardError = output
@@ -1651,6 +1936,50 @@ final class DistributionScriptTests: XCTestCase {
             process.terminationStatus,
             String(decoding: data, as: UTF8.self)
         )
+    }
+
+    private func initializeGitRepository(
+        at directory: URL,
+        fileName: String
+    ) throws -> String {
+        _ = try git(["init", "-q"], at: directory)
+        _ = try git(["config", "user.name", "Release Test"], at: directory)
+        _ = try git(
+            ["config", "user.email", "release-test@example.invalid"],
+            at: directory
+        )
+        try Data("fixture".utf8).write(
+            to: directory.appendingPathComponent(fileName)
+        )
+        _ = try git(["add", fileName], at: directory)
+        _ = try git(["commit", "-qm", "fixture"], at: directory)
+        return try git(["rev-parse", "HEAD"], at: directory)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func git(_ arguments: [String], at directory: URL) throws -> String {
+        let result = try runProcess(
+            executable: "/usr/bin/git",
+            arguments: arguments,
+            currentDirectory: directory,
+            environment: [
+                "GIT_ATTR_NOSYSTEM": "1",
+                "GIT_CONFIG_GLOBAL": "/dev/null",
+                "GIT_CONFIG_NOSYSTEM": "1",
+                "GIT_NO_REPLACE_OBJECTS": "1",
+                "LC_ALL": "C",
+                "PATH": "/usr/bin:/bin:/usr/sbin:/sbin"
+            ],
+            inheritEnvironment: false
+        )
+        guard result.status == 0 else {
+            throw NSError(
+                domain: "DistributionScriptTests.Git",
+                code: Int(result.status),
+                userInfo: [NSLocalizedDescriptionKey: result.output]
+            )
+        }
+        return result.output
     }
 
     private func fileIdentity(at url: URL) throws -> String {
