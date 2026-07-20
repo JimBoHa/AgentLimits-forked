@@ -19,9 +19,10 @@ account information and must not be guessed or committed if sensitive.
 - Watch relationship: dependent companion; not independently distributed
 - Primary category: Developer Tools
 - Secondary category: Productivity
-- Content rights: the app contains and displays third-party content only as
-  needed for user-requested provider functionality; the project is distributed
-  under Nihondo's MIT license and preserves attribution to the original project
+- Content rights: **BLOCKED** on distributor confirmation — the conservative
+  declaration is that the app accesses third-party provider data for
+  user-requested functionality; verify that the MIT license, provider API
+  terms, trademark use, and each selected storefront permit the exact release
 - Copyright: **BLOCKED** — enter `2026 <person or legal entity that owns the
   fork's exclusive rights>`; do not name Nihondo unless Nihondo is submitting
   the app or has transferred those rights
