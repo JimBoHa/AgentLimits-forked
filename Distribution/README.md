@@ -58,14 +58,15 @@ Scripts/build-unsigned-artifacts.sh /absolute/output/directory
 
 The output includes unsigned macOS ZIP/DMG/PKG files and unsigned macOS and
 iOS/watchOS archives. The builder requires a clean Git tree, builds from a
-snapshot of the recorded commit, replaces inherited Xcode configuration and
+snapshot of the recorded commit, ignores inherited Git repository/configuration
+selectors and replacement refs, replaces inherited Xcode configuration and
 toolchain overrides, and publishes through a temporary sibling directory only
-after validation succeeds. The output parent must already exist, be owned by
-the current user, and have no group/other write mode or ACL that grants mutation
-access. A per-destination lock plus no-clobber rename prevents concurrent
-builders from racing publication. The builder reopens every ZIP, DMG, and PKG
-and compares the contained app or archive against a canonical file-tree
-manifest.
+after validation succeeds. Invoke the checked-in script directly, not through a
+symlink. The output parent must already exist, be owned by the current user, and
+have no group/other write mode or ACL that grants mutation access. A
+per-destination lock plus no-clobber rename prevents concurrent builders from
+racing publication. The builder reopens every ZIP, DMG, and PKG and compares the
+contained app or archive against a canonical file-tree manifest.
 
 `SHA256SUMS` covers every portable container, build log, metadata file, and the
 two files in `ARCHIVE-MANIFESTS`. Those canonical manifests cover every regular
@@ -85,8 +86,25 @@ signatures.
 These are non-distributable preflight artifacts. Do not re-sign or upload them.
 A final release must be rebuilt by the signed workflows below so Xcode records
 the Team, signing identity, and provisioning metadata.
+The preflight also runs the same fail-closed product/privacy gate as signed IPA
+export. It rejects changed identifiers, versions, encryption declarations,
+privacy-manifest claims and required-reason declarations, launch/icon metadata,
+invalid compiled icon renditions, or the dependent Watch relationship. Changes
+to API usage still require a source audit because a manifest validator cannot
+prove which required-reason APIs compiled code calls.
 
 ## Signed iOS and watchOS export
+
+Signed workflows require a canonical absolute output path whose parent already
+exists, is owned by the current user, and grants no group/other or mutating ACL
+write access. They ignore caller temporary-directory overrides and Git
+repository/configuration selectors, disable replacement refs, hold an exclusive
+per-destination lock, and use private temporary and DerivedData directories.
+Invoke the checked-in scripts directly, not through symlinks. The requested
+output appears only through macOS `RENAME_EXCL` no-clobber atomic rename after
+final source, signing-config, signature, container, and checksum validation
+succeeds. Filesystems without exclusive-rename support fail closed. Existing
+files, directories, and symlinks are never overwritten.
 
 For App Store Connect:
 
@@ -103,6 +121,24 @@ Scripts/export-ios.sh /absolute/output/directory release-testing
 Both commands archive the `AgentLimitsiOS` scheme. They verify that the signed
 IPA contains `Watch/AgentLimitsWatch.app`, that identifiers and version numbers
 match, and that distribution signatures do not contain `get-task-allow`.
+Release builds enable Xcode product validation. A separate semantic validator
+then compares the exported products with the audited App Store contract:
+
+- exact iOS and Watch bundle IDs, marketing version, and build number;
+- non-exempt encryption declarations set to `false` in both products;
+- no tracking or maintainer-collected data, no tracking domains, and only the
+  audited UserDefaults required-reason declaration (`CA92.1`);
+- generated iPhone/iPad launch and icon metadata, correctly sized PNGs, and
+  opaque named icon renditions in the compiled asset catalogs; and
+- one dependent Watch product bound to the iOS companion identifier and not
+  declared independently distributable; and
+- exactly the audited iOS and Watch Mach-O executables, with no additional
+  executable files, frameworks, services, bundles, libraries, or extensions.
+
+Any deliberate product or privacy change requires updating the implementation,
+App Store Connect answers, metadata documentation, and validator in one review.
+The standalone `AgentLimitsWatch` scheme intentionally has no Archive action;
+it remains available for Watch build, test, run, profile, and analyze workflows.
 
 After local verification, validate and upload through Xcode Organizer or App
 Store Connect. TestFlight and a physical paired iPhone/Apple Watch smoke test
