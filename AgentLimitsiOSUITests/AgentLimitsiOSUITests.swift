@@ -29,7 +29,11 @@ final class AgentLimitsiOSUITests: XCTestCase {
         XCTAssertTrue(addButton.waitForExistence(timeout: 5))
 
         addButton.tap()
-        app.buttons["GitHub Copilot"].tap()
+        let copilotOption = app.descendants(matching: .any)[
+            "mobile.addAccount.copilot"
+        ]
+        XCTAssertTrue(copilotOption.waitForExistence(timeout: 5))
+        copilotOption.tap()
 
         let nameField = app.textFields["mobile.accountNameField"]
         XCTAssertTrue(nameField.waitForExistence(timeout: 5))
