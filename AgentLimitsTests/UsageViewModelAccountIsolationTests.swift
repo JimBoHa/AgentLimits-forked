@@ -200,11 +200,7 @@ final class UsageViewModelAccountIsolationTests: XCTestCase {
         }
         await fixture.fetcher.waitUntilRequested(using: personalStore.webView)
 
-        let clearTask = Task {
-            try await fixture.viewModel.clearData()
-        }
-        await fixture.repository.waitUntilDeleted(accountID: fixture.personal.id)
-        try await clearTask.value
+        try await fixture.viewModel.clearData()
 
         fixture.fetcher.complete(
             using: personalStore.webView,
@@ -877,11 +873,6 @@ private final class IsolationSnapshotRepository:
         projections[snapshot.provider] = snapshot
     }
 
-    func waitUntilDeleted(accountID: UUID) async {
-        while !deletionAttempts.contains(accountID) {
-            await Task.yield()
-        }
-    }
 }
 
 @MainActor
