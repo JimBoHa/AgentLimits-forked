@@ -38,6 +38,14 @@ final class AgentLimitsiOSUITests: XCTestCase {
         app.buttons["mobile.saveAccount"].tap()
 
         XCTAssertTrue(app.staticTexts["Work Copilot"].waitForExistence(timeout: 5))
+        XCTAssertTrue(
+            app.switches["Refresh GitHub Copilot when active"].exists
+        )
+        XCTAssertTrue(
+            app.switches["Refresh Work Copilot when active"].exists
+        )
+        XCTAssertTrue(app.buttons["Refresh GitHub Copilot"].exists)
+        XCTAssertTrue(app.buttons["Refresh Work Copilot"].exists)
     }
 
     @MainActor
@@ -70,7 +78,9 @@ final class AgentLimitsiOSUITests: XCTestCase {
 
         XCTAssertTrue(app.staticTexts["GitHub Copilot"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.buttons["mobile.addAccount"].exists)
-        XCTAssertTrue(app.switches["Refresh when active"].firstMatch.exists)
+        XCTAssertTrue(
+            app.switches["Refresh GitHub Copilot when active"].exists
+        )
     }
 
     @MainActor
