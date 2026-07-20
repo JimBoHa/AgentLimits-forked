@@ -58,9 +58,11 @@ Scripts/build-unsigned-artifacts.sh /absolute/output/directory
 
 The output includes unsigned macOS ZIP/DMG/PKG files and unsigned macOS and
 iOS/watchOS archives. The builder requires a clean Git tree, builds from a
-snapshot of the recorded commit, replaces inherited Xcode configuration and
+snapshot of the recorded commit, ignores inherited Git repository/configuration
+selectors and replacement refs, replaces inherited Xcode configuration and
 toolchain overrides, and publishes through a temporary sibling directory only
-after validation succeeds. The output parent must already exist, be owned by
+after validation succeeds. Invoke the checked-in script directly, not through a
+symlink. The output parent must already exist, be owned by
 the current user, and have no group/other write mode or ACL that grants mutation
 access. A per-destination lock plus no-clobber rename prevents concurrent
 builders from racing publication. The builder reopens every ZIP, DMG, and PKG
@@ -95,12 +97,14 @@ the Team, signing identity, and provisioning metadata.
 
 Signed workflows require a canonical absolute output path whose parent already
 exists, is owned by the current user, and grants no group/other or mutating ACL
-write access. They ignore caller temporary-directory overrides, hold an exclusive
-per-destination lock, and build in a private same-filesystem sibling directory.
-The requested output appears only through macOS `RENAME_EXCL` no-clobber atomic
-rename after final source, signing-config, signature, container, and checksum
-validation succeeds. Filesystems without exclusive-rename support fail closed.
-Existing files, directories, and symlinks are never overwritten.
+write access. They ignore caller temporary-directory overrides and Git
+repository/configuration selectors, disable replacement refs, hold an exclusive
+per-destination lock, and use private temporary and DerivedData directories.
+Invoke the checked-in scripts directly, not through symlinks. The requested
+output appears only through macOS `RENAME_EXCL` no-clobber atomic rename after
+final source, signing-config, signature, container, and checksum validation
+succeeds. Filesystems without exclusive-rename support fail closed. Existing
+files, directories, and symlinks are never overwritten.
 
 For App Store Connect:
 
@@ -129,6 +133,8 @@ checksums, metadata, and the final source fence, immediately before atomic
 publication. The earliest bound expiration must still have at least five minutes
 of validity at the atomic rename, so a near-expiry profile cannot age out during
 validation and still be published.
+The standalone `AgentLimitsWatch` scheme intentionally has no Archive action;
+it remains available for Watch build, test, run, profile, and analyze workflows.
 
 After local verification, validate and upload through Xcode Organizer or App
 Store Connect. TestFlight and a physical paired iPhone/Apple Watch smoke test
