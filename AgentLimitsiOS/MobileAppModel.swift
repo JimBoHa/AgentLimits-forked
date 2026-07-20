@@ -71,11 +71,12 @@ final class MobileAppModel: ObservableObject {
     func removeAccount(id: UUID) async throws {
         let plan = try accountStore.prepareRemoval(id: id)
         try await activityController.prepareAccountRetirement(plan.target)
+        let removedAccount: MobileProviderAccount
         do {
             try activityController.validatePreparedAccountRetirement(
                 plan.target
             )
-            try accountStore.beginRemoval(plan)
+            removedAccount = try accountStore.beginRemoval(plan)
         } catch {
             activityController.cancelAccountRetirement(plan.target)
             throw error
@@ -84,7 +85,10 @@ final class MobileAppModel: ObservableObject {
             try activityController.retireAccount(plan.target)
         } catch {
             do {
-                try accountStore.restoreRemoval(plan)
+                try accountStore.restoreRemoval(
+                    plan,
+                    removedAccount: removedAccount
+                )
             } catch {
                 throw MobileAppModelError.accountRemovalRollbackFailed
             }
