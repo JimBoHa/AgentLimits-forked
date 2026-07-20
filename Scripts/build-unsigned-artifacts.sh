@@ -94,6 +94,7 @@ source "$script_dir/macos-container-validation.sh"
 source "$script_dir/macos-code-signing.sh"
 # shellcheck disable=SC1091
 source "$script_dir/apple-toolchain.sh"
+source "$script_dir/app-store-product-validation.sh"
 
 if [[ ! -x "$developer_dir/usr/bin/xcodebuild" ]]; then
     echo "Xcode not found at $developer_dir" >&2
@@ -396,6 +397,13 @@ ios_app="$ios_archive/Products/Applications/AgentLimits.app"
 watch_app="$ios_app/Watch/AgentLimitsWatch.app"
 widget="$mac_app/Contents/PlugIns/AgentLimitsWidgetExtension.appex"
 
+app_store_validate_applications_root \
+    "$mac_archive/Products/Applications" "$mac_app" \
+    "$work_dir/mac-applications-root" || exit $?
+app_store_validate_applications_root \
+    "$ios_archive/Products/Applications" "$ios_app" \
+    "$work_dir/ios-applications-root" || exit $?
+
 for required_path in \
     "$mac_app" \
     "$widget" \
@@ -458,6 +466,10 @@ if [[ "$(plutil -extract CFBundleIdentifier raw "$mac_info")" \
     exit 1
 fi
 
+validate_app_store_product \
+    "$ios_app" "$version" "$build" \
+    "$work_dir/app-store-product-validation"
+
 mac_executable="$(plutil -extract CFBundleExecutable raw "$mac_info")"
 widget_executable="$(plutil -extract CFBundleExecutable raw "$widget_info")"
 ios_executable="$(plutil -extract CFBundleExecutable raw "$ios_info")"
@@ -496,9 +508,7 @@ verify_no_code_signature_for_architecture \
 
 for manifest in \
     "$mac_app/Contents/Resources/PrivacyInfo.xcprivacy" \
-    "$widget/Contents/Resources/PrivacyInfo.xcprivacy" \
-    "$ios_app/PrivacyInfo.xcprivacy" \
-    "$watch_app/PrivacyInfo.xcprivacy"; do
+    "$widget/Contents/Resources/PrivacyInfo.xcprivacy"; do
     plutil -lint "$manifest" >/dev/null
 done
 

@@ -4,7 +4,115 @@
 
 import Combine
 import Foundation
+import WebKit
 import WidgetKit
+
+#if DEBUG
+nonisolated enum UITestingExternalServiceError: LocalizedError, Equatable {
+    case disabled
+
+    var errorDescription: String? {
+        "External services are disabled during UI testing."
+    }
+}
+
+nonisolated struct UITestingCCUsageFetcher: CCUsageFetching {
+    func fetchSnapshot(
+        for provider: TokenUsageProvider
+    ) async throws -> TokenUsageSnapshot {
+        throw UITestingExternalServiceError.disabled
+    }
+}
+
+struct UITestingUsageSnapshotFetcher: UsageSnapshotFetching {
+    func hasValidSession(
+        for provider: UsageProvider,
+        using webView: WKWebView
+    ) async -> Bool {
+        false
+    }
+
+    func fetchSnapshot(
+        for provider: UsageProvider,
+        using webView: WKWebView
+    ) async throws -> UsageSnapshot {
+        throw UITestingExternalServiceError.disabled
+    }
+}
+
+struct UITestingCopilotBillingFetcher: CopilotBillingFetching {
+    func fetchBillingSnapshot(
+        using webView: WKWebView
+    ) async throws -> TokenUsageSnapshot {
+        throw UITestingExternalServiceError.disabled
+    }
+}
+
+private final class UITestingSessionActivityCredentialStore:
+    SessionActivityCredentialStoring {
+    private var credentials: [UUID: String] = [:]
+
+    func credential(for accountID: UUID) throws -> String? {
+        credentials[accountID]
+    }
+
+    func saveCredential(_ credential: String, for accountID: UUID) throws {
+        credentials[accountID] = credential
+    }
+
+    func deleteCredential(for accountID: UUID) throws {
+        credentials.removeValue(forKey: accountID)
+    }
+
+    func deleteAllCredentials() throws {
+        credentials.removeAll()
+    }
+}
+
+nonisolated private struct UITestingGitHubAgentTaskFetcher:
+    GitHubAgentTaskFetching {
+    func fetchCurrentActivity(
+        credential: String
+    ) async throws -> SessionActivityCounts {
+        throw GitHubAgentTaskFetcherError.authenticationRequired
+    }
+}
+
+private struct UITestingProviderAccountLocalDataRemover:
+    ProviderAccountLocalDataRemoving {
+    func removeLocalData(for account: ProviderAccount) throws {}
+}
+
+private struct UITestingIdentifiedWebsiteDataStoreRemover:
+    IdentifiedWebsiteDataStoreRemoving {
+    func containsDataStore(for identifier: UUID) async -> Bool { false }
+    func removeDataStore(for identifier: UUID) async throws {}
+}
+#endif
+
+@MainActor
+struct AppExternalServiceDependencies {
+    let ccUsageFetcher: any CCUsageFetching
+    let usageSnapshotFetcher: any UsageSnapshotFetching
+    let copilotBillingFetcher: any CopilotBillingFetching
+
+    static func make(isUITesting: Bool) -> Self {
+#if DEBUG
+        if isUITesting {
+            return Self(
+                ccUsageFetcher: UITestingCCUsageFetcher(),
+                usageSnapshotFetcher: UITestingUsageSnapshotFetcher(),
+                copilotBillingFetcher: UITestingCopilotBillingFetcher()
+            )
+        }
+#endif
+        return Self(
+            ccUsageFetcher: CCUsageFetcher(),
+            usageSnapshotFetcher: DefaultUsageSnapshotFetcher(),
+            copilotBillingFetcher: CopilotBillingFetcher()
+        )
+    }
+}
 
 // MARK: - App Shared State
 
@@ -27,25 +135,74 @@ final class AppSharedState: ObservableObject {
     private var lifecycleCancellables: Set<AnyCancellable> = []
     private var cancellablesByAccountID: [UUID: Set<AnyCancellable>] = [:]
     private var observedAccountIDs: Set<UUID> = []
+    private let allowsExternalServices: Bool
 
     init() {
         let accountStore = ProviderAccountStore.shared
-        let pool = UsageWebViewPool(accountStore: accountStore)
-        let activityViewModel = SessionActivityViewModel(
+        let externalServices = AppExternalServiceDependencies.make(
+            isUITesting: AppRuntimeEnvironment.isUITesting
+        )
+        let pool: UsageWebViewPool
+        let activityViewModel: SessionActivityViewModel
+        let removalManager: ProviderAccountRemovalManager
+#if DEBUG
+        if AppRuntimeEnvironment.isUITesting {
+            pool = UsageWebViewPool(
+                accountStore: accountStore,
+                websiteDataStoreProvider: { _ in .nonPersistent() },
+                navigationPolicy: .disabled
+            )
+            activityViewModel = SessionActivityViewModel(
+                accountStore: accountStore,
+                credentialStore: UITestingSessionActivityCredentialStore(),
+                githubFetcher: UITestingGitHubAgentTaskFetcher()
+            )
+            removalManager = ProviderAccountRemovalManager(
+                accountStore: accountStore,
+                webViewPool: pool,
+                localDataRemover:
+                    UITestingProviderAccountLocalDataRemover(),
+                activityDataRetirer: activityViewModel,
+                websiteDataStoreRemover:
+                    UITestingIdentifiedWebsiteDataStoreRemover()
+            )
+            allowsExternalServices = false
+        } else {
+            pool = UsageWebViewPool(accountStore: accountStore)
+            activityViewModel = SessionActivityViewModel(
+                accountStore: accountStore
+            )
+            removalManager = ProviderAccountRemovalManager(
+                accountStore: accountStore,
+                webViewPool: pool,
+                activityDataRetirer: activityViewModel
+            )
+            allowsExternalServices = true
+        }
+#else
+        pool = UsageWebViewPool(accountStore: accountStore)
+        activityViewModel = SessionActivityViewModel(
             accountStore: accountStore
         )
-        let removalManager = ProviderAccountRemovalManager(
+        removalManager = ProviderAccountRemovalManager(
             accountStore: accountStore,
             webViewPool: pool,
             activityDataRetirer: activityViewModel
         )
-        let tokenViewModel = TokenUsageViewModel(accountStore: accountStore)
+        allowsExternalServices = true
+#endif
+        let tokenViewModel = TokenUsageViewModel(
+            fetcher: externalServices.ccUsageFetcher,
+            accountStore: accountStore
+        )
         self.webViewPool = pool
         self.accountRemovalManager = removalManager
         self.tokenUsageViewModel = tokenViewModel
         self.sessionActivityViewModel = activityViewModel
         self.viewModel = UsageViewModel(
             webViewPool: pool,
+            usageFetcher: externalServices.usageSnapshotFetcher,
+            copilotBillingFetcher: externalServices.copilotBillingFetcher,
             tokenUsageViewModel: tokenViewModel,
             sessionActivityDataClearer: activityViewModel
         )
@@ -60,25 +217,28 @@ final class AppSharedState: ObservableObject {
         pool.onWebViewStoreCreated = { [weak self] store in
             self?.observeWebViewStore(store)
         }
-        Task { [weak removalManager] in
-            await removalManager?.drainPendingWebKitDataStoreDeletions()
-        }
         let storedMode = UsageDisplayMode.makeSelectableMode(
-            from: UserDefaults.standard.string(forKey: UserDefaultsKeys.displayMode)
+            from: AppDefaults.shared.string(forKey: UserDefaultsKeys.displayMode)
         )
         viewModel.updateDisplayMode(storedMode)
-        startBackgroundRefresh()
+        if allowsExternalServices {
+            Task { [weak removalManager] in
+                await removalManager?
+                    .drainPendingWebKitDataStoreDeletions()
+            }
+            startBackgroundRefresh()
 
-        // Initialize WakeUpScheduler to sync LaunchAgents on startup
-        _ = WakeUpScheduler.shared
+            // Initialize WakeUpScheduler to sync LaunchAgents on startup
+            _ = WakeUpScheduler.shared
 
-        // Refresh widgets once on app launch.
-        WidgetCenter.shared.reloadAllTimelines()
+            // Refresh widgets once on app launch.
+            WidgetCenter.shared.reloadAllTimelines()
+        }
     }
 
     /// Starts background refresh and loads WebViews (called once)
     func startBackgroundRefresh() {
-        guard !isStarted else { return }
+        guard allowsExternalServices, !isStarted else { return }
         isStarted = true
         loadWebViews()
         viewModel.startAutoRefresh()
@@ -95,11 +255,13 @@ final class AppSharedState: ObservableObject {
 
     /// 設定画面で操作するため、選択中プロバイダーのWebViewを復帰する。
     func resumeWebViewForSettings() {
+        guard allowsExternalServices else { return }
         webViewPool.resume(viewModel.selectedProvider)
     }
 
     /// 設定画面を閉じた後、取得実績のないWebViewを停止状態に戻す。
     func applyBackgroundPolicyOnSettingsClose() {
+        guard allowsExternalServices else { return }
         webViewPool.clearForegroundProvider()
         webViewPool.applyBackgroundPolicy(
             activeAccounts: viewModel.backgroundActiveAccounts

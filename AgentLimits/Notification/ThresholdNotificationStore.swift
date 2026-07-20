@@ -14,7 +14,7 @@ final class ThresholdNotificationStore: @unchecked Sendable {
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
 
-    init(userDefaults: UserDefaults = .standard) {
+    init(userDefaults: UserDefaults = AppDefaults.shared) {
         self.userDefaults = userDefaults
         self.encoder = JSONEncoder()
         self.decoder = JSONDecoder()

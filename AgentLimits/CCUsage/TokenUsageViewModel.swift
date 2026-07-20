@@ -287,7 +287,8 @@ final class TokenUsageViewModel: ObservableObject {
             settingsRevisions[provider] = 0
         }
         initializeAccountState(from: resolvedAccountStore.loadAccounts())
-        if resolvedAccountStore.supportsPersistentWebSessions {
+        if resolvedAccountStore.supportsPersistentWebSessions,
+           !AppRuntimeEnvironment.isUITesting {
             for provider in TokenUsageProvider.allCases {
                 publishSelectedProjection(for: provider)
             }

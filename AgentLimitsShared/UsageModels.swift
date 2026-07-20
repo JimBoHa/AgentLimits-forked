@@ -9,7 +9,7 @@ import SwiftUI
 // MARK: - Configuration
 
 /// App Group configuration for shared data access between App and Widget
-enum AppGroupConfig {
+nonisolated enum AppGroupConfig {
     static let infoDictionaryKey = "AgentLimitsAppGroupIdentifier"
     static let forkGroupIdentifier = "group.com.jimboha.agentlimits.macos"
     static let appLanguageKey = "app_language"
@@ -49,14 +49,139 @@ enum AppGroupConfig {
 }
 
 enum DeepLinkConfig {
-    static let scheme = "agentlimits-forked"
+    static let infoDictionaryKey = "AgentLimitsURLScheme"
+
+    static var scheme: String {
+        guard let configuredScheme = configuredScheme(in: .main) else {
+            preconditionFailure(
+                "Missing or invalid \(infoDictionaryKey) in Info.plist"
+            )
+        }
+        return configuredScheme
+    }
+
+    static func configuredScheme(in bundle: Bundle) -> String? {
+        normalizedScheme(
+            bundle.object(forInfoDictionaryKey: infoDictionaryKey) as? String
+        )
+    }
+
+    static func accepts(_ url: URL, bundle: Bundle = .main) -> Bool {
+        guard let incomingScheme = url.scheme,
+              let configuredScheme = configuredScheme(in: bundle) else {
+            return false
+        }
+        return incomingScheme.caseInsensitiveCompare(configuredScheme)
+            == .orderedSame
+    }
+
+    static func normalizedScheme(_ configuredValue: String?) -> String? {
+        guard let candidate = configuredValue?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+              !candidate.isEmpty,
+              candidate.range(
+                of: #"^[A-Za-z][A-Za-z0-9+.-]*$"#,
+                options: .regularExpression
+              ) != nil else {
+            return nil
+        }
+        return candidate.lowercased()
+    }
+}
+
+/// Central runtime boundary for app-local preferences and DEBUG UI testing.
+/// UI tests use a dedicated defaults suite and temporary snapshot container,
+/// so launching the production bundle identifier cannot read or mutate a
+/// developer's real settings, snapshots, or account registry.
+nonisolated enum AppRuntimeEnvironment {
+    private static let uiTestingArgument = "-ui-testing"
+    private static let uiTestingOpenSettingsArgument =
+        "-ui-testing-open-settings"
+
+    static var isUITesting: Bool {
+#if DEBUG
+        ProcessInfo.processInfo.arguments.contains(uiTestingArgument)
+#else
+        false
+#endif
+    }
+
+    static var shouldOpenSettingsForUITesting: Bool {
+#if DEBUG
+        isUITesting
+            && ProcessInfo.processInfo.arguments.contains(
+                uiTestingOpenSettingsArgument
+            )
+#else
+        false
+#endif
+    }
+
+    static var appDefaults: UserDefaults {
+#if DEBUG
+        if isUITesting { return uiTestingDefaults }
+#endif
+        return .standard
+    }
+
+    static var appGroupDefaults: UserDefaults? {
+#if DEBUG
+        if isUITesting { return uiTestingDefaults }
+#endif
+        guard let groupId = AppGroupConfig.groupId else { return nil }
+        return UserDefaults(suiteName: groupId)
+    }
+
+    static var uiTestingContainerURL: URL? {
+#if DEBUG
+        guard isUITesting else { return nil }
+        return FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "AgentLimitsUITesting-\(uiTestingLaunchIdentifier)",
+                isDirectory: true
+            )
+#else
+        nil
+#endif
+    }
+
+    /// Called before application singletons are initialized.
+    static func prepareForLaunch() {
+#if DEBUG
+        guard isUITesting else { return }
+        uiTestingDefaults.removePersistentDomain(
+            forName: uiTestingDefaultsSuiteName
+        )
+        uiTestingDefaults.set(
+            LocalizationConfig.fallbackLanguageCode,
+            forKey: AppGroupConfig.appLanguageKey
+        )
+        uiTestingDefaults.set("usage", forKey: "selectedSettingsTab")
+#endif
+    }
+
+#if DEBUG
+    private static let uiTestingDefaultsSuiteName =
+        "com.jimboha.agentlimits.macos.ui-testing"
+    private static let uiTestingDefaults = UserDefaults(
+        suiteName: uiTestingDefaultsSuiteName
+    )!
+    private static let uiTestingLaunchIdentifier = UUID().uuidString
+#endif
+}
+
+/// App-local preferences. Production resolves to `UserDefaults.standard`;
+/// DEBUG UI tests resolve to the isolated suite above.
+nonisolated enum AppDefaults {
+    static var shared: UserDefaults {
+        AppRuntimeEnvironment.appDefaults
+    }
 }
 
 /// Shared UserDefaults accessor for the App Group container.
-enum AppGroupDefaults {
+nonisolated enum AppGroupDefaults {
     static var shared: UserDefaults? {
-        guard let groupId = AppGroupConfig.groupId else { return nil }
-        return UserDefaults(suiteName: groupId)
+        AppRuntimeEnvironment.appGroupDefaults
     }
 }
 
@@ -203,7 +328,7 @@ enum UsageDisplayModeRaw: String, Codable {
 }
 
 /// Localization configuration constants
-enum LocalizationConfig {
+nonisolated enum LocalizationConfig {
     static let systemLanguageCode = "system"
     static let fallbackLanguageCode = "en"
 }
@@ -1410,6 +1535,10 @@ struct AppGroupSnapshotStore<Provider: SnapshotFileNaming, Snapshot: SnapshotDat
 
     private var resolvedContainerURL: URL? {
         if let containerURLOverride { return containerURLOverride }
+        if let uiTestingContainerURL =
+            AppRuntimeEnvironment.uiTestingContainerURL {
+            return uiTestingContainerURL
+        }
         guard let groupId = AppGroupConfig.groupId else { return nil }
         return fileManager.containerURL(
             forSecurityApplicationGroupIdentifier: groupId

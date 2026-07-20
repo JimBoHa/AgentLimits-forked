@@ -34,6 +34,7 @@ struct WakeUpSettingsView: View {
             }
         }
         .formStyle(.grouped)
+        .accessibilityIdentifier("mac.wakeUp.root")
     }
 
     // MARK: - Provider Picker

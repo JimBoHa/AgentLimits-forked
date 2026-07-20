@@ -12,7 +12,7 @@ private enum DeepLinkHandler {
     /// Handles widget tap action based on user settings
     @MainActor
     static func handleURL(_ url: URL) {
-        guard url.scheme == DeepLinkConfig.scheme,
+        guard DeepLinkConfig.accepts(url),
               let components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
             return
         }
@@ -68,17 +68,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillFinishLaunching(_ notification: Notification) {
         // できるだけ早く accessory に設定し、Dock アイコンを表示しない。
-        NSApp.setActivationPolicy(.accessory)
+        NSApp.setActivationPolicy(
+            AppRuntimeEnvironment.isUITesting ? .regular : .accessory
+        )
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         launchedAt = Date()
-        menuBarController = MenuBarController(appState: AppSharedState.shared)
+        if !AppRuntimeEnvironment.isUITesting {
+            menuBarController = MenuBarController(
+                appState: AppSharedState.shared
+            )
 
-        // 設定ウィンドウクローズ時にメニューバーアイコンの一時復活を終了する
-        AppSharedState.shared.onSettingsWindowClosed = { [weak self] in
-            self?.menuBarController?.endTemporaryRevealIfNeeded()
-            AppSharedState.shared.applyBackgroundPolicyOnSettingsClose()
+            // 設定ウィンドウクローズ時にメニューバーアイコンの一時復活を終了する
+            AppSharedState.shared.onSettingsWindowClosed = { [weak self] in
+                self?.menuBarController?.endTemporaryRevealIfNeeded()
+                AppSharedState.shared.applyBackgroundPolicyOnSettingsClose()
+            }
+        }
+
+        if AppRuntimeEnvironment.shouldOpenSettingsForUITesting {
+            DispatchQueue.main.async {
+                SettingsWindowController.shared.showSettingsWindow()
+            }
         }
     }
 
@@ -114,6 +126,7 @@ struct AgentLimitsApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
     init() {
+        AppRuntimeEnvironment.prepareForLaunch()
         Self.migrateIdealToPacemakerKeys()
     }
 

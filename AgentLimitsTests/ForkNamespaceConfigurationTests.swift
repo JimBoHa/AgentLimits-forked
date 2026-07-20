@@ -56,6 +56,12 @@ final class ForkNamespaceConfigurationTests: XCTestCase {
 
     func testWidgetDeepLinksUseForkScheme() {
         XCTAssertEqual(
+            Bundle.main.object(
+                forInfoDictionaryKey: DeepLinkConfig.infoDictionaryKey
+            ) as? String,
+            "agentlimits-forked"
+        )
+        XCTAssertEqual(
             UsageProvider.chatgptCodex.widgetDeepLinkURL.scheme,
             "agentlimits-forked"
         )
@@ -75,6 +81,35 @@ final class ForkNamespaceConfigurationTests: XCTestCase {
         }
 
         XCTAssertTrue(schemes.contains(DeepLinkConfig.scheme))
+    }
+
+    func testDeepLinkAcceptanceUsesConfiguredInfoScheme() throws {
+        let configuredScheme = try XCTUnwrap(
+            Bundle.main.object(
+                forInfoDictionaryKey: DeepLinkConfig.infoDictionaryKey
+            ) as? String
+        )
+
+        XCTAssertTrue(
+            DeepLinkConfig.accepts(
+                try XCTUnwrap(URL(string: "\(configuredScheme)://open-settings"))
+            )
+        )
+        XCTAssertFalse(
+            DeepLinkConfig.accepts(
+                try XCTUnwrap(URL(string: "agentlimits-forked-ui-testing://open-settings"))
+            )
+        )
+    }
+
+    func testDeepLinkSchemeNormalizationRejectsInvalidValues() {
+        XCTAssertEqual(
+            DeepLinkConfig.normalizedScheme("  AgentLimits-Forked  "),
+            "agentlimits-forked"
+        )
+        XCTAssertNil(DeepLinkConfig.normalizedScheme(""))
+        XCTAssertNil(DeepLinkConfig.normalizedScheme("https://example.com"))
+        XCTAssertNil(DeepLinkConfig.normalizedScheme("1agentlimits"))
     }
 
     func testLaunchAgentNamespaceAndPathsAreForkOwned() {

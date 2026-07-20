@@ -60,6 +60,7 @@ struct ThresholdSettingsView: View {
             }
         }
         .formStyle(.grouped)
+        .accessibilityIdentifier("mac.threshold.root")
     }
 
     // MARK: - Authorization Section

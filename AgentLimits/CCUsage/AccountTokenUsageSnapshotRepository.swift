@@ -91,7 +91,7 @@ final class DefaultAccountTokenUsageSnapshotRepository:
 
     init(
         visibilityStore: (any SnapshotVisibilityControlling)? = nil,
-        migrationDefaults: UserDefaults = .standard,
+        migrationDefaults: UserDefaults = AppDefaults.shared,
         makeAccountStore:
             ((ProviderAccount, Bool) -> TokenUsageSnapshotStore)? = nil,
         projectionStore: TokenUsageSnapshotStore? = nil

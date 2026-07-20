@@ -57,7 +57,7 @@ struct DefaultProviderAccountLocalDataRemover:
     init(
         visibilityStore: any SnapshotVisibilityControlling =
             SnapshotVisibilityStore.shared,
-        migrationDefaults: UserDefaults = .standard,
+        migrationDefaults: UserDefaults = AppDefaults.shared,
         makeUsageSnapshotStore: @escaping (UUID) -> UsageSnapshotStore = {
             UsageSnapshotStore(accountID: $0)
         }

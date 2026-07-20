@@ -141,6 +141,38 @@ final class UsageWebViewActivationPolicyTests: XCTestCase {
         XCTAssertTrue(claudeStore.isSuspended)
     }
 
+    func testDisabledNavigationPolicyBlocksEveryProviderLoadEntryPoint() {
+        let accountStore = makeAccountStore()
+        let account = accountStore.selectedAccount(for: .chatgptCodex)
+        let pool = UsageWebViewPool(
+            providers: [.chatgptCodex],
+            accountStore: accountStore,
+            websiteDataStoreProvider: { _ in .nonPersistent() },
+            navigationPolicy: .disabled
+        )
+        let store = pool.getWebViewStore(for: account)
+
+        XCTAssertTrue(store.isSuspended)
+        XCTAssertNil(store.webView.url)
+
+        pool.resume(account)
+        pool.reloadFromOrigin(account)
+        store.resume()
+        store.reloadFromOrigin()
+        store.loadIfNeeded()
+
+        XCTAssertTrue(store.isSuspended)
+        XCTAssertNil(store.webView.url)
+        XCTAssertFalse(store.webView.isLoading)
+        XCTAssertFalse(
+            store.shouldAllowNavigation(
+                in: store.webView,
+                to: account.provider.usageURL
+            )
+        )
+        XCTAssertFalse(store.shouldCreatePopup(from: store.webView))
+    }
+
     func testWebsiteDataRemovalRunsOnlyInsideExclusiveNavigationInterval() async throws {
         let websiteDataClearer = SuspendingWebsiteDataClearer()
         let pool = UsageWebViewPool(
