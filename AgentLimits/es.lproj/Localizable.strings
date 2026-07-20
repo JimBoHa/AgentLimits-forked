@@ -55,6 +55,7 @@
 "settings.hideMenuBarIcon" = "Ocultar icono de la barra de menús";
 "settings.hideMenuBarIcon.hint" = "Mientras esté oculto, haz doble clic en el icono de la app para mostrarlo temporalmente.";
 "settings.menuBar.sectionTitle" = "Barra de menús";
+"accessibility.menuBar.noProviders" = "No se muestran proveedores en la barra de menús.";
 
 /* Display Mode */
 "displayMode.used" = "Tasa de uso";
@@ -257,6 +258,7 @@
 "activity.observed" = "Observado";
 "activity.refresh" = "Actualizar sesiones";
 "activity.credentialTitle" = "Credencial de sesión de GitHub";
+"activity.manageCredential" = "Gestionar credencial de sesión de GitHub";
 "activity.credentialPlaceholder" = "Pegar credencial";
 "activity.credentialHelp" = "Usa un PAT específico o un token de acceso de usuario de una GitHub App solo con permiso de lectura de “Agent tasks” en los repositorios. Se conserva en el llavero de este dispositivo. La API está en versión preliminar pública.";
 "activity.credentialStored" = "Hay una credencial guardada para esta cuenta.";
