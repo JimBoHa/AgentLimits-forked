@@ -469,6 +469,9 @@ final class MobileAccountStore: ObservableObject, MobileAccountResolving {
         guard let data = try? encoder.encode(payload) else {
             throw MobileAccountStoreError.persistenceFailed
         }
+        guard data.count <= Self.maximumPayloadBytes else {
+            throw MobileAccountStoreError.persistenceFailed
+        }
         guard persistenceWriter(data, key, defaults) else {
             throw MobileAccountStoreError.persistenceFailed
         }

@@ -73,6 +73,68 @@ final class MobileAccountStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testUnicodeLabelsFitPersistenceAndWatchTransportBudgets() throws {
+        try withDefaults { defaults in
+            let family = "👨‍👩‍👧‍👦"
+            let oversizedLabel = String(
+                repeating: family,
+                count: MobileProviderAccount.maximumLabelLength
+            )
+            let store = MobileAccountStore(defaults: defaults)
+            let account = try store.addAccount(
+                provider: .copilot,
+                label: oversizedLabel
+            )
+
+            XCTAssertFalse(account.label.isEmpty)
+            XCTAssertLessThanOrEqual(
+                account.label.count,
+                MobileProviderAccount.maximumLabelLength
+            )
+            XCTAssertLessThanOrEqual(
+                account.label.utf8.count,
+                MobileProviderAccount.maximumLabelUTF8Bytes
+            )
+            XCTAssertEqual(
+                MobileProviderAccount.maximumLabelUTF8Bytes,
+                WatchCompanionAccountStatus.maximumLabelUTF8Bytes
+            )
+            XCTAssertNoThrow(
+                try WatchCompanionAccountStatus(
+                    id: account.id,
+                    provider: .copilot,
+                    label: account.label,
+                    isEnabled: true,
+                    availability: .unsupported,
+                    working: nil,
+                    waiting: nil,
+                    open: nil,
+                    observedAt: nil,
+                    retryAt: nil
+                )
+            )
+
+            let reloaded = MobileAccountStore(defaults: defaults)
+            XCTAssertEqual(reloaded.account(id: account.id), account)
+        }
+    }
+
+    func testSingleOversizedGraphemeFallsBackToProviderName() {
+        let oversizedGrapheme = "a" + String(
+            repeating: "\u{301}",
+            count: MobileProviderAccount.maximumLabelUTF8Bytes
+        )
+        XCTAssertEqual(oversizedGrapheme.count, 1)
+
+        let account = MobileProviderAccount(
+            provider: .copilot,
+            label: oversizedGrapheme
+        )
+
+        XCTAssertEqual(account.label, MobileProvider.copilot.displayName)
+    }
+
+    @MainActor
     func testRemovalKeepsAtLeastOneAccountPerProvider() throws {
         try withDefaults { defaults in
             let store = MobileAccountStore(defaults: defaults)
