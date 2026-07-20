@@ -103,6 +103,37 @@ final class AgentLimitsiOSUITests: XCTestCase {
     }
 
     @MainActor
+    func testAppStoreCopilotAccountsScreenshot() {
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launchArguments = ["-ui-testing-sample-data"]
+        app.launch()
+
+        let personalAccount = app.staticTexts["Personal Copilot"]
+        let workAccount = app.staticTexts["Work Copilot"]
+        let personalCounts = app.staticTexts[
+            "5 open · 3 working · 2 waiting"
+        ]
+        let workCounts = app.staticTexts[
+            "8 open · 6 working · 2 waiting"
+        ]
+
+        XCTAssertTrue(workCounts.waitForExistence(timeout: 8))
+        XCTAssertTrue(scrollToElement(workAccount, in: app))
+        XCTAssertTrue(personalAccount.exists)
+        XCTAssertTrue(personalCounts.exists)
+        XCTAssertTrue(workAccount.isHittable)
+        XCTAssertTrue(workCounts.isHittable)
+
+        let attachment = XCTAttachment(
+            screenshot: XCUIScreen.main.screenshot()
+        )
+        attachment.name = "app-store-copilot-accounts"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+    }
+
+    @MainActor
     private func launchFreshApp(
         orientation: UIDeviceOrientation = .portrait
     ) -> XCUIApplication {

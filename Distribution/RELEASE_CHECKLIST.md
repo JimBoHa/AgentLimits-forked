@@ -70,6 +70,8 @@
 ## Store and publication
 
 - [ ] Support and public privacy URLs work without authentication.
+- [ ] Screenshot capture manifest records passing isolated UI tests, expected
+      native dimensions, simulator/runtime IDs, and matching SHA-256 values.
 - [ ] Screenshots exist for required iPhone, iPad, and Watch sizes.
 - [ ] App privacy, age rating, category, content rights, export compliance, and
       availability are complete in App Store Connect.

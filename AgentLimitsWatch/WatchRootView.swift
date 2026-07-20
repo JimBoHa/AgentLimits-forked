@@ -2,6 +2,15 @@ import SwiftUI
 
 struct WatchRootView: View {
     @ObservedObject var store: WatchCompanionStore
+    let appStoreScreenshotMode: Bool
+
+    init(
+        store: WatchCompanionStore,
+        appStoreScreenshotMode: Bool = false
+    ) {
+        self.store = store
+        self.appStoreScreenshotMode = appStoreScreenshotMode
+    }
 
     var body: some View {
         NavigationStack {
@@ -52,7 +61,7 @@ struct WatchRootView: View {
                             }
                         }
 
-                        ForEach(WatchCompanionProvider.allCases, id: \.self) {
+                        ForEach(providerOrder, id: \.self) {
                             provider in
                             providerSection(provider, at: context.date)
                         }
@@ -70,6 +79,15 @@ struct WatchRootView: View {
             }
             .navigationTitle("AgentLimits")
         }
+    }
+
+    private var providerOrder: [WatchCompanionProvider] {
+        #if DEBUG
+        if appStoreScreenshotMode {
+            return [.copilot, .codex, .claude]
+        }
+        #endif
+        return WatchCompanionProvider.allCases
     }
 
     @ViewBuilder

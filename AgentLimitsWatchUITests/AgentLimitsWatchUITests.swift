@@ -24,4 +24,79 @@ final class AgentLimitsWatchUITests: XCTestCase {
         )
         XCTAssertTrue(app.staticTexts["No iPhone Data"].exists)
     }
+
+    @MainActor
+    func testAppStoreCopilotAccountsScreenshot() {
+        let app = launchAppStoreFixture()
+        let workAccount = app.descendants(matching: .any)[
+            "watch.account.a6100000-0000-4000-8000-000000000004"
+        ]
+
+        XCTAssertTrue(workAccount.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Personal Copilot"].exists)
+        XCTAssertTrue(app.staticTexts["Work Copilot"].exists)
+        XCTAssertTrue(app.staticTexts["5 open"].exists)
+        XCTAssertTrue(app.staticTexts["8 open"].exists)
+
+        addScreenshot(named: "app-store-watch-copilot-accounts")
+    }
+
+    @MainActor
+    func testAppStoreCopilotDetailScreenshot() {
+        let app = launchAppStoreFixture()
+        let workAccount = app.descendants(matching: .any)[
+            "watch.account.a6100000-0000-4000-8000-000000000004"
+        ]
+
+        XCTAssertTrue(workAccount.waitForExistence(timeout: 5))
+        workAccount.tap()
+
+        XCTAssertTrue(
+            app.descendants(matching: .any)["watch.refreshAccount"]
+                .waitForExistence(timeout: 5)
+        )
+        XCTAssertTrue(app.staticTexts["8 open"].exists)
+        XCTAssertTrue(app.staticTexts["6"].exists)
+        XCTAssertTrue(app.staticTexts["2"].exists)
+
+        dragContent(in: app, fromY: 0.72, toY: 0.62)
+        addScreenshot(named: "app-store-watch-session-detail")
+    }
+
+    @MainActor
+    private func launchAppStoreFixture() -> XCUIApplication {
+        let app = XCUIApplication()
+        app.launchArguments = ["-ui-testing-sample-data"]
+        app.launch()
+        XCTAssertTrue(
+            app.descendants(matching: .any)["watch.root"]
+                .waitForExistence(timeout: 8)
+        )
+        return app
+    }
+
+    @MainActor
+    private func dragContent(
+        in app: XCUIApplication,
+        fromY: CGFloat,
+        toY: CGFloat
+    ) {
+        let start = app.coordinate(
+            withNormalizedOffset: CGVector(dx: 0.5, dy: fromY)
+        )
+        let end = app.coordinate(
+            withNormalizedOffset: CGVector(dx: 0.5, dy: toY)
+        )
+        start.press(forDuration: 0.05, thenDragTo: end)
+    }
+
+    @MainActor
+    private func addScreenshot(named name: String) {
+        let attachment = XCTAttachment(
+            screenshot: XCUIScreen.main.screenshot()
+        )
+        attachment.name = name
+        attachment.lifetime = .keepAlways
+        add(attachment)
+    }
 }

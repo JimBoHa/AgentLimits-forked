@@ -61,6 +61,27 @@ iOS/watchOS archives. These are non-distributable preflight artifacts. Do not
 re-sign or upload them. A final release must be rebuilt by the signed workflows
 below so Xcode records the Team, signing identity, and provisioning metadata.
 
+## App Store screenshots
+
+Capture native-size iPhone, iPad, and Apple Watch screenshots before signing:
+
+```sh
+Scripts/capture-app-store-screenshots.sh /absolute/new/output/directory
+```
+
+The command requires Xcode and `jq`. It resolves exactly one named simulator
+from each latest installed iOS/watchOS runtime, runs screenshot tests
+sequentially, and refuses to overwrite any existing output path. It neither
+erases nor uninstalls simulator data.
+
+Screenshot launches use a Debug-only, isolated fixture containing fictional
+personal/work accounts. They cannot read production account defaults,
+Keychain, network, or WatchConnectivity session. The command verifies exact
+native pixel dimensions, converts screenshots to JPEG without resizing, and
+writes `MANIFEST.json` plus `SHA256SUMS`. It also builds unsigned Release iOS
+and embedded Watch apps and rejects any screenshot launch argument or fixture
+marker found in either Release executable.
+
 ## Signed iOS and watchOS export
 
 For App Store Connect:
