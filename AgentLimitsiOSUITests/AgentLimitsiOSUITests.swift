@@ -132,14 +132,7 @@ final class AgentLimitsiOSUITests: XCTestCase {
         XCTAssertTrue(personalAccount.exists)
         XCTAssertTrue(workAccount.isHittable)
         XCTAssertTrue(workCounts.isHittable)
-        RunLoop.current.run(until: Date().addingTimeInterval(1))
-
-        let attachment = XCTAttachment(
-            screenshot: XCUIScreen.main.screenshot()
-        )
-        attachment.name = "app-store-copilot-accounts"
-        attachment.lifetime = .keepAlways
-        add(attachment)
+        addStableScreenshot(named: "app-store-copilot-accounts")
     }
 
     private var appStoreScreenshotLaunchArguments: [String] {
@@ -184,5 +177,46 @@ final class AgentLimitsiOSUITests: XCTestCase {
             if element.waitForExistence(timeout: 0.5) { return true }
         }
         return false
+    }
+
+    @MainActor
+    private func captureVisuallyStableScreenshot(
+        timeout: TimeInterval = 5,
+        sampleInterval: TimeInterval = 0.2,
+        requiredMatchingSamples: Int = 3
+    ) -> XCUIScreenshot? {
+        let deadline = Date().addingTimeInterval(timeout)
+        var previousFrame: Data?
+        var matchingSamples = 0
+
+        while Date() < deadline {
+            let screenshot = XCUIScreen.main.screenshot()
+            let frame = screenshot.pngRepresentation
+            if frame == previousFrame {
+                matchingSamples += 1
+                if matchingSamples >= requiredMatchingSamples {
+                    return screenshot
+                }
+            } else {
+                previousFrame = frame
+                matchingSamples = 0
+            }
+            RunLoop.current.run(
+                until: Date().addingTimeInterval(sampleInterval)
+            )
+        }
+        return nil
+    }
+
+    @MainActor
+    private func addStableScreenshot(named name: String) {
+        guard let screenshot = captureVisuallyStableScreenshot() else {
+            XCTFail("Screenshot did not reach repeated identical frames")
+            return
+        }
+        let attachment = XCTAttachment(screenshot: screenshot)
+        attachment.name = name
+        attachment.lifetime = .keepAlways
+        add(attachment)
     }
 }

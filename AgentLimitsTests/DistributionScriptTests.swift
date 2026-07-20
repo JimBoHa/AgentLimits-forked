@@ -165,6 +165,224 @@ final class DistributionScriptTests: XCTestCase {
         )
     }
 
+    func testReleaseSourcePinIgnoresHostileSelectorsAndDetectsMutation() throws {
+        let repository = try temporaryDirectory()
+        let alternateRepository = try temporaryDirectory()
+        defer {
+            try? FileManager.default.removeItem(at: repository)
+            try? FileManager.default.removeItem(at: alternateRepository)
+        }
+        let trustedCommit = try initializeGitRepository(
+            at: repository,
+            fileName: "trusted.txt"
+        )
+        _ = try initializeGitRepository(
+            at: alternateRepository,
+            fileName: "alternate.txt"
+        )
+        let command = #"source "$1"; sanitize_release_git_environment; pin_clean_release_source "$2" || exit $?; commit="$validated_release_source_commit"; tree="$validated_release_source_tree"; printf '%s\n%s\n' "$commit" "$tree"; printf 'mutated\n' >"$2/trusted.txt"; mutation=0; verify_pinned_release_source_unchanged "$2" "$commit" "$tree" || mutation=$?; [[ "$mutation" == 65 ]]"#
+
+        let result = try runSigningConfigHelper(
+            command: command,
+            arguments: [repository.path],
+            environment: [
+                "GIT_DIR": alternateRepository.appendingPathComponent(".git").path,
+                "GIT_INDEX_FILE": alternateRepository
+                    .appendingPathComponent(".git/index").path,
+                "GIT_WORK_TREE": alternateRepository.path
+            ]
+        )
+
+        XCTAssertEqual(result.status, 0, result.output)
+        XCTAssertTrue(result.output.contains(trustedCommit), result.output)
+        XCTAssertTrue(
+            result.output.contains("Source changed while building"),
+            result.output
+        )
+    }
+
+    func testReleaseSourceSnapshotRejectsMutationAndHostileGitSelectors() throws {
+        let repository = try temporaryDirectory()
+        let alternateRepository = try temporaryDirectory()
+        let hostileTemporaryDirectory = try releaseTemporaryDirectory()
+        defer {
+            try? FileManager.default.removeItem(at: repository)
+            try? FileManager.default.removeItem(at: alternateRepository)
+            try? FileManager.default.removeItem(at: hostileTemporaryDirectory)
+        }
+        let trustedCommit = try initializeGitRepository(
+            at: repository,
+            fileName: "trusted.txt"
+        )
+        _ = try initializeGitRepository(
+            at: alternateRepository,
+            fileName: "alternate.txt"
+        )
+        let command = #"source "$2"; sanitize_release_git_environment; source "$1"; create_private_release_work_directory AgentLimits-snapshot-test || exit $?; work="$validated_release_work_directory"; work_id="$validated_release_work_directory_identity"; create_immutable_release_source_snapshot "$3" "$4" "$work" || exit $?; snapshot="$validated_release_source_snapshot"; snapshot_id="$validated_release_source_snapshot_identity"; [[ "$(/bin/cat "$snapshot/trusted.txt")" == fixture && ! -e "$snapshot/alternate.txt" ]] || exit 1; write_status=0; printf 'changed\n' >"$snapshot/trusted.txt" 2>/dev/null || write_status=$?; addition_status=0; /usr/bin/touch "$snapshot/added.txt" 2>/dev/null || addition_status=$?; verify_immutable_release_source_snapshot "$snapshot" "$snapshot_id" || exit $?; printf '%s\n%s\n%s\n' "$write_status" "$addition_status" "$(/usr/bin/stat -f '%Sf' "$snapshot/trusted.txt")"; unlock_immutable_release_source_snapshot_for_cleanup "$snapshot" "$snapshot_id" "$work" || exit $?; cleanup_private_release_directory "$work" "$work_id" /private/tmp '^AgentLimits-snapshot-test\.[A-Za-z0-9]{6}$' || exit $?; [[ "$write_status" != 0 && "$addition_status" != 0 ]]"#
+
+        let result = try runReleaseOutputHelper(
+            command: command,
+            arguments: [
+                repositoryRoot.appendingPathComponent(
+                    "Scripts/signing-config.sh"
+                ).path,
+                repository.path,
+                trustedCommit
+            ],
+            environment: [
+                "GIT_DIR": alternateRepository.appendingPathComponent(".git").path,
+                "GIT_INDEX_FILE": alternateRepository
+                    .appendingPathComponent(".git/index").path,
+                "GIT_WORK_TREE": alternateRepository.path,
+                "TMPDIR": hostileTemporaryDirectory.path
+            ]
+        )
+
+        XCTAssertEqual(result.status, 0, result.output)
+        XCTAssertTrue(result.output.contains("uchg"), result.output)
+        XCTAssertEqual(
+            try FileManager.default.contentsOfDirectory(
+                atPath: hostileTemporaryDirectory.path
+            ),
+            []
+        )
+    }
+
+    func testScreenshotCaptureUsesPinnedImmutableAtomicPipeline() throws {
+        let script = try releaseScript(
+            named: "capture-app-store-screenshots.sh"
+        )
+        let sanitizeGit = try offset(
+            of: "sanitize_release_git_environment",
+            in: script
+        )
+        let sanitizeXcode = try offset(
+            of: "sanitize_release_xcode_environment",
+            in: script
+        )
+        let pin = try offset(of: "pin_clean_release_source", in: script)
+        let lock = try offset(
+            of: "acquire_release_publication_lock",
+            in: script
+        )
+        let snapshot = try offset(
+            of: "create_immutable_release_source_snapshot",
+            in: script
+        )
+        let simulatorProbe = try offset(
+            of: #"runtimes_json="$(xcrun"#,
+            in: script
+        )
+        let manifest = try offset(of: "schemaVersion: 2", in: script)
+        let publish = try offset(
+            of: "publish_staged_release_directory",
+            in: script
+        )
+        let simulatorLocks = try offset(
+            of: "acquire_all_simulator_locks",
+            in: script,
+            after: simulatorProbe
+        )
+        let simulatorStateSnapshot = try offset(
+            of: #"devices_json="$(xcrun"#,
+            in: script,
+            after: simulatorLocks
+        )
+
+        XCTAssertLessThan(sanitizeGit, pin)
+        XCTAssertLessThan(sanitizeXcode, pin)
+        XCTAssertLessThan(pin, lock)
+        XCTAssertLessThan(lock, snapshot)
+        XCTAssertLessThan(snapshot, simulatorProbe)
+        XCTAssertLessThan(simulatorProbe, simulatorLocks)
+        XCTAssertLessThan(simulatorLocks, simulatorStateSnapshot)
+        XCTAssertLessThan(simulatorProbe, manifest)
+        XCTAssertLessThan(manifest, publish)
+        XCTAssertTrue(script.contains("source \"$script_dir/release-output.sh\""))
+        XCTAssertTrue(script.contains("$build_root/AgentLimits.xcodeproj"))
+        XCTAssertFalse(script.contains("$project_root/AgentLimits.xcodeproj"))
+        XCTAssertTrue(script.contains("verify_capture_provenance || exit $?\npublish_staged_release_directory"))
+        XCTAssertTrue(script.contains("captureSource: \"private immutable git archive\""))
+        XCTAssertTrue(script.contains("testEvidence:"))
+        XCTAssertTrue(script.contains("totalTestCount: 2"))
+        XCTAssertTrue(script.hasPrefix("#!/bin/bash -p\n"))
+        XCTAssertTrue(script.contains("exec /usr/bin/env -i"))
+        XCTAssertTrue(script.contains("/usr/bin/env -0"))
+        XCTAssertTrue(script.contains("HOME=\"$agentlimits_capture_home\""))
+        XCTAssertTrue(script.contains("verify_all_simulator_locks"))
+        XCTAssertTrue(script.contains("release_all_simulator_locks"))
+        XCTAssertTrue(script.contains("staging-files.inventory"))
+        XCTAssertTrue(script.contains("staging-unexpected.inventory"))
+        XCTAssertTrue(
+            script.contains(
+                "credentialStoreImplementation: \"MobileInMemoryCredentialStore\""
+            )
+        )
+        XCTAssertTrue(
+            script.contains(
+                "usageFetcherImplementation: \"MobileAppStoreScreenshotFetcher\""
+            )
+        )
+        XCTAssertTrue(
+            script.contains(
+                "cacheImplementation: \"WatchAppStoreScreenshotCache\""
+            )
+        )
+        XCTAssertFalse(script.contains("productionDefaultsAccessed: false"))
+        XCTAssertFalse(script.contains("keychainAccessed: false"))
+        XCTAssertFalse(script.contains("networkAccessed: false"))
+        XCTAssertFalse(script.contains("watchConnectivityAccessed: false"))
+        XCTAssertFalse(script.contains("cp -p -n"))
+        XCTAssertFalse(script.contains("${TMPDIR:-"))
+    }
+
+    func testAppStoreScreenshotAttachmentsRequireStableFrames() throws {
+        let ios = try repositoryText(
+            "AgentLimitsiOSUITests/AgentLimitsiOSUITests.swift"
+        )
+        let watch = try repositoryText(
+            "AgentLimitsWatchUITests/AgentLimitsWatchUITests.swift"
+        )
+
+        XCTAssertEqual(
+            ios.components(separatedBy: "addStableScreenshot(named:").count - 1,
+            1
+        )
+        XCTAssertEqual(
+            watch.components(separatedBy: "addStableScreenshot(named:").count - 1,
+            2
+        )
+        for source in [ios, watch] {
+            XCTAssertTrue(source.contains("frame == previousFrame"))
+            XCTAssertTrue(source.contains("requiredMatchingSamples: Int = 3"))
+            XCTAssertTrue(
+                source.contains(
+                    "guard let screenshot = captureVisuallyStableScreenshot()"
+                )
+            )
+            XCTAssertTrue(source.contains("return screenshot"))
+            XCTAssertTrue(
+                source.contains("XCTAttachment(screenshot: screenshot)")
+            )
+            XCTAssertEqual(
+                source.components(
+                    separatedBy: "XCUIScreen.main.screenshot()"
+                ).count - 1,
+                1
+            )
+            XCTAssertFalse(
+                source.contains(
+                    "XCTAttachment(\n            screenshot: XCUIScreen.main.screenshot()"
+                )
+            )
+            XCTAssertTrue(
+                source.contains(
+                    "Screenshot did not reach repeated identical frames"
+                )
+            )
+        }
+    }
+
     func testReleaseScriptsIgnoreHostileCDPATHWithNewlineTrap() throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -204,6 +422,10 @@ final class DistributionScriptTests: XCTestCase {
             (
                 "Scripts/build-unsigned-artifacts.sh",
                 [directory.appendingPathComponent("unsigned-output").path]
+            ),
+            (
+                "Scripts/capture-app-store-screenshots.sh",
+                [directory.appendingPathComponent("screenshot-output").path]
             )
         ]
 
@@ -256,6 +478,10 @@ final class DistributionScriptTests: XCTestCase {
             (
                 "build-unsigned-artifacts.sh",
                 [directory.appendingPathComponent("unsigned-output").path]
+            ),
+            (
+                "capture-app-store-screenshots.sh",
+                [directory.appendingPathComponent("screenshot-output").path]
             )
         ]
 

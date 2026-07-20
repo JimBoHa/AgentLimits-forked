@@ -1,9 +1,80 @@
-#!/bin/bash
+#!/bin/bash -p
+# shellcheck disable=SC2154
+
+agentlimits_capture_entrypoint="${BASH_SOURCE[0]}"
+if [[ "$agentlimits_capture_entrypoint" != /* ]]; then
+    agentlimits_capture_entrypoint="$PWD/$agentlimits_capture_entrypoint"
+fi
+if ! agentlimits_capture_home="$(
+        builtin unset HOME CDPATH
+        builtin cd ~ 2>/dev/null || exit 1
+        builtin pwd -P
+    )" \
+    || [[ "$agentlimits_capture_home" != /* \
+        || "$agentlimits_capture_home" == / \
+        || "$agentlimits_capture_home" == *$'\n'* \
+        || ! -d "$agentlimits_capture_home" ]]; then
+    echo "Could not derive the canonical passwd home directory" >&2
+    exit 70
+fi
+
+agentlimits_capture_environment_reset=false
+if [[ "${AGENTLIMITS_CAPTURE_ENV_PID:-}" != "$$" ]]; then
+    agentlimits_capture_environment_reset=true
+else
+    while IFS= read -r -d '' agentlimits_capture_environment_entry; do
+        case "$agentlimits_capture_environment_entry" in
+            "AGENTLIMITS_CAPTURE_ENV_PID=$$" \
+                | DEVELOPER_DIR=* \
+                | "HOME=$agentlimits_capture_home" \
+                | "LANG=C" \
+                | "LC_ALL=C" \
+                | "PATH=/usr/bin:/bin:/usr/sbin:/sbin" \
+                | PWD=* \
+                | SHLVL=* \
+                | _=*)
+                ;;
+            *)
+                agentlimits_capture_environment_reset=true
+                break
+                ;;
+        esac
+    done < <(/usr/bin/env -0)
+fi
+if [[ "$agentlimits_capture_environment_reset" == "false" \
+    && ( "${HOME:-}" != "$agentlimits_capture_home" \
+        || "${LANG:-}" != C \
+        || "${LC_ALL:-}" != C \
+        || "${PATH:-}" != /usr/bin:/bin:/usr/sbin:/sbin ) ]]; then
+    agentlimits_capture_environment_reset=true
+fi
+if [[ "$agentlimits_capture_environment_reset" == "true" ]]; then
+    exec /usr/bin/env -i \
+        AGENTLIMITS_CAPTURE_ENV_PID="$$" \
+        DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}" \
+        HOME="$agentlimits_capture_home" \
+        LANG=C \
+        LC_ALL=C \
+        PATH=/usr/bin:/bin:/usr/sbin:/sbin \
+        /bin/bash -p "$agentlimits_capture_entrypoint" "$@"
+    echo "Could not create a sanitized screenshot environment" >&2
+    exit 70
+fi
+unset \
+    AGENTLIMITS_CAPTURE_ENV_PID \
+    agentlimits_capture_entrypoint \
+    agentlimits_capture_environment_entry \
+    agentlimits_capture_environment_reset \
+    agentlimits_capture_home
 
 set -euo pipefail
 
+PATH="/usr/bin:/bin:/usr/sbin:/sbin"
+export PATH
+unset CDPATH
+
 usage() {
-    echo "Usage: $0 OUTPUT_DIRECTORY" >&2
+    echo "Usage: $0 /ABSOLUTE/NEW/OUTPUT_DIRECTORY" >&2
     echo "Captures deterministic iPhone, iPad, and Apple Watch App Store screenshots." >&2
 }
 
@@ -12,10 +83,20 @@ if [[ $# -ne 1 ]]; then
     exit 64
 fi
 
-script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-project_root="$(cd "$script_dir/.." && pwd)"
+invoked_script="${BASH_SOURCE[0]}"
+if [[ -L "$invoked_script" ]]; then
+    echo "Refusing screenshot capture through a script symlink" >&2
+    exit 64
+fi
+script_dir="$(cd "$(dirname "$invoked_script")" >/dev/null && pwd -P)"
+project_root="$(cd "$script_dir/.." >/dev/null && pwd -P)"
 developer_dir="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}"
-output_arg="$1"
+# shellcheck disable=SC1091
+source "$script_dir/signing-config.sh"
+sanitize_release_git_environment
+sanitize_release_xcode_environment
+# shellcheck disable=SC1091
+source "$script_dir/release-output.sh"
 
 if [[ ! -x "$developer_dir/usr/bin/xcodebuild" ]]; then
     echo "Xcode not found at $developer_dir" >&2
@@ -25,20 +106,28 @@ if ! command -v jq >/dev/null 2>&1; then
     echo "jq is required to resolve simulators and write metadata." >&2
     exit 69
 fi
+validate_release_output_request "$1" "$project_root" || exit $?
+output_parent="$validated_release_output_parent"
+output_parent_identity="$validated_release_output_parent_identity"
+output_name="$validated_release_output_name"
+output_dir="$validated_release_output_directory"
+pin_clean_release_source "$project_root" || exit $?
+source_commit="$validated_release_source_commit"
+source_tree="$validated_release_source_tree"
 
-case "$output_arg" in
-    /*) ;;
-    *) output_arg="$PWD/$output_arg" ;;
-esac
-output_parent="$(dirname "$output_arg")"
-output_name="$(basename "$output_arg")"
-mkdir -p "$output_parent"
-output_parent="$(cd "$output_parent" && pwd -P)"
-output_dir="$output_parent/$output_name"
-
-work_dir="$(mktemp -d "${TMPDIR:-/tmp}/AgentLimits-screenshots.XXXXXX")"
-output_reserved=false
-output_published=false
+work_dir=""
+work_dir_identity=""
+source_snapshot=""
+source_snapshot_identity=""
+staging_parent=""
+staging_parent_identity=""
+staging_dir=""
+staging_dir_identity=""
+publication_lock=""
+publication_lock_identity=""
+atomic_publisher=""
+atomic_publisher_identity=""
+atomic_publisher_hash=""
 simulator_states_restored=true
 simulator_udids=()
 simulator_initial_states=()
@@ -49,9 +138,144 @@ simulator_status_files=()
 simulator_status_supported=()
 simulator_mutated=()
 simulator_restored=()
+simulator_lock_udids=()
+simulator_lock_paths=()
+simulator_lock_identities=()
+simulator_locks_released=true
+capture_user_id="$(id -u)"
+
+validate_simulator_udid() {
+    [[ "$1" =~ ^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$ ]]
+}
+
+verify_simulator_lock() {
+    local index="$1"
+    local udid="${simulator_lock_udids[$index]}"
+    local lock_path="${simulator_lock_paths[$index]}"
+    local expected_path="/private/tmp/.AgentLimits-simulator-${capture_user_id}-${udid}.lock"
+    local expected_identity="${simulator_lock_identities[$index]}"
+    local actual_identity
+
+    if [[ "$lock_path" != "$expected_path" \
+        || -L "$lock_path" \
+        || ! -d "$lock_path" ]]; then
+        echo "Simulator lock path changed: $udid" >&2
+        return 73
+    fi
+    actual_identity="$(release_path_identity "$lock_path")" || return 73
+    if [[ "$actual_identity" != "$expected_identity" ]]; then
+        echo "Simulator lock identity changed: $udid" >&2
+        return 73
+    fi
+    if ! verify_private_release_directory "$lock_path"; then
+        echo "Simulator lock permissions changed: $udid" >&2
+        return 73
+    fi
+}
+
+verify_all_simulator_locks() {
+    local index
+
+    if [[ "$simulator_locks_released" == "true" ]]; then
+        echo "Simulator locks are not held" >&2
+        return 73
+    fi
+    for ((index=0; index<${#simulator_lock_paths[@]}; index++)); do
+        verify_simulator_lock "$index" || return $?
+    done
+}
+
+release_all_simulator_locks() {
+    local index
+    local failed=0
+
+    if [[ "$simulator_locks_released" == "true" ]]; then
+        return 0
+    fi
+    for ((index=${#simulator_lock_paths[@]} - 1; index >= 0; index--)); do
+        if [[ -z "${simulator_lock_paths[$index]}" ]]; then
+            continue
+        fi
+        if ! verify_simulator_lock "$index"; then
+            failed=1
+            continue
+        fi
+        if ! rmdir "${simulator_lock_paths[$index]}" 2>/dev/null; then
+            echo "Could not remove simulator lock: ${simulator_lock_udids[$index]}" >&2
+            failed=1
+            continue
+        fi
+        simulator_lock_paths[index]=""
+    done
+    if [[ "$failed" -eq 0 ]]; then
+        simulator_locks_released=true
+    fi
+    return "$failed"
+}
+
+acquire_all_simulator_locks() {
+    local ordered_udids=("$@")
+    local index
+    local compare
+    local swap
+    local udid
+    local lock_path
+    local lock_identity
+
+    if [[ "${#ordered_udids[@]}" -eq 0 ]]; then
+        echo "No simulator IDs supplied for locking" >&2
+        return 64
+    fi
+    for ((index=0; index<${#ordered_udids[@]}; index++)); do
+        validate_simulator_udid "${ordered_udids[$index]}" || {
+            echo "Unsafe simulator ID: ${ordered_udids[$index]}" >&2
+            return 64
+        }
+        for ((compare=index + 1; compare<${#ordered_udids[@]}; compare++)); do
+            if [[ "${ordered_udids[$index]}" == "${ordered_udids[$compare]}" ]]; then
+                echo "Screenshot simulator IDs must be distinct" >&2
+                return 64
+            fi
+        done
+    done
+    for ((index=0; index<${#ordered_udids[@]} - 1; index++)); do
+        for ((compare=index + 1; compare<${#ordered_udids[@]}; compare++)); do
+            if [[ "${ordered_udids[$index]}" > "${ordered_udids[$compare]}" ]]; then
+                swap="${ordered_udids[$index]}"
+                ordered_udids[index]="${ordered_udids[$compare]}"
+                ordered_udids[compare]="$swap"
+            fi
+        done
+    done
+
+    simulator_locks_released=false
+    for udid in "${ordered_udids[@]}"; do
+        lock_path="/private/tmp/.AgentLimits-simulator-${capture_user_id}-${udid}.lock"
+        if [[ -e "$lock_path" || -L "$lock_path" ]] \
+            || ! mkdir -m 700 "$lock_path" 2>/dev/null; then
+            echo "Simulator is already reserved for capture: $udid" >&2
+            return 73
+        fi
+        lock_identity="$(release_path_identity "$lock_path")" || {
+            rmdir "$lock_path" 2>/dev/null || true
+            return 73
+        }
+        simulator_lock_udids+=("$udid")
+        simulator_lock_paths+=("$lock_path")
+        simulator_lock_identities+=("$lock_identity")
+        if ! make_release_directory_private "$lock_path" \
+            || ! verify_simulator_lock "$((${#simulator_lock_paths[@]} - 1))"; then
+            echo "Could not secure simulator lock: $udid" >&2
+            return 73
+        fi
+    done
+    verify_all_simulator_locks
+}
 
 device_state() {
     local udid="$1"
+
+    verify_all_simulator_locks || return $?
     xcrun simctl list devices --json \
         | jq -r --arg udid "$udid" '
             [.devices[][] | select(.udid == $udid) | .state]
@@ -250,6 +474,8 @@ restore_simulator_state() {
         return 0
     fi
 
+    verify_all_simulator_locks || return $?
+
     current_state="$(device_state "$udid")"
     if [[ "${simulator_mutated[$index]}" == "true" \
         || "$initial_state" == "Booted" ]]; then
@@ -330,42 +556,100 @@ restore_all_simulator_states() {
 cleanup() {
     local exit_status=$?
     local restore_status=0
+    local cleanup_status=0
+    local work_cleanup_allowed=true
 
     trap - EXIT
     set +e
     restore_all_simulator_states
     restore_status=$?
-    if [[ "$output_reserved" == "true" \
-        && "$output_published" != "true" ]]; then
-        if ! rmdir "$output_dir" 2>/dev/null; then
-            echo "Reserved output directory retained because it is not empty: $output_dir" >&2
-        fi
+    if ! release_all_simulator_locks; then
+        cleanup_status=1
     fi
-    if [[ -n "${work_dir:-}" && -d "$work_dir" \
-        && "$work_dir" == *"/AgentLimits-screenshots."* ]]; then
-        rm -rf "$work_dir"
+    if [[ -n "${source_snapshot:-}" ]] \
+        && ! unlock_immutable_release_source_snapshot_for_cleanup \
+            "$source_snapshot" \
+            "$source_snapshot_identity" \
+            "$work_dir"; then
+        cleanup_status=1
+        work_cleanup_allowed=false
     fi
-    if [[ "$restore_status" -ne 0 && "$exit_status" -eq 0 ]]; then
+    if ! cleanup_private_release_directory \
+        "${staging_parent:-}" \
+        "${staging_parent_identity:-}" \
+        "$output_parent" \
+        '^\.AgentLimits-screenshots-stage\.[A-Za-z0-9]{6}$'; then
+        cleanup_status=1
+    fi
+    if [[ "$work_cleanup_allowed" == "true" ]] \
+        && ! cleanup_private_release_directory \
+            "${work_dir:-}" \
+            "${work_dir_identity:-}" \
+            /private/tmp \
+            '^AgentLimits-screenshot-capture\.[A-Za-z0-9]{6}$'; then
+        cleanup_status=1
+    fi
+    if [[ -n "${publication_lock:-}" ]] \
+        && ! release_release_publication_lock \
+            "$publication_lock" \
+            "$publication_lock_identity" \
+            "$output_parent" \
+            "$output_name"; then
+        cleanup_status=1
+    fi
+    if [[ ( "$restore_status" -ne 0 || "$cleanup_status" -ne 0 ) \
+        && "$exit_status" -eq 0 ]]; then
         exit_status=1
     fi
     exit "$exit_status"
 }
 trap cleanup EXIT
 
-if ! mkdir -m 700 "$output_dir" 2>/dev/null; then
-    if [[ -e "$output_dir" || -L "$output_dir" ]]; then
-        echo "Refusing to overwrite existing path: $output_dir" >&2
-    else
-        echo "Could not reserve output directory: $output_dir" >&2
-    fi
-    exit 73
-fi
-output_reserved=true
-
 export DEVELOPER_DIR="$developer_dir"
+acquire_release_publication_lock \
+    "$output_parent" "$output_name" "$output_parent_identity" || exit $?
+publication_lock="$validated_release_publication_lock"
+publication_lock_identity="$validated_release_publication_lock_identity"
+create_release_staging_directory \
+    "$output_parent" \
+    "$output_name" \
+    "$output_parent_identity" \
+    screenshots \
+    || exit $?
+staging_parent="$validated_release_staging_parent"
+staging_parent_identity="$validated_release_staging_parent_identity"
+staging_dir="$validated_release_staging_directory"
+staging_dir_identity="$validated_release_staging_directory_identity"
+create_private_release_work_directory AgentLimits-screenshot-capture || exit $?
+work_dir="$validated_release_work_directory"
+work_dir_identity="$validated_release_work_directory_identity"
+configure_private_release_temporary_directory "$work_dir" || exit $?
+verify_pinned_release_source_unchanged \
+    "$project_root" "$source_commit" "$source_tree" || exit $?
+create_immutable_release_source_snapshot \
+    "$project_root" "$source_commit" "$work_dir" || exit $?
+source_snapshot="$validated_release_source_snapshot"
+source_snapshot_identity="$validated_release_source_snapshot_identity"
+build_root="$source_snapshot"
+build_atomic_release_publisher \
+    "$build_root/Scripts/atomic-release-publish.c" \
+    "$work_dir/atomic-release-publish" \
+    || exit $?
+atomic_publisher="$validated_release_atomic_publisher"
+atomic_publisher_identity="$validated_release_atomic_publisher_identity"
+atomic_publisher_hash="$validated_release_atomic_publisher_hash"
+
+verify_capture_provenance() {
+    verify_immutable_release_source_snapshot \
+        "$source_snapshot" "$source_snapshot_identity" || return $?
+    verify_pinned_release_source_unchanged \
+        "$project_root" "$source_commit" "$source_tree" || return $?
+}
+
+verify_capture_provenance || exit $?
 
 runtimes_json="$(xcrun simctl list runtimes available --json)"
-devices_json="$(xcrun simctl list devices available --json)"
+resolution_devices_json="$(xcrun simctl list devices available --json)"
 
 resolve_simulator() {
     local platform="$1"
@@ -422,7 +706,7 @@ resolve_simulator() {
                         and .isAvailable == true
                     )
                     | {udid}]
-            ' <<<"$devices_json"
+            ' <<<"$resolution_devices_json"
     )"
     device_count="$(jq 'length' <<<"$matches")"
     if [[ "$device_count" -ne 1 ]]; then
@@ -431,7 +715,7 @@ resolve_simulator() {
             .devices[$runtime][]?
             | select(.isAvailable == true)
             | "  \(.name): \(.udid)"
-        ' <<<"$devices_json" >&2
+        ' <<<"$resolution_devices_json" >&2
         return 1
     fi
     udid="$(jq -r '.[0].udid' <<<"$matches")"
@@ -454,6 +738,11 @@ if [[ "$ios_runtime" != "$ipad_runtime" \
     exit 1
 fi
 
+acquire_all_simulator_locks \
+    "$iphone_udid" "$ipad_udid" "$watch_udid" || exit $?
+verify_all_simulator_locks || exit $?
+devices_json="$(xcrun simctl list devices available --json)"
+
 echo "iPhone 17 Pro Max ($ios_version): $iphone_udid"
 echo "iPad Pro 13-inch (M5) ($ipad_version): $ipad_udid"
 echo "Apple Watch Series 11 (46mm) ($watch_version): $watch_udid"
@@ -464,6 +753,8 @@ assert_simulator_presentation() {
     local status_supported="$3"
     local status
     local displayed_time
+
+    verify_all_simulator_locks || return $?
 
     if [[ "$role" == "watch" ]]; then
         if [[ "$(xcrun simctl ui "$udid" appearance)" != "unsupported" \
@@ -529,6 +820,8 @@ normalize_simulator_presentation() {
     local status_probe_file="$work_dir/status-probe-$udid.txt"
     local status_supported=true
     local fixed_time="2026-01-01T09:41:00.000-08:00"
+
+    verify_all_simulator_locks || return $?
 
     initial_state="$(
         jq -r --arg udid "$udid" '
@@ -664,8 +957,9 @@ run_mobile_screenshot_test() {
     local log_path="$5"
 
     echo "Capturing $label screenshot..."
+    verify_all_simulator_locks || return $?
     if ! xcodebuild test \
-        -project "$project_root/AgentLimits.xcodeproj" \
+        -project "$build_root/AgentLimits.xcodeproj" \
         -scheme AgentLimitsiOS \
         -configuration Debug \
         -destination "platform=iOS Simulator,id=$udid" \
@@ -716,6 +1010,7 @@ iphone_result="$work_dir/iPhone.xcresult"
 ipad_result="$work_dir/iPad.xcresult"
 watch_result="$work_dir/Watch.xcresult"
 
+verify_capture_provenance || exit $?
 assert_simulator_presentation \
     "$iphone_udid" iphone "${simulator_status_supported[0]}"
 run_mobile_screenshot_test \
@@ -724,6 +1019,7 @@ run_mobile_screenshot_test \
     "$iphone_result" \
     "$work_dir/DerivedData-iPhone" \
     "$work_dir/iPhone.log"
+verify_capture_provenance || exit $?
 
 assert_simulator_presentation \
     "$ipad_udid" ipad "${simulator_status_supported[1]}"
@@ -733,12 +1029,14 @@ run_mobile_screenshot_test \
     "$ipad_result" \
     "$work_dir/DerivedData-iPad" \
     "$work_dir/iPad.log"
+verify_capture_provenance || exit $?
 
 echo "Capturing Apple Watch screenshots..."
 assert_simulator_presentation \
     "$watch_udid" watch "${simulator_status_supported[2]}"
+verify_all_simulator_locks || exit $?
 if ! xcodebuild test \
-    -project "$project_root/AgentLimits.xcodeproj" \
+    -project "$build_root/AgentLimits.xcodeproj" \
     -scheme AgentLimitsWatch \
     -configuration Debug \
     -destination "platform=watchOS Simulator,id=$watch_udid" \
@@ -760,10 +1058,9 @@ if ! xcodebuild test \
     exit 1
 fi
 assert_test_result "$watch_result" 2
+verify_capture_provenance || exit $?
 restore_all_simulator_states
-
-staging_dir="$work_dir/output"
-mkdir -p "$staging_dir"
+release_all_simulator_locks
 
 export_attachment() {
     local result_bundle="$1"
@@ -880,10 +1177,11 @@ export_attachment \
     416 \
     496
 
+verify_capture_provenance || exit $?
 echo "Building unsigned Release app for fixture-marker guard..."
 release_derived_data="$work_dir/DerivedData-Release"
 if ! xcodebuild build \
-    -project "$project_root/AgentLimits.xcodeproj" \
+    -project "$build_root/AgentLimits.xcodeproj" \
     -scheme AgentLimitsiOS \
     -configuration Release \
     -destination generic/platform=iOS \
@@ -900,6 +1198,7 @@ if ! xcodebuild build \
     tail -120 "$work_dir/Release.log" >&2
     exit 1
 fi
+verify_capture_provenance || exit $?
 
 release_ios_app="$release_derived_data/Build/Products/Release-iphoneos/AgentLimits.app"
 release_watch_app="$release_ios_app/Watch/AgentLimitsWatch.app"
@@ -938,16 +1237,13 @@ iphone_sha="$(shasum -a 256 "$staging_dir/iphone-6.9-01-copilot-accounts.jpg" | 
 ipad_sha="$(shasum -a 256 "$staging_dir/ipad-13-01-copilot-accounts.jpg" | awk '{print $1}')"
 watch_root_sha="$(shasum -a 256 "$staging_dir/watch-46mm-01-copilot-accounts.jpg" | awk '{print $1}')"
 watch_detail_sha="$(shasum -a 256 "$staging_dir/watch-46mm-02-session-detail.jpg" | awk '{print $1}')"
-git_dirty=false
-if [[ -n "$(git -C "$project_root" status --porcelain)" ]]; then
-    git_dirty=true
-fi
 xcode_version="$(xcodebuild -version | paste -sd ' ' -)"
+verify_capture_provenance || exit $?
 
 jq -n \
     --arg generatedAt "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
-    --arg gitCommit "$(git -C "$project_root" rev-parse HEAD)" \
-    --argjson gitDirty "$git_dirty" \
+    --arg gitCommit "$source_commit" \
+    --arg gitTree "$source_tree" \
     --arg xcode "$xcode_version" \
     --arg iosRuntime "$ios_runtime" \
     --arg iosVersion "$ios_version" \
@@ -961,16 +1257,17 @@ jq -n \
     --arg watchRootSHA "$watch_root_sha" \
     --arg watchDetailSHA "$watch_detail_sha" '
     {
-        schemaVersion: 1,
+        schemaVersion: 2,
         generatedAt: $generatedAt,
         source: {
             gitCommit: $gitCommit,
-            gitDirty: $gitDirty,
+            gitTree: $gitTree,
+            gitDirty: false,
+            captureSource: "private immutable git archive",
             xcode: $xcode
         },
         fixture: {
             data: "fictional, deterministic, and local-only",
-            externalServicesUsed: false,
             accounts: [
                 {label: "Personal Codex", provider: "Codex"},
                 {label: "Personal Claude", provider: "Claude Code"},
@@ -987,6 +1284,65 @@ jq -n \
                     working: 6,
                     waiting: 2,
                     open: 8
+                }
+            ]
+        },
+        testEvidence: {
+            allPassed: true,
+            sourceCommit: $gitCommit,
+            fixtureIsolation: {
+                buildConfiguration: "Debug",
+                evidenceScope: "source-bound implementation wiring and passing UI tests; not dynamic access tracing",
+                launchArgument: "-ui-testing-sample-data",
+                iOS: {
+                    defaultsSuite: "com.jimboha.agentlimits.ios.app-store-screenshot",
+                    accountPersistenceKey: "mobile_provider_accounts_app_store_screenshot_v1",
+                    credentialStoreImplementation: "MobileInMemoryCredentialStore",
+                    usageFetcherImplementation: "MobileAppStoreScreenshotFetcher",
+                    watchConnectivityEnabled: false
+                },
+                watchOS: {
+                    cacheImplementation: "WatchAppStoreScreenshotCache",
+                    watchConnectivityEnabled: false
+                }
+            },
+            runs: [
+                {
+                    scheme: "AgentLimitsiOS",
+                    testIdentifiers: [
+                        "AgentLimitsiOSUITests/AgentLimitsiOSUITests/testAppStoreCopilotAccountsScreenshot"
+                    ],
+                    simulator: "iPhone 17 Pro Max",
+                    udid: $iphoneUDID,
+                    runtime: $iosRuntime,
+                    result: "Passed",
+                    totalTestCount: 1,
+                    passedTestCount: 1
+                },
+                {
+                    scheme: "AgentLimitsiOS",
+                    testIdentifiers: [
+                        "AgentLimitsiOSUITests/AgentLimitsiOSUITests/testAppStoreCopilotAccountsScreenshot"
+                    ],
+                    simulator: "iPad Pro 13-inch (M5)",
+                    udid: $ipadUDID,
+                    runtime: $iosRuntime,
+                    result: "Passed",
+                    totalTestCount: 1,
+                    passedTestCount: 1
+                },
+                {
+                    scheme: "AgentLimitsWatch",
+                    testIdentifiers: [
+                        "AgentLimitsWatchUITests/AgentLimitsWatchUITests/testAppStoreCopilotAccountsScreenshot",
+                        "AgentLimitsWatchUITests/AgentLimitsWatchUITests/testAppStoreCopilotDetailScreenshot"
+                    ],
+                    simulator: "Apple Watch Series 11 (46mm)",
+                    udid: $watchUDID,
+                    runtime: $watchRuntime,
+                    result: "Passed",
+                    totalTestCount: 2,
+                    passedTestCount: 2
                 }
             ]
         },
@@ -1037,6 +1393,7 @@ jq -n \
             }
         ],
         releaseGuard: {
+            buildConfiguration: "Release",
             checkedBinaries: ["AgentLimits", "AgentLimitsWatch"],
             fixtureMarkersFound: false
         }
@@ -1051,49 +1408,87 @@ publish_files=(
     SHA256SUMS
     MANIFEST.json
 )
-if [[ -n "$(find "$output_dir" -mindepth 1 -maxdepth 1 -print -quit)" ]]; then
-    echo "Reserved output directory changed during capture: $output_dir" >&2
-    exit 73
-fi
 for filename in "${publish_files[@]}"; do
-    source_path="$staging_dir/$filename"
-    destination_path="$output_dir/$filename"
-    if [[ -e "$destination_path" || -L "$destination_path" ]]; then
-        echo "Refusing to overwrite output path: $destination_path" >&2
-        exit 73
-    fi
-    cp -p -n "$source_path" "$destination_path"
-    if ! cmp -s "$source_path" "$destination_path"; then
-        echo "Output publication collision: $destination_path" >&2
+    staged_path="$staging_dir/$filename"
+    if [[ -L "$staged_path" || ! -f "$staged_path" ]]; then
+        echo "Screenshot publication file is missing or unsafe: $staged_path" >&2
         exit 73
     fi
 done
-published_count="$(find "$output_dir" -mindepth 1 -maxdepth 1 -type f | wc -l | tr -d '[:space:]')"
-if [[ "$published_count" -ne "${#publish_files[@]}" \
-    || -n "$(find "$output_dir" -mindepth 1 -maxdepth 1 ! -type f -print -quit)" ]]; then
-    echo "Unexpected output appeared while publishing: $output_dir" >&2
+staging_files_inventory="$work_dir/staging-files.inventory"
+staging_unexpected_inventory="$work_dir/staging-unexpected.inventory"
+if ! /usr/bin/find "$staging_dir" \
+        -mindepth 1 -maxdepth 1 -type f -print0 \
+        >"$staging_files_inventory"; then
+    echo "Could not traverse screenshot staging files: $staging_dir" >&2
     exit 73
 fi
-for filename in "${publish_files[@]}"; do
-    if ! cmp -s "$staging_dir/$filename" "$output_dir/$filename"; then
-        echo "Published output changed before verification: $output_dir/$filename" >&2
+if ! /usr/bin/find "$staging_dir" \
+        -mindepth 1 -maxdepth 1 ! -type f -print0 \
+        >"$staging_unexpected_inventory"; then
+    echo "Could not traverse screenshot staging inventory: $staging_dir" >&2
+    exit 73
+fi
+staged_count=0
+while IFS= read -r -d '' staged_inventory_path; do
+    if [[ -z "$staged_inventory_path" ]]; then
+        echo "Screenshot staging inventory contained an empty path" >&2
         exit 73
     fi
-done
+    staged_count=$((staged_count + 1))
+done <"$staging_files_inventory"
+if [[ "$staged_count" -ne "${#publish_files[@]}" \
+    || -s "$staging_unexpected_inventory" ]]; then
+    echo "Unexpected screenshot staging inventory: $staging_dir" >&2
+    exit 73
+fi
 (
-    cd "$output_dir"
+    cd "$staging_dir"
     shasum -a 256 -c SHA256SUMS >/dev/null
 )
-published_count="$(find "$output_dir" -mindepth 1 -maxdepth 1 -type f | wc -l | tr -d '[:space:]')"
-if [[ "$published_count" -ne "${#publish_files[@]}" \
-    || -n "$(find "$output_dir" -mindepth 1 -maxdepth 1 ! -type f -print -quit)" ]]; then
-    echo "Published output inventory changed during verification: $output_dir" >&2
+jq -e '
+    .schemaVersion == 2
+    and .source.gitDirty == false
+    and .source.captureSource == "private immutable git archive"
+    and .testEvidence.allPassed == true
+    and .testEvidence.fixtureIsolation.iOS.credentialStoreImplementation
+        == "MobileInMemoryCredentialStore"
+    and .testEvidence.fixtureIsolation.iOS.usageFetcherImplementation
+        == "MobileAppStoreScreenshotFetcher"
+    and .testEvidence.fixtureIsolation.watchOS.cacheImplementation
+        == "WatchAppStoreScreenshotCache"
+    and (.testEvidence.fixtureIsolation | has("productionDefaultsAccessed") | not)
+    and (.testEvidence.fixtureIsolation | has("keychainAccessed") | not)
+    and (.testEvidence.fixtureIsolation | has("networkAccessed") | not)
+    and (.testEvidence.fixtureIsolation | has("watchConnectivityAccessed") | not)
+    and ([.testEvidence.runs[].result] | all(. == "Passed"))
+    and ([.testEvidence.runs[].passedTestCount] | add) == 4
+    and ([.testEvidence.runs[].totalTestCount] | add) == 4
+    and .releaseGuard.fixtureMarkersFound == false
+' "$staging_dir/MANIFEST.json" >/dev/null
+verify_private_release_directory "$staging_dir" || exit $?
+verify_capture_provenance || exit $?
+publish_staged_release_directory \
+    "$staging_dir" \
+    "$staging_dir_identity" \
+    "$output_parent" \
+    "$output_parent_identity" \
+    "$output_name" \
+    "$atomic_publisher" \
+    "$atomic_publisher_identity" \
+    "$atomic_publisher_hash" \
+    || exit $?
+staging_dir=""
+if ! rmdir "$staging_parent"; then
+    echo "Could not remove empty screenshot staging parent" >&2
     exit 73
 fi
-output_mode="$(stat -f '%Lp' "$output_dir")"
-if [[ "$output_mode" != "700" ]]; then
-    echo "Reserved output directory mode changed: $output_mode" >&2
-    exit 73
-fi
-output_published=true
+staging_parent=""
+release_release_publication_lock \
+    "$publication_lock" \
+    "$publication_lock_identity" \
+    "$output_parent" \
+    "$output_name" \
+    || exit $?
+publication_lock=""
 echo "App Store screenshots created at: $output_dir"

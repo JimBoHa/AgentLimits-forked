@@ -38,7 +38,7 @@ final class AgentLimitsWatchUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["5 open"].exists)
         XCTAssertTrue(app.staticTexts["8 open"].exists)
 
-        addScreenshot(named: "app-store-watch-copilot-accounts")
+        addStableScreenshot(named: "app-store-watch-copilot-accounts")
     }
 
     @MainActor
@@ -60,8 +60,7 @@ final class AgentLimitsWatchUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["2"].exists)
 
         dragContent(in: app, fromY: 0.30, toY: 0.70)
-        XCTAssertTrue(waitForVisualStability())
-        addScreenshot(named: "app-store-watch-session-detail")
+        addStableScreenshot(named: "app-store-watch-session-detail")
     }
 
     @MainActor
@@ -102,21 +101,22 @@ final class AgentLimitsWatchUITests: XCTestCase {
     }
 
     @MainActor
-    private func waitForVisualStability(
+    private func captureVisuallyStableScreenshot(
         timeout: TimeInterval = 5,
         sampleInterval: TimeInterval = 0.2,
         requiredMatchingSamples: Int = 3
-    ) -> Bool {
+    ) -> XCUIScreenshot? {
         let deadline = Date().addingTimeInterval(timeout)
         var previousFrame: Data?
         var matchingSamples = 0
 
         while Date() < deadline {
-            let frame = XCUIScreen.main.screenshot().pngRepresentation
+            let screenshot = XCUIScreen.main.screenshot()
+            let frame = screenshot.pngRepresentation
             if frame == previousFrame {
                 matchingSamples += 1
                 if matchingSamples >= requiredMatchingSamples {
-                    return true
+                    return screenshot
                 }
             } else {
                 previousFrame = frame
@@ -126,14 +126,16 @@ final class AgentLimitsWatchUITests: XCTestCase {
                 until: Date().addingTimeInterval(sampleInterval)
             )
         }
-        return false
+        return nil
     }
 
     @MainActor
-    private func addScreenshot(named name: String) {
-        let attachment = XCTAttachment(
-            screenshot: XCUIScreen.main.screenshot()
-        )
+    private func addStableScreenshot(named name: String) {
+        guard let screenshot = captureVisuallyStableScreenshot() else {
+            XCTFail("Screenshot did not reach repeated identical frames")
+            return
+        }
+        let attachment = XCTAttachment(screenshot: screenshot)
         attachment.name = name
         attachment.lifetime = .keepAlways
         add(attachment)

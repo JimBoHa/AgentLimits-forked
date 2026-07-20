@@ -1,8 +1,8 @@
 #!/bin/bash
 # shellcheck disable=SC2034
 
-# Safe output-directory handling for signed release scripts.
-# This file is sourced by export-ios.sh, package-macos.sh, and their tests.
+# Safe source-snapshot, temporary-work, and output-directory handling for
+# release scripts.
 
 validated_release_output_parent=""
 validated_release_output_parent_identity=""
@@ -17,6 +17,8 @@ validated_release_staging_directory_identity=""
 validated_release_work_directory=""
 validated_release_work_directory_identity=""
 validated_release_temporary_directory=""
+validated_release_source_snapshot=""
+validated_release_source_snapshot_identity=""
 validated_release_atomic_publisher=""
 validated_release_atomic_publisher_identity=""
 validated_release_atomic_publisher_hash=""
@@ -346,6 +348,131 @@ configure_private_release_temporary_directory() {
     TMPDIR="$temporary_directory/"
     export TMPDIR
     validated_release_temporary_directory="$temporary_directory"
+}
+
+verify_immutable_release_source_snapshot() {
+    local source_snapshot="$1"
+    local expected_identity="$2"
+    local path
+    local owner
+    local mode
+    local flags
+
+    if [[ -L "$source_snapshot" || ! -d "$source_snapshot" \
+        || "$(release_path_identity "$source_snapshot")" \
+            != "$expected_identity" ]]; then
+        echo "Release source snapshot identity changed" >&2
+        return 73
+    fi
+    if [[ -n "$(/usr/bin/find "$source_snapshot" \
+            ! -type d ! -type f -print -quit)" ]]; then
+        echo "Release source snapshot contains a non-regular path" >&2
+        return 73
+    fi
+    while IFS= read -r -d '' path; do
+        owner="$(/usr/bin/stat -f '%u' "$path")" || return 73
+        mode="$(/usr/bin/stat -f '%Lp' "$path")" || return 73
+        flags="$(/usr/bin/stat -f '%Sf' "$path")" || return 73
+        if [[ "$owner" != "$(id -u)" \
+            || $((8#$mode & 8#222)) -ne 0 \
+            || "$flags" != *uchg* ]]; then
+            echo "Release source snapshot is not immutable" >&2
+            return 73
+        fi
+        if [[ -f "$path" \
+            && "$(/usr/bin/stat -f '%l' "$path")" != "1" ]]; then
+            echo "Release source snapshot contains a linked file" >&2
+            return 73
+        fi
+    done < <(/usr/bin/find "$source_snapshot" -print0)
+}
+
+unlock_immutable_release_source_snapshot_for_cleanup() {
+    local source_snapshot="$1"
+    local expected_identity="$2"
+    local expected_work_directory="$3"
+
+    if [[ -z "$source_snapshot" ]]; then
+        return 0
+    fi
+    if [[ "${source_snapshot%/*}" != "$expected_work_directory" \
+        || "${source_snapshot##*/}" != "source" \
+        || -L "$source_snapshot" || ! -d "$source_snapshot" \
+        || "$(release_path_identity "$source_snapshot")" \
+            != "$expected_identity" \
+        || "$(/usr/bin/stat -f '%u' "$source_snapshot")" != "$(id -u)" ]]; then
+        echo "Release source snapshot changed; preserving temporary work" >&2
+        return 73
+    fi
+    /usr/bin/chflags -R nouchg "$source_snapshot" || return 73
+    /bin/chmod -R u+w "$source_snapshot" || return 73
+}
+
+create_immutable_release_source_snapshot() {
+    local project_root="$1"
+    local source_commit="$2"
+    local work_directory="$3"
+    local source_snapshot="$work_directory/source"
+    local source_snapshot_identity
+    local archive_status=0
+
+    validated_release_source_snapshot=""
+    validated_release_source_snapshot_identity=""
+    verify_private_release_directory "$work_directory" || return $?
+    if [[ -L "$project_root" || ! -d "$project_root" \
+        || -e "$source_snapshot" || -L "$source_snapshot" ]]; then
+        echo "Release source snapshot path is unsafe" >&2
+        return 73
+    fi
+    if ! /usr/bin/git -C "$project_root" cat-file -e \
+            "$source_commit^{commit}"; then
+        echo "Pinned release source commit is unavailable" >&2
+        return 65
+    fi
+    if ! mkdir -m 700 "$source_snapshot" \
+        || ! make_release_directory_private "$source_snapshot"; then
+        echo "Could not create a private release source snapshot" >&2
+        return 73
+    fi
+    source_snapshot_identity="$(release_path_identity "$source_snapshot")" \
+        || return 73
+
+    (
+        set -o pipefail
+        /usr/bin/git -C "$project_root" archive --format=tar "$source_commit" \
+            | /usr/bin/tar -xf - -C "$source_snapshot"
+    ) || archive_status=$?
+    if [[ "$archive_status" != "0" \
+        || -n "$(/usr/bin/find "$source_snapshot" \
+            ! -type d ! -type f -print -quit)" ]]; then
+        echo "Could not create a regular-file release source snapshot" >&2
+        unlock_immutable_release_source_snapshot_for_cleanup \
+            "$source_snapshot" "$source_snapshot_identity" "$work_directory" \
+            || true
+        rm -rf "$source_snapshot"
+        return 73
+    fi
+    if ! /bin/chmod -RN "$source_snapshot" \
+        || ! /bin/chmod -R a-w "$source_snapshot" \
+        || ! /usr/bin/chflags -R uchg "$source_snapshot"; then
+        echo "Could not make the release source snapshot immutable" >&2
+        unlock_immutable_release_source_snapshot_for_cleanup \
+            "$source_snapshot" "$source_snapshot_identity" "$work_directory" \
+            || true
+        rm -rf "$source_snapshot"
+        return 73
+    fi
+    if ! verify_immutable_release_source_snapshot \
+            "$source_snapshot" "$source_snapshot_identity"; then
+        unlock_immutable_release_source_snapshot_for_cleanup \
+            "$source_snapshot" "$source_snapshot_identity" "$work_directory" \
+            || true
+        rm -rf "$source_snapshot"
+        return 73
+    fi
+
+    validated_release_source_snapshot="$source_snapshot"
+    validated_release_source_snapshot_identity="$source_snapshot_identity"
 }
 
 build_atomic_release_publisher() {

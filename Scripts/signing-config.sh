@@ -1,7 +1,11 @@
 #!/bin/bash
+# shellcheck disable=SC2034
 
 # Shared validation for the gitignored Apple Team configuration.
 # This file is sourced by signed release scripts.
+
+validated_release_source_commit=""
+validated_release_source_tree=""
 
 sanitize_release_git_environment() {
     local variable
@@ -20,6 +24,92 @@ sanitize_release_git_environment() {
         GIT_CONFIG_GLOBAL \
         GIT_CONFIG_NOSYSTEM \
         GIT_NO_REPLACE_OBJECTS
+}
+
+pin_clean_release_source() {
+    local project_root="$1"
+    local canonical_root
+    local repository_root
+    local source_commit
+    local source_tree
+
+    validated_release_source_commit=""
+    validated_release_source_tree=""
+    if [[ -L "$project_root" || ! -d "$project_root" ]]; then
+        echo "Release source root is missing or unsafe" >&2
+        return 65
+    fi
+    canonical_root="$(cd "$project_root" >/dev/null && pwd -P)" || return 65
+    repository_root="$(/usr/bin/git -C "$canonical_root" rev-parse \
+        --show-toplevel)" || return 65
+    if [[ "$repository_root" != "$canonical_root" ]]; then
+        echo "Release source root does not match the Git worktree" >&2
+        return 65
+    fi
+    source_commit="$(/usr/bin/git -C "$canonical_root" rev-parse \
+        --verify 'HEAD^{commit}')" || return 65
+    source_tree="$(/usr/bin/git -C "$canonical_root" rev-parse \
+        --verify "$source_commit^{tree}")" || return 65
+    if [[ -n "$(/usr/bin/git -C "$canonical_root" status --porcelain \
+            --untracked-files=normal)" ]]; then
+        echo "Refusing release artifacts from a dirty Git working tree" >&2
+        return 65
+    fi
+
+    validated_release_source_commit="$source_commit"
+    validated_release_source_tree="$source_tree"
+}
+
+verify_pinned_release_source_unchanged() {
+    local project_root="$1"
+    local expected_commit="$2"
+    local expected_tree="$3"
+    local actual_commit
+    local actual_tree
+
+    actual_commit="$(/usr/bin/git -C "$project_root" rev-parse \
+        --verify 'HEAD^{commit}')" || return 65
+    actual_tree="$(/usr/bin/git -C "$project_root" rev-parse \
+        --verify "$actual_commit^{tree}")" || return 65
+    if [[ "$actual_commit" != "$expected_commit" \
+        || "$actual_tree" != "$expected_tree" \
+        || -n "$(/usr/bin/git -C "$project_root" status --porcelain \
+            --untracked-files=normal)" ]]; then
+        echo "Source changed while building; discard these artifacts" >&2
+        return 65
+    fi
+}
+
+sanitize_release_xcode_environment() {
+    unset \
+        XCODE_XCCONFIG_FILE \
+        TOOLCHAINS \
+        XCRUN_TOOLCHAIN_NAME \
+        SDKROOT \
+        CC \
+        CXX \
+        LD \
+        AR \
+        AS \
+        NM \
+        RANLIB \
+        STRIP \
+        COMPILER_PATH \
+        GCC_EXEC_PREFIX \
+        CPATH \
+        C_INCLUDE_PATH \
+        CPLUS_INCLUDE_PATH \
+        OBJC_INCLUDE_PATH \
+        LIBRARY_PATH \
+        LD_LIBRARY_PATH \
+        DYLD_LIBRARY_PATH \
+        DYLD_FRAMEWORK_PATH \
+        SWIFT_EXEC \
+        SWIFT_FRONTEND_EXEC \
+        SWIFT_DRIVER_SWIFT_FRONTEND_EXEC \
+        MACOSX_DEPLOYMENT_TARGET \
+        IPHONEOS_DEPLOYMENT_TARGET \
+        WATCHOS_DEPLOYMENT_TARGET
 }
 
 validate_development_team_config() {
@@ -94,34 +184,7 @@ verify_development_team_config_unchanged() {
 prepare_xcode_signing_environment() {
     local sanitized_config="$1"
 
+    sanitize_release_xcode_environment
     XCODE_XCCONFIG_FILE="$sanitized_config"
     export XCODE_XCCONFIG_FILE
-    unset \
-        TOOLCHAINS \
-        XCRUN_TOOLCHAIN_NAME \
-        SDKROOT \
-        CC \
-        CXX \
-        LD \
-        AR \
-        AS \
-        NM \
-        RANLIB \
-        STRIP \
-        COMPILER_PATH \
-        GCC_EXEC_PREFIX \
-        CPATH \
-        C_INCLUDE_PATH \
-        CPLUS_INCLUDE_PATH \
-        OBJC_INCLUDE_PATH \
-        LIBRARY_PATH \
-        LD_LIBRARY_PATH \
-        DYLD_LIBRARY_PATH \
-        DYLD_FRAMEWORK_PATH \
-        SWIFT_EXEC \
-        SWIFT_FRONTEND_EXEC \
-        SWIFT_DRIVER_SWIFT_FRONTEND_EXEC \
-        MACOSX_DEPLOYMENT_TARGET \
-        IPHONEOS_DEPLOYMENT_TARGET \
-        WATCHOS_DEPLOYMENT_TARGET
 }
