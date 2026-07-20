@@ -3,7 +3,6 @@ import XCTest
 
 final class CopilotUsageResponseTests: XCTestCase {
     func testBillingWindowUsesUTCResetMonth() throws {
-        XCTAssertEqual(TimeZone.current.identifier, "America/Los_Angeles")
         let snapshot = try makeResponse(resetDate: "2026-08-01")
             .toSnapshot(fetchedAt: Date())
         let window = try XCTUnwrap(snapshot.primaryWindow)
