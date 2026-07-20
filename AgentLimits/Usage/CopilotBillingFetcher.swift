@@ -184,7 +184,7 @@ final class CopilotBillingFetcher {
         for entries: [DatedBillingEntry]
     ) throws -> TokenUsagePeriod {
         var totalCost = 0.0
-        var totalRequests = 0.0
+        var totalRequests = RequestCountAccumulator()
 
         for datedEntry in entries {
             let nextCost = totalCost + datedEntry.entry.grossAmount
@@ -193,17 +193,13 @@ final class CopilotBillingFetcher {
             }
             totalCost = nextCost
 
-            let nextRequests = totalRequests + datedEntry.entry.quantity
-            guard Self.requestCount(from: nextRequests) != nil else {
-                throw CopilotBillingValidationError.aggregateOverflow
-            }
-            totalRequests = nextRequests
+            try totalRequests.add(datedEntry.entry.quantity)
         }
 
-        guard let requestCount = Self.requestCount(from: totalRequests) else {
-            throw CopilotBillingValidationError.aggregateOverflow
-        }
-        return TokenUsagePeriod(costUSD: totalCost, totalTokens: requestCount)
+        return TokenUsagePeriod(
+            costUSD: totalCost,
+            totalTokens: totalRequests.wholeRequests
+        )
     }
 
     /// Builds sorted daily usage entries from grouped data for heatmap.
@@ -241,6 +237,41 @@ final class CopilotBillingFetcher {
     private static func requestCount(from quantity: Double) -> Int? {
         guard quantity.isFinite, quantity >= 0 else { return nil }
         return Int(exactly: quantity.rounded(.towardZero))
+    }
+
+    private struct RequestCountAccumulator {
+        private(set) var wholeRequests = 0
+        private var fractionalRequests = 0.0
+
+        mutating func add(_ quantity: Double) throws {
+            guard let rowWhole = CopilotBillingFetcher.requestCount(
+                from: quantity
+            ) else {
+                throw CopilotBillingValidationError.invalidQuantity
+            }
+            try addWhole(rowWhole)
+
+            let rowFraction = quantity - Double(rowWhole)
+            let nextFraction = fractionalRequests + rowFraction
+            guard nextFraction.isFinite, nextFraction >= 0,
+                  let carry = CopilotBillingFetcher.requestCount(
+                    from: nextFraction
+                  ) else {
+                throw CopilotBillingValidationError.aggregateOverflow
+            }
+            if carry > 0 {
+                try addWhole(carry)
+            }
+            fractionalRequests = nextFraction - Double(carry)
+        }
+
+        private mutating func addWhole(_ value: Int) throws {
+            let (sum, overflow) = wholeRequests.addingReportingOverflow(value)
+            guard !overflow else {
+                throw CopilotBillingValidationError.aggregateOverflow
+            }
+            wholeRequests = sum
+        }
     }
 
     // MARK: - Error Mapping
@@ -401,6 +432,10 @@ final class CopilotBillingFetcher {
           throw new Error("HTTP " + response.status);
         }
         const data = await response.json();
+        if (!data || !Array.isArray(data.usage)
+            || data.usage.length > \(CopilotBillingResponse.maximumUsageRows)) {
+          throw new Error("Invalid billing response");
+        }
         return JSON.stringify(data);
       } catch (error) {
         const message = error && error.message ? error.message : String(error);

@@ -285,6 +285,38 @@ final class CopilotBillingAggregationTests: XCTestCase {
         }
     }
 
+    func testSmallRowsCannotHideOverflowAfterLargeQuantity() throws {
+        let now = try XCTUnwrap(Self.iso8601.date(from: "2026-07-15T12:00:00Z"))
+        let timestamp = "2026-07-15T10:00:00Z"
+        let largestValidQuantity = Double(Int.max).nextDown
+        var rows = [
+            entry(
+                cost: 0,
+                requests: largestValidQuantity,
+                at: timestamp
+            )
+        ]
+        rows.append(
+            contentsOf: Array(
+                repeating: entry(cost: 0, requests: 1, at: timestamp),
+                count: 2_000
+            )
+        )
+
+        XCTAssertThrowsError(
+            try CopilotBillingFetcher().buildSnapshot(
+                from: .init(usage: rows),
+                now: now,
+                calendar: utcCalendar()
+            )
+        ) {
+            XCTAssertEqual(
+                $0 as? CopilotBillingValidationError,
+                .aggregateOverflow
+            )
+        }
+    }
+
     func testBuildSnapshotRowCapIsInclusive() throws {
         let now = try XCTUnwrap(Self.iso8601.date(from: "2026-07-15T12:00:00Z"))
         let repeatedEntry = entry(
