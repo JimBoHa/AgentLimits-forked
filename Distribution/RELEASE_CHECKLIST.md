@@ -10,6 +10,8 @@
 - [ ] `LICENSE` and complete Sparkle notices are present in source and product.
 - [ ] Privacy policy, privacy manifests, App Store privacy answers, and review
       notes describe the shipping behavior.
+- [ ] A source/API audit confirms every shipping required-reason API category
+      and approved reason is represented accurately in each privacy manifest.
 - [ ] No credentials, profiles, private keys, or local signing config are
       tracked by Git.
 
@@ -21,6 +23,8 @@
 - [ ] Watch simulator unit/UI suite passes with warnings as errors.
 - [ ] Static analysis passes for macOS and iOS/Watch Release graphs.
 - [ ] Secret scan and dependency audit pass.
+- [ ] Xcode product validation and fail-closed App Store product/privacy
+      validation pass for the unsigned archive and final exported IPA.
 
 ## Device and behavior gates
 
@@ -75,6 +79,12 @@
 - [ ] iOS and Watch dSYMs match complete binary UUID-and-architecture inventories.
 - [ ] IPA includes both privacy manifests and the dependent Watch app.
 - [ ] iOS/Watch version and build values match.
+- [ ] Bundle IDs, version/build values, encryption declarations, launch/icon
+      metadata, and Watch companion relationship match the audited contract.
+- [ ] IPA contains only the audited iOS and Watch executable code objects; no
+      unexpected framework, service, extension, bundle, library, or raw Mach-O.
+- [ ] Both privacy manifests declare no tracking, no collected-data types, no
+      tracking domains, and only UserDefaults reason `CA92.1`.
 - [ ] Only the iOS companion scheme is archivable; the standalone Watch scheme
       remains non-archivable.
 - [ ] Xcode/App Store validation passes without warning.
