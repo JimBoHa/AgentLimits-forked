@@ -85,6 +85,244 @@ final class DistributionScriptTests: XCTestCase {
         }
     }
 
+    func testReleaseScriptsRequireExactProductsProfilesAndDSYMs() throws {
+        for name in [
+            "build-unsigned-artifacts.sh",
+            "package-macos.sh",
+            "export-ios.sh"
+        ] {
+            let script = try releaseScript(named: name)
+            XCTAssertTrue(
+                script.contains(
+                    "source \"$script_dir/release-artifact-validation.sh\""
+                ),
+                name
+            )
+            XCTAssertTrue(script.contains("validate_only_named_directory_entry"), name)
+            XCTAssertTrue(script.contains("validate_dsym_matches_binary"), name)
+        }
+
+        for name in ["package-macos.sh", "export-ios.sh"] {
+            let script = try releaseScript(named: name)
+            XCTAssertTrue(
+                script.contains("validate_provisioning_profile_validity_window"),
+                name
+            )
+        }
+        XCTAssertTrue(
+            try releaseScript(named: "package-macos.sh")
+                .contains("resolve_exactly_one_directory_with_suffix")
+        )
+        XCTAssertTrue(
+            try releaseScript(named: "export-ios.sh")
+                .contains("resolve_exactly_one_regular_file_with_suffix")
+        )
+    }
+
+    func testArtifactCardinalityRejectsMissingDuplicateAndUnsafeProducts() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let products = directory.appendingPathComponent("Products")
+        try FileManager.default.createDirectory(
+            at: products,
+            withIntermediateDirectories: false
+        )
+        let command = #"source "$1"; validate_only_named_directory_entry "$2" AgentLimits.app products"#
+
+        var result = try runArtifactValidationHelper(
+            command: command,
+            arguments: [products.path]
+        )
+        XCTAssertNotEqual(result.status, 0, result.output)
+
+        let expected = products.appendingPathComponent("AgentLimits.app")
+        try FileManager.default.createDirectory(
+            at: expected,
+            withIntermediateDirectories: false
+        )
+        result = try runArtifactValidationHelper(
+            command: command,
+            arguments: [products.path]
+        )
+        XCTAssertEqual(result.status, 0, result.output)
+
+        try FileManager.default.createDirectory(
+            at: products.appendingPathComponent("Injected.app"),
+            withIntermediateDirectories: false
+        )
+        result = try runArtifactValidationHelper(
+            command: command,
+            arguments: [products.path]
+        )
+        XCTAssertNotEqual(result.status, 0, result.output)
+
+        try FileManager.default.removeItem(at: products)
+        try FileManager.default.createDirectory(
+            at: products,
+            withIntermediateDirectories: false
+        )
+        try FileManager.default.createSymbolicLink(
+            at: expected,
+            withDestinationURL: directory
+        )
+        result = try runArtifactValidationHelper(
+            command: command,
+            arguments: [products.path]
+        )
+        XCTAssertNotEqual(result.status, 0, result.output)
+    }
+
+    func testExportCardinalityRejectsMultipleAndSymlinkArtifacts() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let command = #"source "$1"; resolve_exactly_one_regular_file_with_suffix "$2" .ipa "" export"#
+        let first = directory.appendingPathComponent("AgentLimits.ipa")
+        try Data("one".utf8).write(to: first)
+
+        var result = try runArtifactValidationHelper(
+            command: command,
+            arguments: [directory.path]
+        )
+        XCTAssertEqual(result.status, 0, result.output)
+
+        try Data("two".utf8).write(
+            to: directory.appendingPathComponent("Injected.ipa")
+        )
+        result = try runArtifactValidationHelper(
+            command: command,
+            arguments: [directory.path]
+        )
+        XCTAssertNotEqual(result.status, 0, result.output)
+
+        try FileManager.default.removeItem(at: directory)
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: false
+        )
+        try FileManager.default.createSymbolicLink(
+            at: first,
+            withDestinationURL: repositoryRoot.appendingPathComponent("README.md")
+        )
+        result = try runArtifactValidationHelper(
+            command: command,
+            arguments: [directory.path]
+        )
+        XCTAssertNotEqual(result.status, 0, result.output)
+    }
+
+    func testDSYMInventoryRejectsMalformedMissingExtraAndMismatchedSlices() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let binary = directory.appendingPathComponent("binary.txt")
+        let symbols = directory.appendingPathComponent("symbols.txt")
+        let armUUID = "AAAAAAAA-1111-2222-3333-444444444444"
+        let watchUUID = "BBBBBBBB-1111-2222-3333-444444444444"
+        let validBinary = """
+        UUID: \(armUUID) (arm64) /private/tmp/App
+        UUID: \(watchUUID) (arm64_32) /private/tmp/App
+        """
+        let validSymbols = """
+        UUID: \(watchUUID.lowercased()) (arm64_32) /private/tmp/App.dSYM
+        UUID: \(armUUID.lowercased()) (arm64) /private/tmp/App.dSYM
+        """
+        try Data(validBinary.utf8).write(to: binary)
+        let command = #"source "$1"; binary="$(<"$2")"; symbols="$(<"$3")"; validate_matching_dwarfdump_uuid_inventories "$binary" "$symbols" watch arm64 arm64_32"#
+
+        try Data(validSymbols.utf8).write(to: symbols)
+        var result = try runArtifactValidationHelper(
+            command: command,
+            arguments: [binary.path, symbols.path]
+        )
+        XCTAssertEqual(result.status, 0, result.output)
+
+        let invalidInventories = [
+            "UUID: CCCCCCCC-1111-2222-3333-444444444444 (arm64) /tmp/dSYM\n" +
+                "UUID: \(watchUUID) (arm64_32) /tmp/dSYM\n",
+            "UUID: \(armUUID) (arm64) /tmp/dSYM\n",
+            """
+            UUID: \(watchUUID.lowercased()) (arm64_32) /tmp/dSYM
+            UUID: \(armUUID.lowercased()) (arm64) /tmp/dSYM
+            UUID: CCCCCCCC-1111-2222-3333-444444444444 (x86_64) /tmp/dSYM
+            """,
+            "warning: UUID unavailable\n" + validSymbols,
+            "UUID: \(armUUID) (arm64) /tmp/one\n" +
+                "UUID: \(watchUUID) (arm64) /tmp/two\n"
+        ]
+        for (index, inventory) in invalidInventories.enumerated() {
+            try Data(inventory.utf8).write(to: symbols)
+            result = try runArtifactValidationHelper(
+                command: command,
+                arguments: [binary.path, symbols.path]
+            )
+            XCTAssertNotEqual(result.status, 0, "case \(index): \(result.output)")
+        }
+    }
+
+    func testProvisioningProfileValidityRejectsFutureExpiredAndMalformedWindows() throws {
+        let command = #"source "$1"; validate_profile_validity_values "$2" "$3" "$4" profile"#
+        let creation = "2026-01-01T00:00:00Z"
+        let expiration = "2026-01-03T00:00:00Z"
+
+        var result = try runArtifactValidationHelper(
+            command: command,
+            arguments: [creation, expiration, "1767312000"]
+        )
+        XCTAssertEqual(result.status, 0, result.output)
+
+        let invalidWindows = [
+            (creation, expiration, "1767139200"),
+            (creation, expiration, "1767398400"),
+            (expiration, creation, "1767312000"),
+            ("2026-01-01T00:00:00+00:00", expiration, "1767312000"),
+            ("2026-02-31T00:00:00Z", expiration, "1767312000"),
+            (creation, "not-a-date", "1767312000")
+        ]
+        for (start, end, now) in invalidWindows {
+            result = try runArtifactValidationHelper(
+                command: command,
+                arguments: [start, end, now]
+            )
+            XCTAssertNotEqual(result.status, 0, result.output)
+        }
+    }
+
+    func testProvisioningProfileValidityRequiresTypedDates() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let profile = directory.appendingPathComponent("profile.plist")
+        let command = #"source "$1"; validate_provisioning_profile_validity_window "$2" profile 1767312000"#
+        let valid = try PropertyListSerialization.data(
+            fromPropertyList: [
+                "CreationDate": Date(timeIntervalSince1970: 1_767_225_600),
+                "ExpirationDate": Date(timeIntervalSince1970: 1_767_398_400)
+            ],
+            format: .xml,
+            options: 0
+        )
+        try valid.write(to: profile)
+
+        var result = try runArtifactValidationHelper(
+            command: command,
+            arguments: [profile.path]
+        )
+        XCTAssertEqual(result.status, 0, result.output)
+
+        let invalid = try PropertyListSerialization.data(
+            fromPropertyList: [
+                "CreationDate": "2026-01-01T00:00:00Z",
+                "ExpirationDate": Date(timeIntervalSince1970: 1_767_398_400)
+            ],
+            format: .xml,
+            options: 0
+        )
+        try invalid.write(to: profile)
+        result = try runArtifactValidationHelper(
+            command: command,
+            arguments: [profile.path]
+        )
+        XCTAssertNotEqual(result.status, 0, result.output)
+    }
+
     func testSignedReleaseScriptsPublishOnlyAfterFinalSourceFence() throws {
         for name in ["package-macos.sh", "export-ios.sh"] {
             let script = try releaseScript(named: name)
@@ -1564,6 +1802,32 @@ final class DistributionScriptTests: XCTestCase {
             command,
             "mac-code-signing-test",
             repositoryRoot.appendingPathComponent("Scripts/macos-code-signing.sh").path
+        ] + arguments
+        let output = Pipe()
+        process.standardOutput = output
+        process.standardError = output
+        try process.run()
+        process.waitUntilExit()
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        return (
+            process.terminationStatus,
+            String(decoding: data, as: UTF8.self)
+        )
+    }
+
+    private func runArtifactValidationHelper(
+        command: String,
+        arguments: [String]
+    ) throws -> (status: Int32, output: String) {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/bash")
+        process.arguments = [
+            "-c",
+            command,
+            "artifact-validation-test",
+            repositoryRoot.appendingPathComponent(
+                "Scripts/release-artifact-validation.sh"
+            ).path
         ] + arguments
         let output = Pipe()
         process.standardOutput = output

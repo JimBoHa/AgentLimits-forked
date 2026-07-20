@@ -66,6 +66,11 @@ access. A per-destination lock plus no-clobber rename prevents concurrent
 builders from racing publication. The builder reopens every ZIP, DMG, and PKG
 and compares the contained app or archive against a canonical file-tree
 manifest.
+Before packaging, it also requires exactly one expected app at each archive
+product level and proves that the macOS app/widget and iOS/embedded-Watch dSYM
+UUID-and-architecture inventories exactly match their Mach-O binaries. Missing,
+duplicate, extra-architecture, or mismatched first-party debug symbols fail the
+preflight.
 
 `SHA256SUMS` covers every portable container, build log, metadata file, and the
 two files in `ARCHIVE-MANIFESTS`. Those canonical manifests cover every regular
@@ -110,8 +115,16 @@ Scripts/export-ios.sh /absolute/output/directory release-testing
 ```
 
 Both commands archive the `AgentLimitsiOS` scheme. They verify that the signed
-IPA contains `Watch/AgentLimitsWatch.app`, that identifiers and version numbers
-match, and that distribution signatures do not contain `get-task-allow`.
+export produces exactly one IPA whose Payload contains exactly one
+`AgentLimits.app` and one embedded `Watch/AgentLimitsWatch.app`; that identifiers
+and version numbers match; and that distribution signatures do not contain
+`get-task-allow`. The archive and exported binaries must have exact matching
+dSYM UUID/architecture inventories (`arm64` for iOS and `arm64` + `arm64_32`
+for Watch). Both decoded profiles must contain typed `CreationDate` and
+`ExpirationDate` values and be valid at verification time; future, expired, or
+internally inconsistent validity windows fail closed. Both profiles are checked
+again at the final publication fence so a near-expiry profile cannot age out
+during validation and still be published.
 
 After local verification, validate and upload through Xcode Organizer or App
 Store Connect. TestFlight and a physical paired iPhone/Apple Watch smoke test
@@ -150,6 +163,12 @@ also verifies the exact pinned Sparkle code inventory, bundle metadata,
 symlinks, same-Team Developer ID trust, hardened runtime, secure timestamps,
 universal slices, and absence of `get-task-allow` independently in both
 architectures. The workflow never performs an unsafe recursive ad-hoc re-sign.
+It requires exactly one expected macOS archive/export app and exactly one widget
+plug-in. App and widget dSYMs must exactly match both archived and exported
+universal binaries by UUID and architecture. Decoded Developer ID provisioning
+profiles must be currently valid, with typed creation and expiration dates.
+Both profiles are checked again after notarization at the final publication
+fence.
 It then reopens the final ZIP, expanded product PKG, and read-only DMG; rejects
 unexpected layout or installer metadata; and rechecks the contained app's
 per-slice Code Directory hashes, signatures, stapled ticket, and Gatekeeper

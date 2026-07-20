@@ -35,6 +35,8 @@ source "$script_dir/macos-code-signing.sh"
 source "$script_dir/macos-container-validation.sh"
 # shellcheck disable=SC1091
 source "$script_dir/release-output.sh"
+# shellcheck disable=SC1091
+source "$script_dir/release-artifact-validation.sh"
 validated_container_app=""
 validated_dmg_device=""
 
@@ -227,6 +229,25 @@ if [[ "$archive_team" != "$team_id" || -z "$archive_identity" ]]; then
     exit 1
 fi
 
+validate_only_named_directory_entry \
+    "$archive/Products/Applications" \
+    AgentLimitsForked.app \
+    "macOS archive products" || exit $?
+archive_app="$validated_artifact_path"
+validate_only_named_directory_entry \
+    "$archive_app/Contents/PlugIns" \
+    AgentLimitsWidgetExtension.appex \
+    "macOS archive plug-ins" || exit $?
+archive_widget="$validated_artifact_path"
+validate_dsym_matches_binary \
+    "$archive_app/Contents/MacOS/AgentLimitsForked" \
+    "$archive/dSYMs/AgentLimitsForked.app.dSYM" \
+    "macOS archive app" arm64 x86_64 || exit $?
+validate_dsym_matches_binary \
+    "$archive_widget/Contents/MacOS/AgentLimitsWidgetExtension" \
+    "$archive/dSYMs/AgentLimitsWidgetExtension.appex.dSYM" \
+    "macOS archive widget" arm64 x86_64 || exit $?
+
 mkdir -p "$export_dir"
 echo "Exporting with Developer ID..."
 if ! xcodebuild -exportArchive \
@@ -241,15 +262,18 @@ if ! xcodebuild -exportArchive \
 fi
 verify_source_unchanged
 
-exported_app="$(find "$export_dir" -maxdepth 1 -type d -name '*.app' -print -quit)"
-if [[ -z "$exported_app" ]]; then
-    echo "Developer ID export produced no app bundle" >&2
-    exit 1
-fi
+resolve_exactly_one_directory_with_suffix \
+    "$export_dir" .app AgentLimitsForked.app \
+    "Developer ID export" || exit $?
+exported_app="$validated_artifact_path"
 
 app="$output_dir/AgentLimitsForked.app"
 ditto "$exported_app" "$app"
-widget="$app/Contents/PlugIns/AgentLimitsWidgetExtension.appex"
+validate_only_named_directory_entry \
+    "$app/Contents/PlugIns" \
+    AgentLimitsWidgetExtension.appex \
+    "Developer ID app plug-ins" || exit $?
+widget="$validated_artifact_path"
 
 for required_path in \
     "$widget" \
@@ -340,10 +364,8 @@ validate_developer_id_profile() {
         echo "$label profile enables get-task-allow" >&2
         exit 1
     fi
-    if ! plutil -extract ExpirationDate raw "$decoded" >/dev/null; then
-        echo "$label profile has no expiration date" >&2
-        exit 1
-    fi
+    validate_provisioning_profile_validity_window \
+        "$decoded" "$label" || exit $?
 }
 
 application_identity="$(codesign -dvvv "$app" 2>&1 \
@@ -592,6 +614,15 @@ widget_info="$widget/Contents/Info.plist"
 widget_executable="$(plutil -extract CFBundleExecutable raw "$widget_info")"
 widget_architectures="$(lipo -archs \
     "$widget/Contents/MacOS/$widget_executable")"
+
+validate_dsym_matches_binary \
+    "$app/Contents/MacOS/$executable" \
+    "$archive/dSYMs/AgentLimitsForked.app.dSYM" \
+    "Developer ID app" arm64 x86_64 || exit $?
+validate_dsym_matches_binary \
+    "$widget/Contents/MacOS/$widget_executable" \
+    "$archive/dSYMs/AgentLimitsWidgetExtension.appex.dSYM" \
+    "Developer ID widget" arm64 x86_64 || exit $?
 
 if [[ "$(plutil -extract CFBundleIdentifier raw "$app_info")" \
         != "com.jimboha.agentlimits.macos" \
@@ -932,6 +963,13 @@ spctl --assess --type open \
     --context context:primary-signature \
     --verbose=4 "$dmg"
 
+# Notarization can outlast a near-expiry profile. Recheck both decoded profiles
+# at the final publication fence.
+validate_provisioning_profile_validity_window \
+    "$work_dir/macos-profile.plist" macos || exit $?
+validate_provisioning_profile_validity_window \
+    "$work_dir/widget-profile.plist" widget || exit $?
+
 (
     verify_source_unchanged
     cd "$output_dir"
@@ -956,6 +994,9 @@ Developer ID verification: passed
 Nested Sparkle Developer ID verification: passed
 Notarization and stapling: passed for app, PKG, and DMG
 Final ZIP, PKG, and DMG reopen verification: passed
+Archive/product cardinality: passed
+dSYM UUID and architecture identity: passed
+Provisioning profile validity windows: passed
 EOF
 
 verify_source_unchanged

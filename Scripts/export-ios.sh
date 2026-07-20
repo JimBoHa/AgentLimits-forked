@@ -42,6 +42,8 @@ validated_development_team_config_hash=""
 source "$script_dir/signing-config.sh"
 # shellcheck disable=SC1091
 source "$script_dir/release-output.sh"
+# shellcheck disable=SC1091
+source "$script_dir/release-artifact-validation.sh"
 
 if [[ ! -x "$developer_dir/usr/bin/xcodebuild" ]]; then
     echo "Xcode not found at $developer_dir" >&2
@@ -206,6 +208,25 @@ if [[ "$archive_team" != "$team_id" || -z "$archive_identity" ]]; then
     exit 1
 fi
 
+validate_only_named_directory_entry \
+    "$archive/Products/Applications" \
+    AgentLimits.app \
+    "iOS archive products" || exit $?
+archive_ios_app="$validated_artifact_path"
+validate_only_named_directory_entry \
+    "$archive_ios_app/Watch" \
+    AgentLimitsWatch.app \
+    "iOS archive Watch products" || exit $?
+archive_watch_app="$validated_artifact_path"
+validate_dsym_matches_binary \
+    "$archive_ios_app/AgentLimits" \
+    "$archive/dSYMs/AgentLimits.app.dSYM" \
+    "iOS archive app" arm64 || exit $?
+validate_dsym_matches_binary \
+    "$archive_watch_app/AgentLimitsWatch" \
+    "$archive/dSYMs/AgentLimitsWatch.app.dSYM" \
+    "iOS archive Watch app" arm64 arm64_32 || exit $?
+
 mkdir -p "$export_dir"
 echo "Exporting with method $distribution_method..."
 if ! xcodebuild -exportArchive \
@@ -219,22 +240,23 @@ if ! xcodebuild -exportArchive \
 fi
 verify_source_unchanged
 
-ipa="$(find "$export_dir" -maxdepth 1 -type f -name '*.ipa' -print -quit)"
-if [[ -z "$ipa" ]]; then
-    echo "Xcode export produced no IPA" >&2
-    exit 1
-fi
+resolve_exactly_one_regular_file_with_suffix \
+    "$export_dir" .ipa "" "Xcode iOS export" || exit $?
+ipa="$validated_artifact_path"
 
 verification_root="$work_dir/ipa"
 mkdir -p "$verification_root"
 unzip -q "$ipa" -d "$verification_root"
-ios_app="$(find "$verification_root/Payload" -maxdepth 1 -type d -name '*.app' -print -quit)"
-watch_app="$ios_app/Watch/AgentLimitsWatch.app"
-
-if [[ ! -d "$watch_app" ]]; then
-    echo "Exported IPA is missing its embedded Watch app" >&2
-    exit 1
-fi
+validate_only_named_directory_entry \
+    "$verification_root/Payload" \
+    AgentLimits.app \
+    "exported IPA Payload" || exit $?
+ios_app="$validated_artifact_path"
+validate_only_named_directory_entry \
+    "$ios_app/Watch" \
+    AgentLimitsWatch.app \
+    "exported IPA Watch products" || exit $?
+watch_app="$validated_artifact_path"
 
 for required_path in \
     "$ios_app/PrivacyInfo.xcprivacy" \
@@ -302,10 +324,8 @@ validate_profile() {
         echo "$label provisioning profile enables get-task-allow" >&2
         exit 1
     fi
-    if ! plutil -extract ExpirationDate raw "$decoded" >/dev/null; then
-        echo "$label provisioning profile has no expiration date" >&2
-        exit 1
-    fi
+    validate_provisioning_profile_validity_window \
+        "$decoded" "$label" || exit $?
 
     case "$distribution_method" in
         app-store-connect)
@@ -337,6 +357,15 @@ ios_executable="$(plutil -extract CFBundleExecutable raw "$ios_info")"
 watch_executable="$(plutil -extract CFBundleExecutable raw "$watch_info")"
 ios_archs="$(lipo -archs "$ios_app/$ios_executable")"
 watch_archs="$(lipo -archs "$watch_app/$watch_executable")"
+
+validate_dsym_matches_binary \
+    "$ios_app/$ios_executable" \
+    "$archive/dSYMs/AgentLimits.app.dSYM" \
+    "exported iOS app" arm64 || exit $?
+validate_dsym_matches_binary \
+    "$watch_app/$watch_executable" \
+    "$archive/dSYMs/AgentLimitsWatch.app.dSYM" \
+    "exported Watch app" arm64 arm64_32 || exit $?
 
 if [[ "$(plutil -extract CFBundleIdentifier raw "$ios_info")" \
         != "com.jimboha.agentlimits.ios" \
@@ -414,6 +443,13 @@ verify_distribution_entitlements \
     "com.jimboha.agentlimits.ios.watchkitapp" \
     "Watch app"
 
+# Profiles can expire while a long export is being validated. Recheck them at
+# the final publication fence instead of relying only on the first decode.
+validate_provisioning_profile_validity_window \
+    "$work_dir/ios-profile.plist" ios || exit $?
+validate_provisioning_profile_validity_window \
+    "$work_dir/watch-profile.plist" watch || exit $?
+
 ipa_name="AgentLimitsForked-$version-$build-$distribution_method.ipa"
 mv "$ipa" "$output_dir/$ipa_name"
 rm -rf "$export_dir"
@@ -436,6 +472,9 @@ Watch app: embedded in iOS IPA
 iOS architectures: $ios_archs
 watchOS architectures: $watch_archs
 Signing verification: passed
+Archive/product cardinality: passed
+dSYM UUID and architecture identity: passed
+Provisioning profile validity windows: passed
 EOF
 
 verify_source_unchanged

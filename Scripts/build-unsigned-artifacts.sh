@@ -21,12 +21,15 @@ requested_output="$1"
 developer_dir="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}"
 validated_container_app=""
 validated_dmg_device=""
+validated_artifact_path=""
 # shellcheck disable=SC1091
 source "$script_dir/signing-config.sh"
 # shellcheck disable=SC1091
 source "$script_dir/macos-container-validation.sh"
 # shellcheck disable=SC1091
 source "$script_dir/macos-code-signing.sh"
+# shellcheck disable=SC1091
+source "$script_dir/release-artifact-validation.sh"
 
 if [[ ! -x "$developer_dir/usr/bin/xcodebuild" ]]; then
     echo "Xcode not found at $developer_dir" >&2
@@ -321,10 +324,26 @@ if ! xcodebuild archive \
 fi
 verify_source_unchanged
 
-mac_app="$mac_archive/Products/Applications/AgentLimitsForked.app"
-ios_app="$ios_archive/Products/Applications/AgentLimits.app"
-watch_app="$ios_app/Watch/AgentLimitsWatch.app"
-widget="$mac_app/Contents/PlugIns/AgentLimitsWidgetExtension.appex"
+validate_only_named_directory_entry \
+    "$mac_archive/Products/Applications" \
+    AgentLimitsForked.app \
+    "unsigned macOS archive products" || exit $?
+mac_app="$validated_artifact_path"
+validate_only_named_directory_entry \
+    "$mac_app/Contents/PlugIns" \
+    AgentLimitsWidgetExtension.appex \
+    "unsigned macOS archive plug-ins" || exit $?
+widget="$validated_artifact_path"
+validate_only_named_directory_entry \
+    "$ios_archive/Products/Applications" \
+    AgentLimits.app \
+    "unsigned iOS archive products" || exit $?
+ios_app="$validated_artifact_path"
+validate_only_named_directory_entry \
+    "$ios_app/Watch" \
+    AgentLimitsWatch.app \
+    "unsigned iOS archive Watch products" || exit $?
+watch_app="$validated_artifact_path"
 
 for required_path in \
     "$mac_app" \
@@ -397,6 +416,22 @@ validate_exact_binary_architectures \
     "$ios_archs" "iOS app" arm64 || exit $?
 validate_exact_binary_architectures \
     "$watch_archs" "watchOS app" arm64 arm64_32 || exit $?
+validate_dsym_matches_binary \
+    "$mac_app/Contents/MacOS/$mac_executable" \
+    "$mac_archive/dSYMs/AgentLimitsForked.app.dSYM" \
+    "unsigned macOS app" arm64 x86_64 || exit $?
+validate_dsym_matches_binary \
+    "$widget/Contents/MacOS/$widget_executable" \
+    "$mac_archive/dSYMs/AgentLimitsWidgetExtension.appex.dSYM" \
+    "unsigned macOS widget" arm64 x86_64 || exit $?
+validate_dsym_matches_binary \
+    "$ios_app/$ios_executable" \
+    "$ios_archive/dSYMs/AgentLimits.app.dSYM" \
+    "unsigned iOS app" arm64 || exit $?
+validate_dsym_matches_binary \
+    "$watch_app/$watch_executable" \
+    "$ios_archive/dSYMs/AgentLimitsWatch.app.dSYM" \
+    "unsigned Watch app" arm64 arm64_32 || exit $?
 if [[ "$(plutil -extract WKRunsIndependentlyOfCompanionApp raw \
         "$watch_info")" != "false" ]]; then
     echo "Watch app unexpectedly declares independent distribution" >&2
@@ -578,6 +613,8 @@ PKG/DMG: no distribution signature
 Third-party Sparkle code: upstream signatures retained
 Container verification: ZIP, archive ZIPs, PKG, and DMG reopened and matched
 Archive integrity: canonical tree manifests in ARCHIVE-MANIFESTS
+Archive/product cardinality: passed
+dSYM UUID and architecture identity: passed
 
 These files are preflight artifacts only. Do not re-sign, upload, or publicly
 distribute them. Rebuild with signing enabled for release. They will not install
