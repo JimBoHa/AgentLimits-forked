@@ -68,15 +68,27 @@ final class MobileAppModel: ObservableObject {
         )
     }
 
-    func removeAccount(id: UUID) throws {
+    func removeAccount(id: UUID) async throws {
         let plan = try accountStore.prepareRemoval(id: id)
-        activityController.prepareAccountRetirement(plan.target)
-        try accountStore.beginRemoval(plan)
+        try await activityController.prepareAccountRetirement(plan.target)
+        let removedAccount: MobileProviderAccount
+        do {
+            try activityController.validatePreparedAccountRetirement(
+                plan.target
+            )
+            removedAccount = try accountStore.beginRemoval(plan)
+        } catch {
+            activityController.cancelAccountRetirement(plan.target)
+            throw error
+        }
         do {
             try activityController.retireAccount(plan.target)
         } catch {
             do {
-                try accountStore.restoreRemoval(plan)
+                try accountStore.restoreRemoval(
+                    plan,
+                    removedAccount: removedAccount
+                )
             } catch {
                 throw MobileAppModelError.accountRemovalRollbackFailed
             }
@@ -85,8 +97,8 @@ final class MobileAppModel: ObservableObject {
         try accountStore.finishRemoval(plan)
     }
 
-    func clearAllSessionData() throws {
-        try activityController.clearAllSessionData()
+    func clearAllSessionData() async throws {
+        try await activityController.clearAllSessionData()
     }
 
     func refreshEnabledAccounts() async {

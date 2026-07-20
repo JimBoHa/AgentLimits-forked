@@ -327,8 +327,8 @@ final class MobileAccountStoreTests: XCTestCase {
 
     @MainActor
     func testRemovalPersistenceFailureLeavesCredentialAndAccountReachable()
-        throws {
-        try withDefaults { defaults in
+        async throws {
+        try await withDefaults { defaults in
             var failPersistence = false
             let store = MobileAccountStore(
                 defaults: defaults,
@@ -351,9 +351,12 @@ final class MobileAccountStoreTests: XCTestCase {
             )
             failPersistence = true
 
-            XCTAssertThrowsError(try model.removeAccount(id: work.id)) {
+            do {
+                try await model.removeAccount(id: work.id)
+                XCTFail("Expected account removal to fail")
+            } catch {
                 XCTAssertEqual(
-                    $0 as? MobileAccountStoreError,
+                    error as? MobileAccountStoreError,
                     .persistenceFailed
                 )
             }
@@ -364,8 +367,8 @@ final class MobileAccountStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testCredentialDeletionFailureRestoresPersistedAccount() throws {
-        try withDefaults { defaults in
+    func testCredentialDeletionFailureRestoresPersistedAccount() async throws {
+        try await withDefaults { defaults in
             let store = MobileAccountStore(defaults: defaults)
             let work = try store.addAccount(
                 provider: .copilot,
@@ -380,9 +383,12 @@ final class MobileAccountStoreTests: XCTestCase {
                 fetcher: LifecycleNoopFetcher()
             )
 
-            XCTAssertThrowsError(try model.removeAccount(id: work.id)) {
+            do {
+                try await model.removeAccount(id: work.id)
+                XCTFail("Expected credential deletion to fail")
+            } catch {
                 XCTAssertEqual(
-                    $0 as? MobileSessionCredentialStoreError,
+                    error as? MobileSessionCredentialStoreError,
                     .keychain(errSecInteractionNotAllowed)
                 )
             }
@@ -587,6 +593,16 @@ final class MobileAccountStoreTests: XCTestCase {
         let defaults = UserDefaults(suiteName: suiteName)!
         defer { defaults.removePersistentDomain(forName: suiteName) }
         try body(defaults)
+    }
+
+    @MainActor
+    private func withDefaults(
+        _ body: (UserDefaults) async throws -> Void
+    ) async rethrows {
+        let suiteName = "MobileAccountStoreTests-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        try await body(defaults)
     }
 }
 

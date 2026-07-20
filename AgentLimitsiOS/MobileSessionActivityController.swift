@@ -5,6 +5,7 @@ enum MobileSessionActivityError: LocalizedError, Equatable {
     case accountNotFound
     case unsupportedCredentialProvider
     case clearInProgress
+    case accountMutationInProgress
 
     var errorDescription: String? {
         switch self {
@@ -14,6 +15,8 @@ enum MobileSessionActivityError: LocalizedError, Equatable {
             return "Current-session credentials are supported only for GitHub Copilot."
         case .clearInProgress:
             return "Session data is being cleared."
+        case .accountMutationInProgress:
+            return "This account is already being updated."
         }
     }
 }
@@ -54,6 +57,8 @@ final class MobileSessionActivityController: ObservableObject {
     private var freshnessTasksByAccountID: [UUID: Task<Void, Never>] = [:]
     private var rateLimitRetryAtByAccountID: [UUID: Date] = [:]
     private var activeClearToken: MobileSessionDataClearToken?
+    private var clearGeneration: UInt64 = 0
+    private var mutationClearGenerationByAccountID: [UUID: UInt64] = [:]
 
     init(
         accountResolver: any MobileAccountResolving,
@@ -112,29 +117,52 @@ final class MobileSessionActivityController: ObservableObject {
         return try credentialStore.credential(for: account.id) != nil
     }
 
-    func saveCredential(_ credential: String, for accountID: UUID) throws {
+    func saveCredential(
+        _ credential: String,
+        for accountID: UUID
+    ) async throws {
         guard activeClearToken == nil else {
             throw MobileSessionActivityError.clearInProgress
         }
-        let account = try registeredAccount(id: accountID)
+        var account = try registeredAccount(id: accountID)
         guard account.provider == .copilot else {
             throw MobileSessionActivityError.unsupportedCredentialProvider
         }
-        invalidate(accountID: account.id)
+        let mutationGeneration = try beginAccountMutation(accountID: account.id)
+        defer { finishAccountMutation(accountID: account.id) }
+        await cancelRefreshes(for: [account.id])
+        try validateAccountMutation(
+            accountID: account.id,
+            clearGeneration: mutationGeneration
+        )
+        account = try registeredAccount(id: accountID)
+        guard account.provider == .copilot else {
+            throw MobileSessionActivityError.unsupportedCredentialProvider
+        }
         try credentialStore.saveCredential(credential, for: account.id)
         rateLimitRetryAtByAccountID.removeValue(forKey: account.id)
         publish(.notChecked(account: account))
     }
 
-    func deleteCredential(for accountID: UUID) throws {
+    func deleteCredential(for accountID: UUID) async throws {
         guard activeClearToken == nil else {
             throw MobileSessionActivityError.clearInProgress
         }
-        let account = try registeredAccount(id: accountID)
+        var account = try registeredAccount(id: accountID)
         guard account.provider == .copilot else {
             throw MobileSessionActivityError.unsupportedCredentialProvider
         }
-        invalidate(accountID: account.id)
+        let mutationGeneration = try beginAccountMutation(accountID: account.id)
+        defer { finishAccountMutation(accountID: account.id) }
+        await cancelRefreshes(for: [account.id])
+        try validateAccountMutation(
+            accountID: account.id,
+            clearGeneration: mutationGeneration
+        )
+        account = try registeredAccount(id: accountID)
+        guard account.provider == .copilot else {
+            throw MobileSessionActivityError.unsupportedCredentialProvider
+        }
         try credentialStore.deleteCredential(for: account.id)
         rateLimitRetryAtByAccountID.removeValue(forKey: account.id)
         publish(.unavailable(
@@ -145,12 +173,43 @@ final class MobileSessionActivityController: ObservableObject {
 
     /// Call before removing the account registry entry. A Keychain failure
     /// leaves the account reachable so cleanup can be retried.
-    func prepareAccountRetirement(_ account: MobileProviderAccount) {
-        invalidate(accountID: account.id)
+    func prepareAccountRetirement(
+        _ account: MobileProviderAccount
+    ) async throws {
+        let mutationGeneration = try beginAccountMutation(accountID: account.id)
+        do {
+            await cancelRefreshes(for: [account.id])
+            try validateAccountMutation(
+                accountID: account.id,
+                clearGeneration: mutationGeneration
+            )
+            _ = try registeredAccount(id: account.id)
+        } catch {
+            finishAccountMutation(accountID: account.id)
+            throw error
+        }
+    }
+
+    func validatePreparedAccountRetirement(
+        _ account: MobileProviderAccount
+    ) throws {
+        guard let mutationGeneration =
+            mutationClearGenerationByAccountID[account.id] else {
+            throw MobileSessionActivityError.accountMutationInProgress
+        }
+        try validateAccountMutation(
+            accountID: account.id,
+            clearGeneration: mutationGeneration
+        )
+    }
+
+    func cancelAccountRetirement(_ account: MobileProviderAccount) {
+        finishAccountMutation(accountID: account.id)
     }
 
     func retireAccount(_ account: MobileProviderAccount) throws {
-        invalidate(accountID: account.id)
+        defer { finishAccountMutation(accountID: account.id) }
+        try validatePreparedAccountRetirement(account)
         if account.provider == .copilot {
             try credentialStore.deleteCredential(for: account.id)
         }
@@ -163,6 +222,7 @@ final class MobileSessionActivityController: ObservableObject {
         reason: MobileSessionRefreshReason = .manual
     ) async {
         guard activeClearToken == nil,
+              mutationClearGenerationByAccountID[accountID] == nil,
               let account = accountResolver.account(id: accountID) else {
             return
         }
@@ -342,13 +402,26 @@ final class MobileSessionActivityController: ObservableObject {
         guard activeClearToken == nil else { return nil }
         let token = MobileSessionDataClearToken(id: UUID())
         activeClearToken = token
-        for accountID in accountResolver.accounts.map(\.id) {
-            invalidate(accountID: accountID)
+        clearGeneration &+= 1
+        let accountIDs = Set(accountResolver.accounts.map(\.id))
+            .union(runningRefreshesByAccountID.keys)
+        for accountID in accountIDs {
+            generationsByAccountID[accountID, default: 0] &+= 1
+            runningRefreshesByAccountID[accountID]?.task.cancel()
         }
         return token
     }
 
-    func clearSessionData(during token: MobileSessionDataClearToken) throws {
+    func clearSessionData(
+        during token: MobileSessionDataClearToken
+    ) async throws {
+        guard activeClearToken == token else {
+            throw MobileSessionActivityError.clearInProgress
+        }
+        await cancelRefreshes(
+            for: Set(accountResolver.accounts.map(\.id))
+                .union(runningRefreshesByAccountID.keys)
+        )
         guard activeClearToken == token else {
             throw MobileSessionActivityError.clearInProgress
         }
@@ -368,12 +441,12 @@ final class MobileSessionActivityController: ObservableObject {
         return true
     }
 
-    func clearAllSessionData() throws {
+    func clearAllSessionData() async throws {
         guard let token = beginClear() else {
             throw MobileSessionActivityError.clearInProgress
         }
         defer { _ = finishClear(token) }
-        try clearSessionData(during: token)
+        try await clearSessionData(during: token)
     }
 
     private func registeredAccount(id: UUID) throws -> MobileProviderAccount {
@@ -389,6 +462,7 @@ final class MobileSessionActivityController: ObservableObject {
         account: MobileProviderAccount
     ) -> Bool {
         activeClearToken == nil
+            && mutationClearGenerationByAccountID[account.id] == nil
             && runningRefreshesByAccountID[account.id]?.id == refreshID
             && generationsByAccountID[account.id, default: 0] == generation
             && accountResolver.account(id: account.id)?.provider
@@ -426,10 +500,53 @@ final class MobileSessionActivityController: ObservableObject {
         }
     }
 
-    private func invalidate(accountID: UUID) {
-        generationsByAccountID[accountID, default: 0] &+= 1
-        runningRefreshesByAccountID.removeValue(forKey: accountID)?.task.cancel()
-        fetchingAccountIDs.remove(accountID)
+    private func cancelRefreshes(for accountIDs: Set<UUID>) async {
+        let refreshes: [(UUID, RunningRefresh)] = accountIDs.compactMap {
+            accountID in
+            generationsByAccountID[accountID, default: 0] &+= 1
+            guard let running = runningRefreshesByAccountID[accountID] else {
+                fetchingAccountIDs.remove(accountID)
+                return nil
+            }
+            running.task.cancel()
+            return (accountID, running)
+        }
+
+        for (accountID, running) in refreshes {
+            await running.task.value
+            guard runningRefreshesByAccountID[accountID]?.id == running.id else {
+                continue
+            }
+            runningRefreshesByAccountID.removeValue(forKey: accountID)
+            fetchingAccountIDs.remove(accountID)
+        }
+    }
+
+    private func beginAccountMutation(accountID: UUID) throws -> UInt64 {
+        guard activeClearToken == nil else {
+            throw MobileSessionActivityError.clearInProgress
+        }
+        guard mutationClearGenerationByAccountID[accountID] == nil else {
+            throw MobileSessionActivityError.accountMutationInProgress
+        }
+        mutationClearGenerationByAccountID[accountID] = clearGeneration
+        return clearGeneration
+    }
+
+    private func validateAccountMutation(
+        accountID: UUID,
+        clearGeneration mutationGeneration: UInt64
+    ) throws {
+        guard activeClearToken == nil,
+              clearGeneration == mutationGeneration,
+              mutationClearGenerationByAccountID[accountID]
+                == mutationGeneration else {
+            throw MobileSessionActivityError.clearInProgress
+        }
+    }
+
+    private func finishAccountMutation(accountID: UUID) {
+        mutationClearGenerationByAccountID.removeValue(forKey: accountID)
     }
 
     private func publish(_ snapshot: MobileSessionActivitySnapshot) {
