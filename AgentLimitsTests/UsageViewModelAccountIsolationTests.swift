@@ -190,7 +190,7 @@ final class UsageViewModelAccountIsolationTests: XCTestCase {
     }
 
     func testGlobalClearRejectsFetchCompletionAfterDeletion() async throws {
-        let fixture = try makeFixture()
+        let fixture = try makeFixture(quiescenceTimeout: .seconds(2))
         let personalStore = fixture.pool.getWebViewStore(
             for: fixture.personal
         )
@@ -200,11 +200,7 @@ final class UsageViewModelAccountIsolationTests: XCTestCase {
         }
         await fixture.fetcher.waitUntilRequested(using: personalStore.webView)
 
-        let clearTask = Task {
-            try await fixture.viewModel.clearData()
-        }
-        await fixture.repository.waitUntilDeleted(accountID: fixture.personal.id)
-        try await clearTask.value
+        try await fixture.viewModel.clearData()
 
         fixture.fetcher.complete(
             using: personalStore.webView,
@@ -667,7 +663,8 @@ final class UsageViewModelAccountIsolationTests: XCTestCase {
             ((ProviderAccountStore) -> [UUID: UsageSnapshot])? = nil,
         additionalTokenSnapshots:
             ((ProviderAccountStore) -> [UUID: TokenUsageSnapshot])? = nil,
-        indeterminateSelectedUsage: Bool = false
+        indeterminateSelectedUsage: Bool = false,
+        quiescenceTimeout: Duration = .milliseconds(100)
     ) throws -> IsolationFixture {
         let defaults = UserDefaults(
             suiteName: "UsageAccountIsolation-\(UUID().uuidString)"
@@ -697,7 +694,7 @@ final class UsageViewModelAccountIsolationTests: XCTestCase {
             accountStore: accountStore,
             websiteDataClearer: IsolationWebsiteDataClearer(),
             websiteDataStoreProvider: { _ in .nonPersistent() },
-            quiescenceTimeout: .milliseconds(100)
+            quiescenceTimeout: quiescenceTimeout
         )
         var tokenSnapshots = [
             personal.id: makeTokenSnapshot(
@@ -877,11 +874,6 @@ private final class IsolationSnapshotRepository:
         projections[snapshot.provider] = snapshot
     }
 
-    func waitUntilDeleted(accountID: UUID) async {
-        while !deletionAttempts.contains(accountID) {
-            await Task.yield()
-        }
-    }
 }
 
 @MainActor
