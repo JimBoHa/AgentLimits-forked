@@ -23,7 +23,10 @@ struct CLICommandSettingsView: View {
     @State private var resolvedPaths: [CLICommandKind: String] = [:]
     @State private var scriptCopyFeedback: Bool = false
     @State private var widgetTapAction: WidgetTapAction = WidgetTapActionStore.loadAction()
-    @AppStorage(UserDefaultsKeys.menuBarIconHidden) private var menuBarIconHidden = false
+    @AppStorage(
+        UserDefaultsKeys.menuBarIconHidden,
+        store: AppDefaults.shared
+    ) private var menuBarIconHidden = false
 
     private var statusLineScriptPath: String? {
         Bundle.main.path(forResource: "agentlimits_statusline_claude", ofType: "sh")
@@ -56,6 +59,7 @@ struct CLICommandSettingsView: View {
         .onChange(of: codexCommandPathText) { refreshResolvedPath(for: .codex) }
         .onChange(of: claudeCommandPathText) { refreshResolvedPath(for: .claude) }
         .onChange(of: ccusageCommandPathText) { refreshResolvedPath(for: .ccusage) }
+        .accessibilityIdentifier("mac.advanced.root")
     }
 
     private struct CommandPathDescriptor: Identifiable {
@@ -177,6 +181,12 @@ struct CLICommandSettingsView: View {
     }
 
     private func refreshResolvedPath(for kind: CLICommandKind) {
+#if DEBUG
+        guard !AppRuntimeEnvironment.isUITesting else {
+            resolvedPaths.removeValue(forKey: kind)
+            return
+        }
+#endif
         let trimmedOverride = CLICommandPathValidator.normalizeOverridePath(
             loadOverrideText(for: kind)
         )

@@ -40,12 +40,44 @@ chmod -N Configurations/DevelopmentTeam.local.xcconfig
 
 The local file is gitignored and must remain Team-only. Signed release scripts
 reject includes, conditional assignments, compiler flags, symlinks, ACLs, and
-group/other-writable files. They build from a clean `git archive` snapshot with
-a generated Team-only config, then record and recheck the local config hash.
-They also replace inherited Xcode config/toolchain overrides and use the system
-release-tool path before invoking Xcode.
+group/other-writable files. They bind every archived path, mode, and unfiltered
+blob hash to the pinned Git tree before making the source snapshot immutable;
+local or tracked archive attributes cannot silently omit or substitute source.
+The generated Team-only config stays outside that snapshot, and its hash is
+recorded and rechecked. Direct execution uses Bash privileged mode, then
+re-executes under a minimal environment allowlist so inherited startup files and
+exported functions cannot reach build subprocesses. The scripts also replace
+inherited Xcode config/toolchain overrides and use the system release-tool path.
 Never commit certificates, private keys, provisioning profiles, App Store
 Connect keys, passwords, or notarization credentials.
+
+## Apple upload toolchain floor
+
+[Apple requires](https://developer.apple.com/news/upcoming-requirements/?id=02032026a)
+App Store Connect uploads made on or after April 28, 2026 to use Xcode 26 or
+later. iOS and iPadOS uploads must use the iOS 26 SDK or later, and embedded
+watchOS apps must use the watchOS 26 SDK or later.
+
+Every release script fails before building unless the selected Xcode and each
+needed device SDK meet version 26. The selected canonical Xcode app and every
+ancestor directory must be root-owned and non-writable by the release account;
+the bundle must also pass strict Apple-signature verification before
+`xcodebuild` runs. This prevents replacing a validated bundle through a
+writable parent while a release is running. Standard administrator-writable
+`/Applications` installations can be locked for the release window with
+`sudo chmod 0755 /Applications` and restored afterward with
+`sudo chmod 0775 /Applications`. Version components are parsed and
+compared as bounded decimal integers, so values such as `26.10` are handled
+correctly and malformed output is rejected. The project applies the same Xcode
+26 and macOS 26 SDK floor to Developer ID and unsigned macOS preflight builds so
+every release unit uses one current toolchain baseline.
+
+After each archive and export, the scripts require every first-party app and
+extension to record the exact preflight `DTXcode`, `DTXcodeBuild`, `DTSDKName`,
+`DTSDKBuild`, platform name, and platform version. Any change visible in those
+recorded values fails closed instead of producing mixed-version provenance.
+The validated versions and builds are recorded in `BUILD-METADATA.txt` and
+covered by `SHA256SUMS`.
 
 ## Unsigned preflight artifacts
 
@@ -57,16 +89,27 @@ Scripts/build-unsigned-artifacts.sh /absolute/output/directory
 ```
 
 The output includes unsigned macOS ZIP/DMG/PKG files and unsigned macOS and
-iOS/watchOS archives. The builder requires a clean Git tree, builds from a
-snapshot of the recorded commit, ignores inherited Git repository/configuration
-selectors and replacement refs, replaces inherited Xcode configuration and
-toolchain overrides, and publishes through a temporary sibling directory only
-after validation succeeds. Invoke the checked-in script directly, not through a
-symlink. The output parent must already exist, be owned by the current user, and
-have no group/other write mode or ACL that grants mutation access. A
-per-destination lock plus no-clobber rename prevents concurrent builders from
-racing publication. The builder reopens every ZIP, DMG, and PKG and compares the
-contained app or archive against a canonical file-tree manifest.
+iOS/watchOS archives. The builder requires a clean Git tree, rejects hidden
+`assume-unchanged` and `skip-worktree` index flags, independently compares
+tracked contents and modes with the pinned tree, and proves an exact immutable
+snapshot of that tree. Release entrypoints load their initial validation helper
+from the committed Git blob before sourcing any worktree helper. They also
+reject executable local Git status configuration, ignore inherited Git
+selectors and replacement refs, replace inherited Xcode overrides, and publish
+only after validation succeeds. Invoke the checked-in script directly, not
+through Bash or a symlink. The output parent
+must already exist, be owned by
+the current user, and have no group/other write mode or ACL that grants mutation
+access. A per-destination lock plus identity-checked directory descriptors and
+no-clobber `renameatx_np` prevent concurrent builders or replaced parent paths
+from redirecting publication. The builder reopens every ZIP, DMG, and PKG
+and compares the contained app or archive against a canonical file-tree
+manifest.
+Before packaging, it also requires exactly one expected app at each archive
+product level and proves that the macOS app/widget and iOS/embedded-Watch dSYM
+UUID-and-architecture inventories exactly match their Mach-O binaries. Missing,
+duplicate, extra-architecture, or mismatched first-party debug symbols fail the
+preflight.
 
 `SHA256SUMS` covers every portable container, build log, metadata file, and the
 two files in `ARCHIVE-MANIFESTS`. Those canonical manifests cover every regular
@@ -86,6 +129,12 @@ signatures.
 These are non-distributable preflight artifacts. Do not re-sign or upload them.
 A final release must be rebuilt by the signed workflows below so Xcode records
 the Team, signing identity, and provisioning metadata.
+The preflight also runs the same fail-closed product/privacy gate as signed IPA
+export. It rejects changed identifiers, versions, encryption declarations,
+privacy-manifest claims and required-reason declarations, launch/icon metadata,
+invalid compiled icon renditions, or the dependent Watch relationship. Changes
+to API usage still require a source audit because a manifest validator cannot
+prove which required-reason APIs compiled code calls.
 
 ## App Store screenshots
 
@@ -100,6 +149,8 @@ output path whose existing parent is current-user-owned without external write
 access. It ignores inherited Git selectors, build overrides, and temporary
 paths by re-executing under privileged Bash with an exact minimal environment,
 pins the source commit/tree, and captures from a private immutable Git archive.
+The selected Xcode and iOS/watchOS device SDKs must pass the same version-26,
+bundle-trust, and product-metadata preflight used by distribution builds.
 It resolves exactly one named simulator from each latest installed iOS/watchOS
 runtime, acquires identity-checked exclusive locks for all selected simulator
 IDs in deterministic order before snapshotting state, and runs screenshot tests
@@ -136,8 +187,9 @@ exists, is owned by the current user, and grants no group/other or mutating ACL
 write access. They ignore caller temporary-directory overrides and Git
 repository/configuration selectors, disable replacement refs, hold an exclusive
 per-destination lock, and use private temporary and DerivedData directories.
-Invoke the checked-in scripts directly, not through symlinks. The requested
-output appears only through macOS `RENAME_EXCL` no-clobber atomic rename after
+Invoke the checked-in scripts directly, not through Bash or symlinks. The
+requested output appears only through identity-checked parent directory
+descriptors and macOS `RENAME_EXCL` no-clobber atomic rename after
 final source, signing-config, signature, container, and checksum validation
 succeeds. Filesystems without exclusive-rename support fail closed. Existing
 files, directories, and symlinks are never overwritten.
@@ -155,8 +207,36 @@ Scripts/export-ios.sh /absolute/output/directory release-testing
 ```
 
 Both commands archive the `AgentLimitsiOS` scheme. They verify that the signed
-IPA contains `Watch/AgentLimitsWatch.app`, that identifiers and version numbers
-match, and that distribution signatures do not contain `get-task-allow`.
+export produces exactly one IPA whose Payload contains exactly one
+`AgentLimits.app` and one embedded `Watch/AgentLimitsWatch.app`; that identifiers
+and version numbers match; and that distribution signatures do not contain
+`get-task-allow`. The archive and exported binaries must have exact matching
+dSYM UUID/architecture inventories (`arm64` for iOS and `arm64` + `arm64_32`
+for Watch). Both decoded profiles must contain typed `CreationDate` and
+`ExpirationDate` values and be valid at verification time; future, expired, or
+internally inconsistent validity windows fail closed. An embedded profile must
+also be a single-link regular file that remains unchanged while its signed CMS
+payload is decoded. Both profiles are checked again with one timestamp after
+checksums, metadata, and the final source fence, immediately before atomic
+publication. The earliest bound expiration must still have at least five minutes
+of validity at the atomic rename, so a near-expiry profile cannot age out during
+validation and still be published.
+Release builds also enable Xcode product validation. A separate semantic validator
+then compares the exported products with the audited App Store contract:
+
+- exact iOS and Watch bundle IDs, marketing version, and build number;
+- non-exempt encryption declarations set to `false` in both products;
+- no tracking or maintainer-collected data, no tracking domains, and only the
+  audited UserDefaults required-reason declaration (`CA92.1`);
+- generated iPhone/iPad launch and icon metadata, correctly sized PNGs, and
+  opaque named icon renditions in the compiled asset catalogs; and
+- one dependent Watch product bound to the iOS companion identifier and not
+  declared independently distributable; and
+- exactly the audited iOS and Watch Mach-O executables, with no additional
+  executable files, frameworks, services, bundles, libraries, or extensions.
+
+Any deliberate product or privacy change requires updating the implementation,
+App Store Connect answers, metadata documentation, and validator in one review.
 The standalone `AgentLimitsWatch` scheme intentionally has no Archive action;
 it remains available for Watch build, test, run, profile, and analyze workflows.
 
@@ -197,6 +277,15 @@ also verifies the exact pinned Sparkle code inventory, bundle metadata,
 symlinks, same-Team Developer ID trust, hardened runtime, secure timestamps,
 universal slices, and absence of `get-task-allow` independently in both
 architectures. The workflow never performs an unsafe recursive ad-hoc re-sign.
+It requires exactly one expected macOS archive/export app and exactly one widget
+plug-in. App and widget dSYMs must exactly match both archived and exported
+universal binaries by UUID and architecture. Decoded Developer ID provisioning
+profiles must come from unchanged, single-link regular files and be currently
+valid, with typed creation and expiration dates. Both profiles are checked again
+with one timestamp after notarization, checksums, metadata, and the final source
+fence, immediately before atomic publication.
+The earliest bound expiration must still have at least five minutes of validity
+at the atomic rename.
 It then reopens the final ZIP, expanded product PKG, and read-only DMG; rejects
 unexpected layout or installer metadata; and rechecks the contained app's
 per-slice Code Directory hashes, signatures, stapled ticket, and Gatekeeper

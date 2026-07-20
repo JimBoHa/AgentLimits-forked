@@ -127,32 +127,6 @@ validate_tree_matches_manifest() {
     fi
 }
 
-publish_staged_directory() {
-    local staged_directory="$1"
-    local output_parent="$2"
-    local expected_name="$3"
-    local output_directory="$output_parent/$expected_name"
-
-    if [[ -L "$staged_directory" || ! -d "$staged_directory" \
-        || -L "$output_parent" || ! -d "$output_parent" \
-        || -z "$expected_name" || "$expected_name" == "." \
-        || "$expected_name" == ".." || "$expected_name" == */* \
-        || "$(/usr/bin/basename "$staged_directory")" != "$expected_name" ]]; then
-        echo "Staged publication paths are unsafe" >&2
-        return 73
-    fi
-
-    if ! /bin/mv -n "$staged_directory" "$output_parent/"; then
-        echo "Could not publish the staged output directory" >&2
-        return 73
-    fi
-    if [[ -e "$staged_directory" || -L "$staged_directory" \
-        || -L "$output_directory" || ! -d "$output_directory" ]]; then
-        echo "Output path appeared while building: $output_directory" >&2
-        return 73
-    fi
-}
-
 validate_single_directory_container_root() {
     local root="$1"
     local expected_name="$2"

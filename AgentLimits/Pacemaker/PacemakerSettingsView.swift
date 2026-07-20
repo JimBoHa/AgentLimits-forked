@@ -30,6 +30,7 @@ struct PacemakerSettingsView: View {
             }
         }
         .formStyle(.grouped)
+        .accessibilityIdentifier("mac.pacemaker.root")
         .onChange(of: showPacemakerValue) { _, _ in
             reloadUsageTimelines()
         }

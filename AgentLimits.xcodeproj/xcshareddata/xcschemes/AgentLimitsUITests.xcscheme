@@ -1,0 +1,111 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Scheme
+   LastUpgradeVersion = "2660"
+   version = "1.7">
+   <BuildAction
+      parallelizeBuildables = "YES"
+      buildImplicitDependencies = "YES"
+      buildArchitectures = "Automatic">
+      <BuildActionEntries>
+         <BuildActionEntry
+            buildForTesting = "YES"
+            buildForRunning = "YES"
+            buildForProfiling = "YES"
+            buildForArchiving = "NO"
+            buildForAnalyzing = "YES">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "42D45B892EF649FE00A51EA8"
+               BuildableName = "AgentLimitsForked.app"
+               BlueprintName = "AgentLimits"
+               ReferencedContainer = "container:AgentLimits.xcodeproj">
+            </BuildableReference>
+         </BuildActionEntry>
+         <BuildActionEntry
+            buildForTesting = "YES"
+            buildForRunning = "NO"
+            buildForProfiling = "NO"
+            buildForArchiving = "NO"
+            buildForAnalyzing = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "C50000000000000000000003"
+               BuildableName = "AgentLimitsUITests.xctest"
+               BlueprintName = "AgentLimitsUITests"
+               ReferencedContainer = "container:AgentLimits.xcodeproj">
+            </BuildableReference>
+         </BuildActionEntry>
+      </BuildActionEntries>
+   </BuildAction>
+   <TestAction
+      buildConfiguration = "UI Testing"
+      selectedDebuggerIdentifier = "Xcode.DebuggerFoundation.Debugger.LLDB"
+      selectedLauncherIdentifier = "Xcode.DebuggerFoundation.Launcher.LLDB"
+      shouldUseLaunchSchemeArgsEnv = "NO"
+      shouldAutocreateTestPlan = "YES">
+      <Testables>
+         <TestableReference
+            skipped = "NO"
+            parallelizable = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "C50000000000000000000003"
+               BuildableName = "AgentLimitsUITests.xctest"
+               BlueprintName = "AgentLimitsUITests"
+               ReferencedContainer = "container:AgentLimits.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
+      </Testables>
+   </TestAction>
+   <LaunchAction
+      buildConfiguration = "UI Testing"
+      selectedDebuggerIdentifier = "Xcode.DebuggerFoundation.Debugger.LLDB"
+      selectedLauncherIdentifier = "Xcode.DebuggerFoundation.Launcher.LLDB"
+      launchStyle = "0"
+      useCustomWorkingDirectory = "NO"
+      ignoresPersistentStateOnLaunch = "YES"
+      debugDocumentVersioning = "YES"
+      allowLocationSimulation = "YES">
+      <CommandLineArguments>
+         <CommandLineArgument
+            argument = "-ui-testing"
+            isEnabled = "YES">
+         </CommandLineArgument>
+         <CommandLineArgument
+            argument = "-ui-testing-open-settings"
+            isEnabled = "YES">
+         </CommandLineArgument>
+      </CommandLineArguments>
+      <BuildableProductRunnable runnableDebuggingMode = "0">
+         <BuildableReference
+            BuildableIdentifier = "primary"
+            BlueprintIdentifier = "42D45B892EF649FE00A51EA8"
+            BuildableName = "AgentLimitsForked.app"
+            BlueprintName = "AgentLimits"
+            ReferencedContainer = "container:AgentLimits.xcodeproj">
+         </BuildableReference>
+      </BuildableProductRunnable>
+   </LaunchAction>
+   <ProfileAction
+      buildConfiguration = "UI Testing"
+      shouldUseLaunchSchemeArgsEnv = "YES"
+      savedToolIdentifier = ""
+      useCustomWorkingDirectory = "NO"
+      debugDocumentVersioning = "YES">
+      <BuildableProductRunnable runnableDebuggingMode = "0">
+         <BuildableReference
+            BuildableIdentifier = "primary"
+            BlueprintIdentifier = "42D45B892EF649FE00A51EA8"
+            BuildableName = "AgentLimitsForked.app"
+            BlueprintName = "AgentLimits"
+            ReferencedContainer = "container:AgentLimits.xcodeproj">
+         </BuildableReference>
+      </BuildableProductRunnable>
+   </ProfileAction>
+   <AnalyzeAction buildConfiguration = "UI Testing">
+   </AnalyzeAction>
+   <ArchiveAction
+      buildConfiguration = "UI Testing"
+      revealArchiveInOrganizer = "NO">
+   </ArchiveAction>
+</Scheme>

@@ -1,8 +1,8 @@
 #!/bin/bash
 # shellcheck disable=SC2034
 
-# Safe source-snapshot, temporary-work, and output-directory handling for
-# release scripts.
+# Safe output-directory handling for signed release scripts.
+# This file is sourced by export-ios.sh, package-macos.sh, and their tests.
 
 validated_release_output_parent=""
 validated_release_output_parent_identity=""
@@ -17,11 +17,11 @@ validated_release_staging_directory_identity=""
 validated_release_work_directory=""
 validated_release_work_directory_identity=""
 validated_release_temporary_directory=""
-validated_release_source_snapshot=""
-validated_release_source_snapshot_identity=""
 validated_release_atomic_publisher=""
 validated_release_atomic_publisher_identity=""
 validated_release_atomic_publisher_hash=""
+validated_release_source_snapshot=""
+validated_release_source_snapshot_identity=""
 
 release_path_identity() {
     local path="$1"
@@ -350,13 +350,133 @@ configure_private_release_temporary_directory() {
     validated_release_temporary_directory="$temporary_directory"
 }
 
+validate_release_source_snapshot_matches_tree() {
+    local project_root="$1"
+    local expected_tree="$2"
+    local source_snapshot="$3"
+    local expect_read_only="${4:-false}"
+    local validation_directory="${source_snapshot%/*}/.AgentLimits-source-validation"
+    local tree_records="$validation_directory/tree-records"
+    local expected_paths_raw="$validation_directory/expected-paths.raw"
+    local expected_paths="$validation_directory/expected-paths"
+    local actual_paths="$validation_directory/actual-paths"
+    local unsupported_paths="$validation_directory/unsupported-paths"
+    local entry
+    local metadata
+    local mode
+    local type
+    local object_id
+    local path
+    local snapshot_path
+    local actual_mode
+    local expected_mode
+    local actual_object_id
+    local validation_failed=0
+
+    if [[ -e "$validation_directory" || -L "$validation_directory" ]] \
+        || ! mkdir -m 700 "$validation_directory"; then
+        echo "Could not create release source validation state" >&2
+        return 73
+    fi
+    if ! /usr/bin/git -C "$project_root" ls-tree -r -z --full-tree \
+            "$expected_tree" >"$tree_records"; then
+        echo "Could not enumerate the pinned release source tree" >&2
+        rm -rf "$validation_directory"
+        return 65
+    fi
+    : >"$expected_paths_raw"
+    while IFS= read -r -d '' entry; do
+        if [[ "$entry" != *$'\t'* ]]; then
+            validation_failed=1
+            break
+        fi
+        metadata="${entry%%$'\t'*}"
+        path="${entry#*$'\t'}"
+        read -r mode type object_id extra <<<"$metadata"
+        if [[ -n "${extra:-}" || "$type" != "blob" \
+            || ( "$mode" != "100644" && "$mode" != "100755" ) \
+            || ! "$object_id" =~ ^[0-9a-f]{40}([0-9a-f]{24})?$ \
+            || -z "$path" || "$path" == /* \
+            || "$path" == "." || "$path" == ".." \
+            || "$path" == ../* || "$path" == */../* \
+            || "$path" == */.. || "$path" == ./* \
+            || "$path" == */./* || "$path" == */. ]]; then
+            validation_failed=1
+            break
+        fi
+        snapshot_path="$source_snapshot/$path"
+        if [[ -L "$snapshot_path" || ! -f "$snapshot_path" ]]; then
+            validation_failed=1
+            break
+        fi
+        actual_mode="$(/usr/bin/stat -f '%Lp' "$snapshot_path")" \
+            || validation_failed=1
+        expected_mode="${mode#100}"
+        if [[ "$expect_read_only" == "true" ]]; then
+            if [[ "$mode" == "100644" ]]; then
+                expected_mode="444"
+            else
+                expected_mode="555"
+            fi
+        fi
+        if [[ "$validation_failed" != "0" \
+            || "$actual_mode" != "$expected_mode" \
+            || "$(/usr/bin/stat -f '%u' "$snapshot_path")" != "$(id -u)" \
+            || "$(/usr/bin/stat -f '%l' "$snapshot_path")" != "1" ]]; then
+            validation_failed=1
+            break
+        fi
+        actual_object_id="$(/usr/bin/git -C "$project_root" hash-object \
+            --no-filters "$snapshot_path")" || validation_failed=1
+        if [[ "$validation_failed" != "0" \
+            || "$actual_object_id" != "$object_id" ]]; then
+            validation_failed=1
+            break
+        fi
+        printf './%s\0' "$path" >>"$expected_paths_raw" \
+            || validation_failed=1
+        if [[ "$validation_failed" != "0" ]]; then
+            break
+        fi
+    done <"$tree_records"
+    if [[ "$validation_failed" != "0" ]]; then
+        echo "Release source snapshot differs from the pinned Git tree" >&2
+        rm -rf "$validation_directory"
+        return 73
+    fi
+    if ! LC_ALL=C /usr/bin/sort -z "$expected_paths_raw" \
+            >"$expected_paths" \
+        || ! (
+            cd "$source_snapshot" \
+                && /usr/bin/find . ! -type d ! -type f ! -type l \
+                    -print0 >"$unsupported_paths"
+        ) \
+        || [[ -s "$unsupported_paths" ]] \
+        || ! (
+            set -o pipefail
+            cd "$source_snapshot" \
+                && /usr/bin/find . \( -type f -o -type l \) -print0 \
+                    | LC_ALL=C /usr/bin/sort -z >"$actual_paths"
+        ) \
+        || ! /usr/bin/cmp -s "$expected_paths" "$actual_paths"; then
+        echo "Release source snapshot inventory differs from the pinned Git tree" >&2
+        rm -rf "$validation_directory"
+        return 73
+    fi
+    rm -rf "$validation_directory"
+}
+
 verify_immutable_release_source_snapshot() {
     local source_snapshot="$1"
     local expected_identity="$2"
+    local inventory
     local path
     local owner
     local mode
     local flags
+    local snapshot_device
+    local path_device
+    local verification_failed=0
 
     if [[ -L "$source_snapshot" || ! -d "$source_snapshot" \
         || "$(release_path_identity "$source_snapshot")" \
@@ -364,33 +484,58 @@ verify_immutable_release_source_snapshot() {
         echo "Release source snapshot identity changed" >&2
         return 73
     fi
-    if [[ -n "$(/usr/bin/find "$source_snapshot" \
-            ! -type d ! -type f -print -quit)" ]]; then
-        echo "Release source snapshot contains a non-regular path" >&2
+    snapshot_device="$(/usr/bin/stat -f '%d' "$source_snapshot")" \
+        || return 73
+    inventory="${source_snapshot%/*}/.AgentLimits-source-inventory"
+    if ! /usr/bin/find -x "$source_snapshot" -print0 >"$inventory"; then
+        echo "Could not traverse the release source snapshot" >&2
+        rm -f "$inventory"
         return 73
     fi
     while IFS= read -r -d '' path; do
-        owner="$(/usr/bin/stat -f '%u' "$path")" || return 73
-        mode="$(/usr/bin/stat -f '%Lp' "$path")" || return 73
-        flags="$(/usr/bin/stat -f '%Sf' "$path")" || return 73
+        if [[ -L "$path" || ( ! -d "$path" && ! -f "$path" ) ]]; then
+            echo "Release source snapshot contains a non-regular path" >&2
+            verification_failed=1
+            break
+        fi
+        owner="$(/usr/bin/stat -f '%u' "$path")" \
+            || verification_failed=1
+        mode="$(/usr/bin/stat -f '%Lp' "$path")" \
+            || verification_failed=1
+        flags="$(/usr/bin/stat -f '%Sf' "$path")" \
+            || verification_failed=1
+        path_device="$(/usr/bin/stat -f '%d' "$path")" \
+            || verification_failed=1
+        if [[ "$verification_failed" != "0" ]]; then
+            break
+        fi
         if [[ "$owner" != "$(id -u)" \
+            || "$path_device" != "$snapshot_device" \
             || $((8#$mode & 8#222)) -ne 0 \
             || "$flags" != *uchg* ]]; then
             echo "Release source snapshot is not immutable" >&2
-            return 73
+            verification_failed=1
+            break
         fi
         if [[ -f "$path" \
             && "$(/usr/bin/stat -f '%l' "$path")" != "1" ]]; then
             echo "Release source snapshot contains a linked file" >&2
-            return 73
+            verification_failed=1
+            break
         fi
-    done < <(/usr/bin/find "$source_snapshot" -print0)
+    done <"$inventory"
+    rm -f "$inventory"
+    if [[ "$verification_failed" != "0" ]]; then
+        return 73
+    fi
 }
 
 unlock_immutable_release_source_snapshot_for_cleanup() {
     local source_snapshot="$1"
     local expected_identity="$2"
     local expected_work_directory="$3"
+    local project_root="$4"
+    local expected_tree="$5"
 
     if [[ -z "$source_snapshot" ]]; then
         return 0
@@ -404,6 +549,10 @@ unlock_immutable_release_source_snapshot_for_cleanup() {
         echo "Release source snapshot changed; preserving temporary work" >&2
         return 73
     fi
+    verify_immutable_release_source_snapshot \
+        "$source_snapshot" "$expected_identity" || return $?
+    validate_release_source_snapshot_matches_tree \
+        "$project_root" "$expected_tree" "$source_snapshot" true || return $?
     /usr/bin/chflags -R nouchg "$source_snapshot" || return 73
     /bin/chmod -R u+w "$source_snapshot" || return 73
 }
@@ -411,9 +560,11 @@ unlock_immutable_release_source_snapshot_for_cleanup() {
 create_immutable_release_source_snapshot() {
     local project_root="$1"
     local source_commit="$2"
-    local work_directory="$3"
+    local source_tree="$3"
+    local work_directory="$4"
     local source_snapshot="$work_directory/source"
     local source_snapshot_identity
+    local actual_tree
     local archive_status=0
 
     validated_release_source_snapshot=""
@@ -424,9 +575,10 @@ create_immutable_release_source_snapshot() {
         echo "Release source snapshot path is unsafe" >&2
         return 73
     fi
-    if ! /usr/bin/git -C "$project_root" cat-file -e \
-            "$source_commit^{commit}"; then
-        echo "Pinned release source commit is unavailable" >&2
+    actual_tree="$(/usr/bin/git -C "$project_root" rev-parse \
+        --verify "$source_commit^{tree}")" || return 65
+    if [[ "$actual_tree" != "$source_tree" ]]; then
+        echo "Pinned release source tree changed" >&2
         return 65
     fi
     if ! mkdir -m 700 "$source_snapshot" \
@@ -438,17 +590,15 @@ create_immutable_release_source_snapshot() {
         || return 73
 
     (
+        umask 022
         set -o pipefail
         /usr/bin/git -C "$project_root" archive --format=tar "$source_commit" \
             | /usr/bin/tar -xf - -C "$source_snapshot"
     ) || archive_status=$?
-    if [[ "$archive_status" != "0" \
-        || -n "$(/usr/bin/find "$source_snapshot" \
-            ! -type d ! -type f -print -quit)" ]]; then
-        echo "Could not create a regular-file release source snapshot" >&2
-        unlock_immutable_release_source_snapshot_for_cleanup \
-            "$source_snapshot" "$source_snapshot_identity" "$work_directory" \
-            || true
+    if [[ "$archive_status" != "0" ]] \
+        || ! validate_release_source_snapshot_matches_tree \
+            "$project_root" "$source_tree" "$source_snapshot"; then
+        echo "Could not create an exact release source snapshot" >&2
         rm -rf "$source_snapshot"
         return 73
     fi
@@ -456,16 +606,19 @@ create_immutable_release_source_snapshot() {
         || ! /bin/chmod -R a-w "$source_snapshot" \
         || ! /usr/bin/chflags -R uchg "$source_snapshot"; then
         echo "Could not make the release source snapshot immutable" >&2
-        unlock_immutable_release_source_snapshot_for_cleanup \
-            "$source_snapshot" "$source_snapshot_identity" "$work_directory" \
-            || true
+        /usr/bin/chflags -R nouchg "$source_snapshot" 2>/dev/null || true
+        /bin/chmod -R u+w "$source_snapshot" 2>/dev/null || true
         rm -rf "$source_snapshot"
         return 73
     fi
     if ! verify_immutable_release_source_snapshot \
             "$source_snapshot" "$source_snapshot_identity"; then
         unlock_immutable_release_source_snapshot_for_cleanup \
-            "$source_snapshot" "$source_snapshot_identity" "$work_directory" \
+            "$source_snapshot" \
+            "$source_snapshot_identity" \
+            "$work_directory" \
+            "$project_root" \
+            "$source_tree" \
             || true
         rm -rf "$source_snapshot"
         return 73
@@ -496,7 +649,7 @@ build_atomic_release_publisher() {
         return 73
     fi
     verify_private_release_directory "$output_parent" || return $?
-    if ! /usr/bin/xcrun --sdk macosx clang \
+    if ! /usr/bin/xcrun --no-cache --sdk macosx clang \
         -std=c17 \
         -mmacosx-version-min=14.0 \
         -Os \
@@ -590,6 +743,29 @@ cleanup_private_release_directory() {
     rm -rf "$directory"
 }
 
+validate_release_publication_validity_headroom() {
+    local expiration_epoch="$1"
+    local headroom_seconds="$2"
+    local validation_epoch="${3:-}"
+
+    if [[ ! "$expiration_epoch" =~ ^[1-9][0-9]*$ \
+        || ! "$headroom_seconds" =~ ^[1-9][0-9]*$ ]]; then
+        echo "Release publication profile validity fence is invalid" >&2
+        return 73
+    fi
+    if [[ -z "$validation_epoch" ]]; then
+        validation_epoch="$(/bin/date -u '+%s')" || return 73
+    fi
+    if [[ ! "$validation_epoch" =~ ^[1-9][0-9]*$ ]]; then
+        echo "Release publication time is invalid" >&2
+        return 73
+    fi
+    if (( validation_epoch + headroom_seconds >= expiration_epoch )); then
+        echo "Provisioning profile validity headroom was exhausted before publication" >&2
+        return 73
+    fi
+}
+
 publish_staged_release_directory() {
     local staged_directory="$1"
     local expected_staged_identity="$2"
@@ -599,14 +775,23 @@ publish_staged_release_directory() {
     local atomic_publisher="$6"
     local expected_publisher_identity="$7"
     local expected_publisher_hash="$8"
+    local expected_staging_parent_identity="$9"
+    local profile_expiration_epoch="${10:-}"
+    local profile_validity_headroom_seconds="${11:-}"
     local output_directory="$output_parent/$expected_name"
+    local staging_parent="${staged_directory%/*}"
     local staged_device
     local output_device
     local actual_staged_identity
     local published_identity
+    local publish_status=0
 
     if [[ -z "$expected_name" || "$expected_name" == "." \
         || "$expected_name" == ".." || "$expected_name" == */* \
+        || -z "$expected_staging_parent_identity" \
+        || -L "$staging_parent" || ! -d "$staging_parent" \
+        || "$(release_path_identity "$staging_parent")" \
+            != "$expected_staging_parent_identity" \
         || -L "$staged_directory" || ! -d "$staged_directory" \
         || "${staged_directory##*/}" != "$expected_name" ]]; then
         echo "Staged publication path is unsafe" >&2
@@ -635,9 +820,25 @@ publish_staged_release_directory() {
         "$expected_publisher_identity" \
         "$expected_publisher_hash" \
         || return $?
-    local publish_status=0
-    "$atomic_publisher" "$staged_directory" "$output_directory" \
-        || publish_status=$?
+    if [[ -n "$profile_expiration_epoch" \
+        || -n "$profile_validity_headroom_seconds" ]]; then
+        validate_release_publication_validity_headroom \
+            "$profile_expiration_epoch" \
+            "$profile_validity_headroom_seconds" \
+            || return $?
+    fi
+    (
+        exec 8< "$staging_parent" || exit 73
+        exec 9< "$output_parent" || exit 73
+        "$atomic_publisher" \
+            8 \
+            "$expected_name" \
+            "$expected_staging_parent_identity" \
+            "$expected_staged_identity" \
+            9 \
+            "$expected_name" \
+            "$expected_parent_identity"
+    ) || publish_status=$?
     if [[ "$publish_status" != "0" ]]; then
         echo "Could not atomically publish the staged output directory" >&2
         return 73

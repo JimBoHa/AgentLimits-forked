@@ -1,32 +1,14 @@
 #!/bin/bash -p
 # shellcheck disable=SC2154
 
-agentlimits_capture_entrypoint="${BASH_SOURCE[0]}"
-if [[ "$agentlimits_capture_entrypoint" != /* ]]; then
-    agentlimits_capture_entrypoint="$PWD/$agentlimits_capture_entrypoint"
-fi
-if ! agentlimits_capture_home="$(
-        builtin unset HOME CDPATH
-        builtin cd ~ 2>/dev/null || exit 1
-        builtin pwd -P
-    )" \
-    || [[ "$agentlimits_capture_home" != /* \
-        || "$agentlimits_capture_home" == / \
-        || "$agentlimits_capture_home" == *$'\n'* \
-        || ! -d "$agentlimits_capture_home" ]]; then
-    echo "Could not derive the canonical passwd home directory" >&2
-    exit 70
-fi
-
-agentlimits_capture_environment_reset=false
-if [[ "${AGENTLIMITS_CAPTURE_ENV_PID:-}" != "$$" ]]; then
-    agentlimits_capture_environment_reset=true
+release_environment_needs_reset=false
+if [[ "${AGENTLIMITS_RELEASE_ENV_PID:-}" != "$$" ]]; then
+    release_environment_needs_reset=true
 else
-    while IFS= read -r -d '' agentlimits_capture_environment_entry; do
-        case "$agentlimits_capture_environment_entry" in
-            "AGENTLIMITS_CAPTURE_ENV_PID=$$" \
+    while IFS= read -r -d '' inherited_environment_entry; do
+        case "$inherited_environment_entry" in
+            "AGENTLIMITS_RELEASE_ENV_PID=$$" \
                 | DEVELOPER_DIR=* \
-                | "HOME=$agentlimits_capture_home" \
                 | "LANG=C" \
                 | "LC_ALL=C" \
                 | "PATH=/usr/bin:/bin:/usr/sbin:/sbin" \
@@ -35,37 +17,29 @@ else
                 | _=*)
                 ;;
             *)
-                agentlimits_capture_environment_reset=true
+                release_environment_needs_reset=true
                 break
                 ;;
         esac
     done < <(/usr/bin/env -0)
 fi
-if [[ "$agentlimits_capture_environment_reset" == "false" \
-    && ( "${HOME:-}" != "$agentlimits_capture_home" \
-        || "${LANG:-}" != C \
-        || "${LC_ALL:-}" != C \
-        || "${PATH:-}" != /usr/bin:/bin:/usr/sbin:/sbin ) ]]; then
-    agentlimits_capture_environment_reset=true
-fi
-if [[ "$agentlimits_capture_environment_reset" == "true" ]]; then
+if [[ "$release_environment_needs_reset" == "true" ]]; then
     exec /usr/bin/env -i \
-        AGENTLIMITS_CAPTURE_ENV_PID="$$" \
+        AGENTLIMITS_RELEASE_ENV_PID="$$" \
         DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}" \
-        HOME="$agentlimits_capture_home" \
         LANG=C \
         LC_ALL=C \
         PATH=/usr/bin:/bin:/usr/sbin:/sbin \
-        /bin/bash -p "$agentlimits_capture_entrypoint" "$@"
-    echo "Could not create a sanitized screenshot environment" >&2
+        /bin/bash -p "$0" "$@"
+    echo "Could not create a sanitized release environment" >&2
     exit 70
 fi
 unset \
-    AGENTLIMITS_CAPTURE_ENV_PID \
-    agentlimits_capture_entrypoint \
-    agentlimits_capture_environment_entry \
-    agentlimits_capture_environment_reset \
-    agentlimits_capture_home
+    AGENTLIMITS_RELEASE_ENV_PID \
+    inherited_environment_entry \
+    release_environment_needs_reset
+HOME="$(cd ~ >/dev/null && pwd -P)" || exit 70
+export HOME
 
 set -euo pipefail
 
@@ -91,17 +65,76 @@ fi
 script_dir="$(cd "$(dirname "$invoked_script")" >/dev/null && pwd -P)"
 project_root="$(cd "$script_dir/.." >/dev/null && pwd -P)"
 developer_dir="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}"
-# shellcheck disable=SC1091
-source "$script_dir/signing-config.sh"
+trusted_signing_config_directory="$(
+    /usr/bin/mktemp -d /private/tmp/AgentLimits-signing-bootstrap.XXXXXX
+)" || {
+    echo "Could not create a trusted release bootstrap directory" >&2
+    exit 65
+}
+trusted_signing_config="$trusted_signing_config_directory/signing-config.sh"
+trusted_signing_config_metadata="$(
+    /usr/bin/stat -f '%u %Lp' "$trusted_signing_config_directory" 2>/dev/null
+)" || {
+    /bin/rmdir "$trusted_signing_config_directory" 2>/dev/null || true
+    echo "Could not validate the trusted release bootstrap directory" >&2
+    exit 65
+}
+if [[ ! "$trusted_signing_config_directory" =~ ^/private/tmp/AgentLimits-signing-bootstrap\.[A-Za-z0-9]{6}$ \
+    || -L "$trusted_signing_config_directory" \
+    || ! -d "$trusted_signing_config_directory" \
+    || "$trusted_signing_config_metadata" != "$(/usr/bin/id -u) 700" ]]; then
+    /bin/rmdir "$trusted_signing_config_directory" 2>/dev/null || true
+    echo "Could not secure the trusted release bootstrap directory" >&2
+    exit 65
+fi
+if ! /usr/bin/env -i \
+        GIT_ATTR_NOSYSTEM=1 \
+        GIT_CONFIG_GLOBAL=/dev/null \
+        GIT_CONFIG_NOSYSTEM=1 \
+        GIT_NO_REPLACE_OBJECTS=1 \
+        HOME="$HOME" \
+        LANG=C \
+        LC_ALL=C \
+        PATH=/usr/bin:/bin:/usr/sbin:/sbin \
+        /usr/bin/git -C "$project_root" cat-file blob \
+            HEAD:Scripts/signing-config.sh \
+        >"$trusted_signing_config"; then
+    /bin/rm -f "$trusted_signing_config"
+    /bin/rmdir "$trusted_signing_config_directory" 2>/dev/null || true
+    echo "Could not load the committed release bootstrap" >&2
+    exit 65
+fi
+/bin/chmod 0400 "$trusted_signing_config" || exit 65
+# shellcheck disable=SC1090
+source "$trusted_signing_config"
+/bin/rm -f "$trusted_signing_config" || exit 65
+/bin/rmdir "$trusted_signing_config_directory" || exit 65
+unset \
+    trusted_signing_config \
+    trusted_signing_config_directory \
+    trusted_signing_config_metadata
 sanitize_release_git_environment
-sanitize_release_xcode_environment
+pin_clean_release_source "$project_root" || exit $?
+source_commit="$validated_release_source_commit"
+source_tree="$validated_release_source_tree"
 # shellcheck disable=SC1091
 source "$script_dir/release-output.sh"
+# shellcheck disable=SC1091
+source "$script_dir/apple-toolchain.sh"
 
 if [[ ! -x "$developer_dir/usr/bin/xcodebuild" ]]; then
     echo "Xcode not found at $developer_dir" >&2
     exit 69
 fi
+validate_apple_distribution_toolchain \
+    "$developer_dir" iphoneos watchos || exit $?
+developer_dir="$validated_apple_developer_dir"
+sanitize_release_xcode_environment
+
+selected_xcrun() {
+    /usr/bin/xcrun --no-cache "$@"
+}
+
 if ! command -v jq >/dev/null 2>&1; then
     echo "jq is required to resolve simulators and write metadata." >&2
     exit 69
@@ -111,9 +144,6 @@ output_parent="$validated_release_output_parent"
 output_parent_identity="$validated_release_output_parent_identity"
 output_name="$validated_release_output_name"
 output_dir="$validated_release_output_directory"
-pin_clean_release_source "$project_root" || exit $?
-source_commit="$validated_release_source_commit"
-source_tree="$validated_release_source_tree"
 
 work_dir=""
 work_dir_identity=""
@@ -276,7 +306,7 @@ device_state() {
     local udid="$1"
 
     verify_all_simulator_locks || return $?
-    xcrun simctl list devices --json \
+    selected_xcrun simctl list devices --json \
         | jq -r --arg udid "$udid" '
             [.devices[][] | select(.udid == $udid) | .state]
             | if length == 1 then .[0] else "unknown" end
@@ -394,7 +424,7 @@ restore_status_bar_snapshot() {
     local battery_level
     local args=()
 
-    xcrun simctl status_bar "$udid" clear
+    selected_xcrun simctl status_bar "$udid" clear
 
     if grep -q '^Time:' "$snapshot"; then
         time_value="$(
@@ -459,7 +489,7 @@ restore_status_bar_snapshot() {
         )
     fi
     if [[ "${#args[@]}" -gt 0 ]]; then
-        xcrun simctl status_bar "$udid" override "${args[@]}"
+        selected_xcrun simctl status_bar "$udid" override "${args[@]}"
     fi
 }
 
@@ -480,22 +510,22 @@ restore_simulator_state() {
     if [[ "${simulator_mutated[$index]}" == "true" \
         || "$initial_state" == "Booted" ]]; then
         if [[ "$current_state" != "Booted" ]]; then
-            xcrun simctl boot "$udid" 2>/dev/null || true
-            xcrun simctl bootstatus "$udid" -b >/dev/null
+            selected_xcrun simctl boot "$udid" 2>/dev/null || true
+            selected_xcrun simctl bootstatus "$udid" -b >/dev/null
         fi
     fi
 
     if [[ "${simulator_mutated[$index]}" == "true" ]]; then
         if [[ "${simulator_appearances[$index]}" != "unsupported" ]]; then
-            xcrun simctl ui "$udid" appearance \
+            selected_xcrun simctl ui "$udid" appearance \
                 "${simulator_appearances[$index]}"
         fi
         if [[ "${simulator_content_sizes[$index]}" != "unsupported" ]]; then
-            xcrun simctl ui "$udid" content_size \
+            selected_xcrun simctl ui "$udid" content_size \
                 "${simulator_content_sizes[$index]}"
         fi
         if [[ "${simulator_contrasts[$index]}" != "unsupported" ]]; then
-            xcrun simctl ui "$udid" increase_contrast \
+            selected_xcrun simctl ui "$udid" increase_contrast \
                 "${simulator_contrasts[$index]}"
         fi
         if [[ "${simulator_status_supported[$index]}" == "true" ]]; then
@@ -503,16 +533,16 @@ restore_simulator_state() {
                 "$udid" \
                 "${simulator_status_files[$index]}"
         fi
-        if [[ "$(xcrun simctl ui "$udid" appearance)" \
+        if [[ "$(selected_xcrun simctl ui "$udid" appearance)" \
                 != "${simulator_appearances[$index]}" \
-            || "$(xcrun simctl ui "$udid" content_size)" \
+            || "$(selected_xcrun simctl ui "$udid" content_size)" \
                 != "${simulator_content_sizes[$index]}" \
-            || "$(xcrun simctl ui "$udid" increase_contrast)" \
+            || "$(selected_xcrun simctl ui "$udid" increase_contrast)" \
                 != "${simulator_contrasts[$index]}" ]]; then
             echo "Simulator UI settings did not restore exactly: $udid" >&2
             return 1
         fi
-        xcrun simctl status_bar "$udid" list >"$restored_status_file"
+        selected_xcrun simctl status_bar "$udid" list >"$restored_status_file"
         if ! cmp -s \
             "${simulator_status_files[$index]}" \
             "$restored_status_file"; then
@@ -524,7 +554,7 @@ restore_simulator_state() {
     current_state="$(device_state "$udid")"
     if [[ "$initial_state" == "Shutdown" \
         && "$current_state" != "Shutdown" ]]; then
-        xcrun simctl shutdown "$udid"
+        selected_xcrun simctl shutdown "$udid"
         current_state="$(device_state "$udid")"
     fi
     if [[ "$current_state" != "$initial_state" ]]; then
@@ -570,7 +600,9 @@ cleanup() {
         && ! unlock_immutable_release_source_snapshot_for_cleanup \
             "$source_snapshot" \
             "$source_snapshot_identity" \
-            "$work_dir"; then
+            "$work_dir" \
+            "$project_root" \
+            "$source_tree"; then
         cleanup_status=1
         work_cleanup_allowed=false
     fi
@@ -627,7 +659,11 @@ configure_private_release_temporary_directory "$work_dir" || exit $?
 verify_pinned_release_source_unchanged \
     "$project_root" "$source_commit" "$source_tree" || exit $?
 create_immutable_release_source_snapshot \
-    "$project_root" "$source_commit" "$work_dir" || exit $?
+    "$project_root" \
+    "$source_commit" \
+    "$source_tree" \
+    "$work_dir" \
+    || exit $?
 source_snapshot="$validated_release_source_snapshot"
 source_snapshot_identity="$validated_release_source_snapshot_identity"
 build_root="$source_snapshot"
@@ -648,8 +684,8 @@ verify_capture_provenance() {
 
 verify_capture_provenance || exit $?
 
-runtimes_json="$(xcrun simctl list runtimes available --json)"
-resolution_devices_json="$(xcrun simctl list devices available --json)"
+runtimes_json="$(selected_xcrun simctl list runtimes available --json)"
+resolution_devices_json="$(selected_xcrun simctl list devices available --json)"
 
 resolve_simulator() {
     local platform="$1"
@@ -741,7 +777,7 @@ fi
 acquire_all_simulator_locks \
     "$iphone_udid" "$ipad_udid" "$watch_udid" || exit $?
 verify_all_simulator_locks || exit $?
-devices_json="$(xcrun simctl list devices available --json)"
+devices_json="$(selected_xcrun simctl list devices available --json)"
 
 echo "iPhone 17 Pro Max ($ios_version): $iphone_udid"
 echo "iPad Pro 13-inch (M5) ($ipad_version): $ipad_udid"
@@ -757,21 +793,21 @@ assert_simulator_presentation() {
     verify_all_simulator_locks || return $?
 
     if [[ "$role" == "watch" ]]; then
-        if [[ "$(xcrun simctl ui "$udid" appearance)" != "unsupported" \
-            || "$(xcrun simctl ui "$udid" content_size)" != "unsupported" \
-            || "$(xcrun simctl ui "$udid" increase_contrast)" \
+        if [[ "$(selected_xcrun simctl ui "$udid" appearance)" != "unsupported" \
+            || "$(selected_xcrun simctl ui "$udid" content_size)" != "unsupported" \
+            || "$(selected_xcrun simctl ui "$udid" increase_contrast)" \
                 != "unsupported" ]]; then
             echo "Unexpected Watch simulator presentation support: $udid" >&2
             return 1
         fi
-    elif [[ "$(xcrun simctl ui "$udid" appearance)" != "light" \
-        || "$(xcrun simctl ui "$udid" content_size)" != "large" \
-        || "$(xcrun simctl ui "$udid" increase_contrast)" != "disabled" ]]; then
+    elif [[ "$(selected_xcrun simctl ui "$udid" appearance)" != "light" \
+        || "$(selected_xcrun simctl ui "$udid" content_size)" != "large" \
+        || "$(selected_xcrun simctl ui "$udid" increase_contrast)" != "disabled" ]]; then
         echo "Simulator presentation settings changed before capture: $udid" >&2
         return 1
     fi
 
-    status="$(xcrun simctl status_bar "$udid" list)"
+    status="$(selected_xcrun simctl status_bar "$udid" list)"
     if [[ "$status_supported" == "true" ]]; then
         displayed_time="$(
             LC_ALL=en_US.UTF-8 sed -nE \
@@ -847,13 +883,13 @@ normalize_simulator_presentation() {
     simulator_states_restored=false
 
     if [[ "$initial_state" != "Booted" ]]; then
-        xcrun simctl boot "$udid" 2>/dev/null || true
+        selected_xcrun simctl boot "$udid" 2>/dev/null || true
     fi
-    xcrun simctl bootstatus "$udid" -b >/dev/null
+    selected_xcrun simctl bootstatus "$udid" -b >/dev/null
 
-    appearance="$(xcrun simctl ui "$udid" appearance)"
-    content_size="$(xcrun simctl ui "$udid" content_size)"
-    contrast="$(xcrun simctl ui "$udid" increase_contrast)"
+    appearance="$(selected_xcrun simctl ui "$udid" appearance)"
+    content_size="$(selected_xcrun simctl ui "$udid" content_size)"
+    contrast="$(selected_xcrun simctl ui "$udid" increase_contrast)"
     case "$appearance" in light|dark|unsupported) ;; *)
         echo "Cannot preserve simulator appearance '$appearance': $udid" >&2
         return 1
@@ -869,7 +905,7 @@ normalize_simulator_presentation() {
         echo "Cannot preserve simulator contrast '$contrast': $udid" >&2
         return 1
     esac
-    xcrun simctl status_bar "$udid" list >"$status_file"
+    selected_xcrun simctl status_bar "$udid" list >"$status_file"
     if ! validate_status_bar_snapshot "$status_file"; then
         echo "Cannot preserve existing status-bar overrides: $udid" >&2
         return 1
@@ -881,7 +917,7 @@ normalize_simulator_presentation() {
     simulator_mutated[index]=true
 
     if [[ "$role" == "watch" ]]; then
-        if xcrun simctl status_bar "$udid" override \
+        if selected_xcrun simctl status_bar "$udid" override \
             --time "$fixed_time" >"$status_probe_file" 2>&1; then
             status_supported=true
         elif grep -q 'Status bar overrides not supported on this platform' \
@@ -896,20 +932,20 @@ normalize_simulator_presentation() {
     simulator_status_supported[index]="$status_supported"
 
     if [[ "$appearance" != "unsupported" ]]; then
-        xcrun simctl ui "$udid" appearance light
+        selected_xcrun simctl ui "$udid" appearance light
     fi
     if [[ "$content_size" != "unsupported" ]]; then
-        xcrun simctl ui "$udid" content_size large
+        selected_xcrun simctl ui "$udid" content_size large
     fi
     if [[ "$contrast" != "unsupported" ]]; then
-        xcrun simctl ui "$udid" increase_contrast disabled
+        selected_xcrun simctl ui "$udid" increase_contrast disabled
     fi
     if [[ "$status_supported" == "true" ]]; then
-        xcrun simctl status_bar "$udid" clear
+        selected_xcrun simctl status_bar "$udid" clear
     fi
     case "$role" in
         iphone)
-            xcrun simctl status_bar "$udid" override \
+            selected_xcrun simctl status_bar "$udid" override \
                 --time "$fixed_time" \
                 --dataNetwork wifi \
                 --wifiMode active \
@@ -921,7 +957,7 @@ normalize_simulator_presentation() {
                 --batteryLevel 100
             ;;
         ipad)
-            xcrun simctl status_bar "$udid" override \
+            selected_xcrun simctl status_bar "$udid" override \
                 --time "$fixed_time" \
                 --dataNetwork wifi \
                 --wifiMode active \
@@ -931,7 +967,7 @@ normalize_simulator_presentation() {
             ;;
         watch)
             if [[ "$status_supported" == "true" ]]; then
-                xcrun simctl status_bar "$udid" override \
+                selected_xcrun simctl status_bar "$udid" override \
                     --time "$fixed_time" \
                     --batteryState charged \
                     --batteryLevel 100
@@ -992,7 +1028,7 @@ assert_test_result() {
     local result
 
     summary="$(
-        xcrun xcresulttool get test-results summary \
+        selected_xcrun xcresulttool get test-results summary \
             --path "$result_bundle"
     )"
     total_count="$(jq -r '.totalTestCount' <<<"$summary")"
@@ -1082,7 +1118,7 @@ export_attachment() {
 
     export_dir="$work_dir/export-$(basename "$output_file" .jpg)"
     mkdir -p "$export_dir"
-    xcrun xcresulttool export attachments \
+    selected_xcrun xcresulttool export attachments \
         --path "$result_bundle" \
         --output-path "$export_dir" \
         >/dev/null
@@ -1202,6 +1238,12 @@ verify_capture_provenance || exit $?
 
 release_ios_app="$release_derived_data/Build/Products/Release-iphoneos/AgentLimits.app"
 release_watch_app="$release_ios_app/Watch/AgentLimitsWatch.app"
+verify_apple_product_toolchain_metadata \
+    "$release_ios_app/Info.plist" iphoneos "Screenshot guard iOS app" \
+    || exit $?
+verify_apple_product_toolchain_metadata \
+    "$release_watch_app/Info.plist" watchos "Screenshot guard Watch app" \
+    || exit $?
 for app_path in "$release_ios_app" "$release_watch_app"; do
     if [[ ! -d "$app_path" ]]; then
         echo "Release guard app missing: $app_path" >&2
@@ -1245,6 +1287,15 @@ jq -n \
     --arg gitCommit "$source_commit" \
     --arg gitTree "$source_tree" \
     --arg xcode "$xcode_version" \
+    --arg xcodeVersion "$validated_apple_xcode_version" \
+    --arg xcodeBuild "$validated_apple_xcode_build" \
+    --arg dtxcode "$validated_apple_dtxcode" \
+    --arg iphoneosSDKVersion "$validated_apple_iphoneos_sdk_version" \
+    --arg iphoneosSDKName "$validated_apple_iphoneos_sdk_name" \
+    --arg iphoneosSDKBuild "$validated_apple_iphoneos_sdk_build" \
+    --arg watchosSDKVersion "$validated_apple_watchos_sdk_version" \
+    --arg watchosSDKName "$validated_apple_watchos_sdk_name" \
+    --arg watchosSDKBuild "$validated_apple_watchos_sdk_build" \
     --arg iosRuntime "$ios_runtime" \
     --arg iosVersion "$ios_version" \
     --arg iphoneUDID "$iphone_udid" \
@@ -1264,7 +1315,22 @@ jq -n \
             gitTree: $gitTree,
             gitDirty: false,
             captureSource: "private immutable git archive",
-            xcode: $xcode
+            xcode: $xcode,
+            validatedToolchain: {
+                xcodeVersion: $xcodeVersion,
+                xcodeBuild: $xcodeBuild,
+                dtxcode: $dtxcode,
+                iphoneosSDK: {
+                    version: $iphoneosSDKVersion,
+                    name: $iphoneosSDKName,
+                    build: $iphoneosSDKBuild
+                },
+                watchosSDK: {
+                    version: $watchosSDKVersion,
+                    name: $watchosSDKName,
+                    build: $watchosSDKBuild
+                }
+            }
         },
         fixture: {
             data: "fictional, deterministic, and local-only",
@@ -1450,6 +1516,10 @@ jq -e '
     .schemaVersion == 2
     and .source.gitDirty == false
     and .source.captureSource == "private immutable git archive"
+    and (.source.validatedToolchain.xcodeVersion | length) > 0
+    and (.source.validatedToolchain.xcodeBuild | length) > 0
+    and (.source.validatedToolchain.iphoneosSDK.build | length) > 0
+    and (.source.validatedToolchain.watchosSDK.build | length) > 0
     and .testEvidence.allPassed == true
     and .testEvidence.fixtureIsolation.iOS.credentialStoreImplementation
         == "MobileInMemoryCredentialStore"
@@ -1477,6 +1547,7 @@ publish_staged_release_directory \
     "$atomic_publisher" \
     "$atomic_publisher_identity" \
     "$atomic_publisher_hash" \
+    "$staging_parent_identity" \
     || exit $?
 staging_dir=""
 if ! rmdir "$staging_parent"; then
