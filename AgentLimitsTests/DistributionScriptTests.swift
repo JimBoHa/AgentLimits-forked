@@ -2834,6 +2834,84 @@ final class DistributionScriptTests: XCTestCase {
         )
     }
 
+    func testAppleCIProvisionsDedicatedIOSSimulators() throws {
+        let workflow = try repositoryText(".github/workflows/apple-ci.yml")
+
+        XCTAssertTrue(workflow.contains("device_name: iPhone 17 Pro"))
+        XCTAssertTrue(
+            workflow.contains("device_name: iPad Pro 13-inch (M5)")
+        )
+        XCTAssertTrue(
+            workflow.contains(
+                "Scripts/create-ci-ios-simulator.sh \"$IOS_DEVICE_NAME\""
+            )
+        )
+        XCTAssertTrue(
+            workflow.contains(
+                "RESOLVED_IOS_DESTINATION: ${{ steps.ios-destination.outputs.destination }}"
+            )
+        )
+        XCTAssertTrue(
+            workflow.contains(
+                "xcrun simctl delete \"$IOS_SIMULATOR_UDID\""
+            )
+        )
+        XCTAssertFalse(
+            workflow.contains(
+                "platform=iOS Simulator,name=iPad Pro 13-inch (M5),OS=latest"
+            )
+        )
+    }
+
+    func testCISimulatorProvisionerCreatesLatestRequestedDevice() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let fakeXcrun = directory.appendingPathComponent("xcrun")
+        let log = directory.appendingPathComponent("xcrun.log")
+        let fakeScript = #"""
+        #!/bin/bash
+        set -euo pipefail
+        printf '%s\n' "$*" >> "$AGENTLIMITS_FAKE_XCRUN_LOG"
+        if [[ "$1 $2 $3" == "simctl list runtimes" ]]; then
+          printf '%s\n' '{"runtimes":[{"identifier":"com.apple.CoreSimulator.SimRuntime.iOS-26-4","version":"26.4","name":"iOS 26.4","platform":"iOS","isAvailable":true},{"identifier":"com.apple.CoreSimulator.SimRuntime.iOS-27-0","version":"27.0","name":"iOS 27.0","platform":"iOS","isAvailable":false},{"identifier":"com.apple.CoreSimulator.SimRuntime.iOS-26-5","version":"26.5","name":"iOS 26.5","platform":"iOS","isAvailable":true}]}'
+        elif [[ "$1 $2 $3" == "simctl list devicetypes" ]]; then
+          printf '%s\n' '{"devicetypes":[{"identifier":"com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro","name":"iPhone 17 Pro"},{"identifier":"com.apple.CoreSimulator.SimDeviceType.iPad-Pro-13-inch-M5-12GB","name":"iPad Pro 13-inch (M5)"}]}'
+        elif [[ "$1 $2" == "simctl create" ]]; then
+          printf '%s\n' '01234567-89AB-CDEF-0123-456789ABCDEF'
+        elif [[ "$1 $2" == "simctl delete" ]]; then
+          exit 0
+        else
+          exit 99
+        fi
+        """#
+        try Data(fakeScript.utf8).write(to: fakeXcrun)
+        try setPermissions(0o700, for: fakeXcrun)
+
+        let result = try runReleaseScript(
+            relativePath: "Scripts/create-ci-ios-simulator.sh",
+            arguments: ["iPad Pro 13-inch (M5)"],
+            environment: [
+                "AGENTLIMITS_FAKE_XCRUN_LOG": log.path,
+                "GITHUB_RUN_ATTEMPT": "3",
+                "GITHUB_RUN_ID": "12345",
+                "PATH": "\(directory.path):/usr/bin:/bin"
+            ]
+        )
+
+        XCTAssertEqual(result.status, 0, result.output)
+        XCTAssertEqual(
+            result.output,
+            "platform=iOS Simulator,id=01234567-89AB-CDEF-0123-456789ABCDEF\n"
+        )
+        let calls = try String(contentsOf: log, encoding: .utf8)
+        XCTAssertTrue(
+            calls.contains(
+                "simctl create AgentLimits CI - iPad Pro 13-inch (M5) - 12345-3 com.apple.CoreSimulator.SimDeviceType.iPad-Pro-13-inch-M5-12GB com.apple.CoreSimulator.SimRuntime.iOS-26-5"
+            ),
+            calls
+        )
+    }
+
     func testDependentWatchSchemeCannotArchiveStandaloneInstaller() throws {
         let scheme = try schemeDocument(named: "AgentLimitsWatch")
         let watchEntries = try scheme.nodes(
