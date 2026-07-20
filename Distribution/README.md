@@ -40,10 +40,14 @@ chmod -N Configurations/DevelopmentTeam.local.xcconfig
 
 The local file is gitignored and must remain Team-only. Signed release scripts
 reject includes, conditional assignments, compiler flags, symlinks, ACLs, and
-group/other-writable files. They build from a clean `git archive` snapshot with
-a generated Team-only config, then record and recheck the local config hash.
-They also replace inherited Xcode config/toolchain overrides and use the system
-release-tool path before invoking Xcode.
+group/other-writable files. They bind every archived path, mode, and unfiltered
+blob hash to the pinned Git tree before making the source snapshot immutable;
+local or tracked archive attributes cannot silently omit or substitute source.
+The generated Team-only config stays outside that snapshot, and its hash is
+recorded and rechecked. Direct execution uses Bash privileged mode, then
+re-executes under a minimal environment allowlist so inherited startup files and
+exported functions cannot reach build subprocesses. The scripts also replace
+inherited Xcode config/toolchain overrides and use the system release-tool path.
 Never commit certificates, private keys, provisioning profiles, App Store
 Connect keys, passwords, or notarization credentials.
 
@@ -85,16 +89,23 @@ Scripts/build-unsigned-artifacts.sh /absolute/output/directory
 ```
 
 The output includes unsigned macOS ZIP/DMG/PKG files and unsigned macOS and
-iOS/watchOS archives. The builder requires a clean Git tree, builds from a
-snapshot of the recorded commit, ignores inherited Git repository/configuration
-selectors and replacement refs, replaces inherited Xcode configuration and
-toolchain overrides, and publishes through a temporary sibling directory only
-after validation succeeds. Invoke the checked-in script directly, not through a
-symlink. The output parent must already exist, be owned by the current user, and
-have no group/other write mode or ACL that grants mutation access. A
-per-destination lock plus no-clobber rename prevents concurrent builders from
-racing publication. The builder reopens every ZIP, DMG, and PKG and compares the
-contained app or archive against a canonical file-tree manifest.
+iOS/watchOS archives. The builder requires a clean Git tree, proves an exact
+immutable snapshot of the recorded tree, rejects executable local Git status
+configuration, ignores inherited Git selectors and replacement refs, replaces
+inherited Xcode overrides, and publishes only after validation succeeds. Invoke
+the checked-in script directly, not through Bash or a symlink. The output parent
+must already exist, be owned by
+the current user, and have no group/other write mode or ACL that grants mutation
+access. A per-destination lock plus identity-checked directory descriptors and
+no-clobber `renameatx_np` prevent concurrent builders or replaced parent paths
+from redirecting publication. The builder reopens every ZIP, DMG, and PKG
+and compares the contained app or archive against a canonical file-tree
+manifest.
+Before packaging, it also requires exactly one expected app at each archive
+product level and proves that the macOS app/widget and iOS/embedded-Watch dSYM
+UUID-and-architecture inventories exactly match their Mach-O binaries. Missing,
+duplicate, extra-architecture, or mismatched first-party debug symbols fail the
+preflight.
 
 `SHA256SUMS` covers every portable container, build log, metadata file, and the
 two files in `ARCHIVE-MANIFESTS`. Those canonical manifests cover every regular
@@ -128,8 +139,9 @@ exists, is owned by the current user, and grants no group/other or mutating ACL
 write access. They ignore caller temporary-directory overrides and Git
 repository/configuration selectors, disable replacement refs, hold an exclusive
 per-destination lock, and use private temporary and DerivedData directories.
-Invoke the checked-in scripts directly, not through symlinks. The requested
-output appears only through macOS `RENAME_EXCL` no-clobber atomic rename after
+Invoke the checked-in scripts directly, not through Bash or symlinks. The
+requested output appears only through identity-checked parent directory
+descriptors and macOS `RENAME_EXCL` no-clobber atomic rename after
 final source, signing-config, signature, container, and checksum validation
 succeeds. Filesystems without exclusive-rename support fail closed. Existing
 files, directories, and symlinks are never overwritten.
@@ -147,9 +159,21 @@ Scripts/export-ios.sh /absolute/output/directory release-testing
 ```
 
 Both commands archive the `AgentLimitsiOS` scheme. They verify that the signed
-IPA contains `Watch/AgentLimitsWatch.app`, that identifiers and version numbers
-match, and that distribution signatures do not contain `get-task-allow`.
-Release builds enable Xcode product validation. A separate semantic validator
+export produces exactly one IPA whose Payload contains exactly one
+`AgentLimits.app` and one embedded `Watch/AgentLimitsWatch.app`; that identifiers
+and version numbers match; and that distribution signatures do not contain
+`get-task-allow`. The archive and exported binaries must have exact matching
+dSYM UUID/architecture inventories (`arm64` for iOS and `arm64` + `arm64_32`
+for Watch). Both decoded profiles must contain typed `CreationDate` and
+`ExpirationDate` values and be valid at verification time; future, expired, or
+internally inconsistent validity windows fail closed. An embedded profile must
+also be a single-link regular file that remains unchanged while its signed CMS
+payload is decoded. Both profiles are checked again with one timestamp after
+checksums, metadata, and the final source fence, immediately before atomic
+publication. The earliest bound expiration must still have at least five minutes
+of validity at the atomic rename, so a near-expiry profile cannot age out during
+validation and still be published.
+Release builds also enable Xcode product validation. A separate semantic validator
 then compares the exported products with the audited App Store contract:
 
 - exact iOS and Watch bundle IDs, marketing version, and build number;
@@ -205,6 +229,15 @@ also verifies the exact pinned Sparkle code inventory, bundle metadata,
 symlinks, same-Team Developer ID trust, hardened runtime, secure timestamps,
 universal slices, and absence of `get-task-allow` independently in both
 architectures. The workflow never performs an unsafe recursive ad-hoc re-sign.
+It requires exactly one expected macOS archive/export app and exactly one widget
+plug-in. App and widget dSYMs must exactly match both archived and exported
+universal binaries by UUID and architecture. Decoded Developer ID provisioning
+profiles must come from unchanged, single-link regular files and be currently
+valid, with typed creation and expiration dates. Both profiles are checked again
+with one timestamp after notarization, checksums, metadata, and the final source
+fence, immediately before atomic publication.
+The earliest bound expiration must still have at least five minutes of validity
+at the atomic rename.
 It then reopens the final ZIP, expanded product PKG, and read-only DMG; rejects
 unexpected layout or installer metadata; and rechecks the contained app's
 per-slice Code Directory hashes, signatures, stapled ticket, and Gatekeeper

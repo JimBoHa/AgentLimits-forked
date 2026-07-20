@@ -50,9 +50,14 @@
       Developer ID trust, hardened runtime, secure timestamp, expected
       identifier, and no `get-task-allow`.
 - [ ] Sparkle has exactly the audited nested-code and symlink inventory.
-- [ ] App Group entitlement and provisioning profiles match the fork IDs.
+- [ ] App Group entitlement and provisioning profiles match the fork IDs; each
+      embedded profile is a single-link regular file whose CMS decode is stable,
+      with typed dates valid at the final publication fence and at least five
+      minutes of remaining validity at the atomic rename.
 - [ ] No executable has `get-task-allow`.
-- [ ] App and widget are universal `arm64` + `x86_64`; dSYMs match UUIDs.
+- [ ] Archive/export each contain exactly one expected app and widget product.
+- [ ] App and widget are exactly universal `arm64` + `x86_64`; dSYMs match the
+      complete UUID-and-architecture inventories.
 - [ ] PKG has a valid Developer ID Installer signature.
 - [ ] DMG has a valid Developer ID Application signature from the same Team.
 - [ ] Apple accepts app, PKG, and DMG notarization submissions.
@@ -69,9 +74,15 @@
 - [ ] Archive records the intended Team and distribution profiles.
 - [ ] iOS and Watch `DTXcode`/`DTSDK` metadata exactly matches toolchain
       preflight and the recorded build metadata.
-- [ ] Exported IPA signatures and embedded profiles match all bundle IDs.
+- [ ] Export produces exactly one IPA, one Payload app, and one embedded Watch
+      app; no duplicate product can be selected implicitly.
+- [ ] Exported IPA signatures and embedded profiles match all bundle IDs; each
+      embedded profile is a single-link regular file whose CMS decode is stable,
+      with typed dates valid at the final publication fence and at least five
+      minutes of remaining validity at the atomic rename.
 - [ ] No executable has `get-task-allow`.
 - [ ] iOS app is `arm64`; embedded Watch app is `arm64_32` + `arm64`.
+- [ ] iOS and Watch dSYMs match complete binary UUID-and-architecture inventories.
 - [ ] IPA includes both privacy manifests and the dependent Watch app.
 - [ ] iOS/Watch version and build values match.
 - [ ] Bundle IDs, version/build values, encryption declarations, launch/icon

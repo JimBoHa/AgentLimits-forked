@@ -1,62 +1,45 @@
 #!/bin/bash -p
 # shellcheck disable=SC2154
 
-agentlimits_release_entrypoint="${BASH_SOURCE[0]}"
-if [[ "$agentlimits_release_entrypoint" != /* ]]; then
-    agentlimits_release_entrypoint="$PWD/$agentlimits_release_entrypoint"
-fi
-if ! agentlimits_release_home="$(
-        builtin unset HOME CDPATH
-        builtin cd ~ 2>/dev/null || exit 1
-        builtin pwd -P
-    )" \
-    || [[ "$agentlimits_release_home" != /* \
-        || "$agentlimits_release_home" == / \
-        || "$agentlimits_release_home" == *$'\n'* \
-        || ! -d "$agentlimits_release_home" ]]; then
-    echo "Could not derive the canonical passwd home directory" >&2
-    exit 70
-fi
+release_environment_needs_reset=false
 if [[ "${AGENTLIMITS_RELEASE_ENV_PID:-}" != "$$" ]]; then
+    release_environment_needs_reset=true
+else
+    while IFS= read -r -d '' inherited_environment_entry; do
+        case "$inherited_environment_entry" in
+            "AGENTLIMITS_RELEASE_ENV_PID=$$" \
+                | DEVELOPER_DIR=* \
+                | "LANG=C" \
+                | "LC_ALL=C" \
+                | "PATH=/usr/bin:/bin:/usr/sbin:/sbin" \
+                | PWD=* \
+                | SHLVL=* \
+                | _=*)
+                ;;
+            *)
+                release_environment_needs_reset=true
+                break
+                ;;
+        esac
+    done < <(/usr/bin/env -0)
+fi
+if [[ "$release_environment_needs_reset" == "true" ]]; then
     exec /usr/bin/env -i \
         AGENTLIMITS_RELEASE_ENV_PID="$$" \
-        DEVELOPER_DIR="${DEVELOPER_DIR:-}" \
-        HOME="$agentlimits_release_home" \
+        DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}" \
         LANG=C \
         LC_ALL=C \
         PATH=/usr/bin:/bin:/usr/sbin:/sbin \
-        /bin/bash -p "$agentlimits_release_entrypoint" "$@"
-fi
-
-agentlimits_release_environment_error=""
-while IFS= read -r agentlimits_release_environment_entry; do
-    agentlimits_release_environment_name="${agentlimits_release_environment_entry%%=*}"
-    case "$agentlimits_release_environment_name" in
-        BASH_FUNC_*)
-            agentlimits_release_environment_error="inherited shell function"
-            break
-            ;;
-        AGENTLIMITS_RELEASE_ENV_PID|DEVELOPER_DIR|HOME|LANG|LC_ALL|PATH|PWD|SHLVL|_)
-            ;;
-        *)
-            agentlimits_release_environment_error="unexpected variable: $agentlimits_release_environment_name"
-            break
-            ;;
-    esac
-done < <(/usr/bin/env)
-if [[ -z "$agentlimits_release_environment_error" ]]; then
-    if [[ "${LANG:-}" != C \
-        || "${LC_ALL:-}" != C \
-        || "${HOME:-}" != "$agentlimits_release_home" \
-        || "${PATH:-}" != /usr/bin:/bin:/usr/sbin:/sbin ]]; then
-        agentlimits_release_environment_error="unexpected fixed variable value"
-    fi
-fi
-if [[ -n "$agentlimits_release_environment_error" ]]; then
-    printf 'Release environment was not sanitized (%s)\n' \
-        "$agentlimits_release_environment_error" >&2
+        /bin/bash -p "$0" "$@"
+    echo "Could not create a sanitized release environment" >&2
     exit 70
 fi
+unset \
+    AGENTLIMITS_RELEASE_ENV_PID \
+    inherited_environment_entry \
+    release_environment_needs_reset
+HOME="$(cd ~ >/dev/null && pwd -P)" || exit 70
+export HOME
 
 set -euo pipefail
 
@@ -108,6 +91,8 @@ sanitize_release_git_environment
 source "$script_dir/release-output.sh"
 # shellcheck disable=SC1091
 source "$script_dir/apple-toolchain.sh"
+# shellcheck disable=SC1091
+source "$script_dir/release-artifact-validation.sh"
 source "$script_dir/app-store-product-validation.sh"
 
 if [[ ! -x "$developer_dir/usr/bin/xcodebuild" ]]; then
@@ -130,26 +115,21 @@ output_parent="$validated_release_output_parent"
 output_parent_identity="$validated_release_output_parent_identity"
 output_name="$validated_release_output_name"
 release_output_dir="$validated_release_output_directory"
-source_commit="$(git -C "$project_root" rev-parse HEAD)"
-if [[ -n "$(git -C "$project_root" status --porcelain \
-        --untracked-files=normal)" ]]; then
-    echo "Refusing a signed export from a dirty Git working tree" >&2
-    exit 65
-fi
+pin_clean_release_source "$project_root" || exit $?
+source_commit="$validated_release_source_commit"
+source_tree="$validated_release_source_tree"
 
 verify_source_unchanged() {
     verify_development_team_config_unchanged \
         "$local_config" "$team_id" "$local_config_hash" || exit $?
-    if [[ "$(git -C "$project_root" rev-parse HEAD)" != "$source_commit" \
-        || -n "$(git -C "$project_root" status --porcelain \
-            --untracked-files=normal)" ]]; then
-        echo "Source changed while building; discard this export" >&2
-        exit 65
-    fi
+    verify_pinned_release_source_unchanged \
+        "$project_root" "$source_commit" "$source_tree" || exit $?
 }
 
 work_dir=""
 work_dir_identity=""
+source_snapshot=""
+source_snapshot_identity=""
 staging_parent=""
 staging_parent_identity=""
 staging_dir=""
@@ -163,6 +143,7 @@ derived_data=""
 
 cleanup() {
     local exit_status=$?
+    local work_cleanup_allowed=true
 
     set +e
     cleanup_private_release_directory \
@@ -171,12 +152,23 @@ cleanup() {
         "$output_parent" \
         '^\.AgentLimits-ios-export-stage\.[A-Za-z0-9]{6}$' \
         || true
-    cleanup_private_release_directory \
-        "${work_dir:-}" \
-        "${work_dir_identity:-}" \
-        /private/tmp \
-        '^AgentLimits-ios-export\.[A-Za-z0-9]{6}$' \
-        || true
+    if [[ -n "${source_snapshot:-}" ]] \
+        && ! unlock_immutable_release_source_snapshot_for_cleanup \
+            "$source_snapshot" \
+            "$source_snapshot_identity" \
+            "$work_dir" \
+            "$project_root" \
+            "$source_tree"; then
+        work_cleanup_allowed=false
+    fi
+    if [[ "$work_cleanup_allowed" == "true" ]]; then
+        cleanup_private_release_directory \
+            "${work_dir:-}" \
+            "${work_dir_identity:-}" \
+            /private/tmp \
+            '^AgentLimits-ios-export\.[A-Za-z0-9]{6}$' \
+            || true
+    fi
     if [[ -n "${publication_lock:-}" ]]; then
         release_release_publication_lock \
             "$publication_lock" \
@@ -215,11 +207,12 @@ verify_source_unchanged
 
 export DEVELOPER_DIR="$developer_dir"
 
-build_root="$work_dir/source"
-mkdir -p "$build_root"
-git -C "$project_root" archive --format=tar "$source_commit" \
-    | tar -xf - -C "$build_root"
-snapshot_config="$build_root/Configurations/DevelopmentTeam.local.xcconfig"
+create_immutable_release_source_snapshot \
+    "$project_root" "$source_commit" "$source_tree" "$work_dir" || exit $?
+source_snapshot="$validated_release_source_snapshot"
+source_snapshot_identity="$validated_release_source_snapshot_identity"
+build_root="$source_snapshot"
+snapshot_config="$work_dir/DevelopmentTeam.local.xcconfig"
 printf 'DEVELOPMENT_TEAM = %s\n' "$team_id" >"$snapshot_config"
 chmod 600 "$snapshot_config"
 prepare_xcode_signing_environment "$snapshot_config"
@@ -304,6 +297,25 @@ verify_apple_product_toolchain_metadata \
 verify_apple_product_toolchain_metadata \
     "$archive_watch_info" watchos "Archived Watch app" || exit $?
 
+validate_only_named_directory_entry \
+    "$archive/Products/Applications" \
+    AgentLimits.app \
+    "iOS archive products" || exit $?
+archive_ios_app="$validated_artifact_path"
+validate_only_named_directory_entry \
+    "$archive_ios_app/Watch" \
+    AgentLimitsWatch.app \
+    "iOS archive Watch products" || exit $?
+archive_watch_app="$validated_artifact_path"
+validate_dsym_matches_binary \
+    "$archive_ios_app/AgentLimits" \
+    "$archive/dSYMs/AgentLimits.app.dSYM" \
+    "iOS archive app" arm64 || exit $?
+validate_dsym_matches_binary \
+    "$archive_watch_app/AgentLimitsWatch" \
+    "$archive/dSYMs/AgentLimitsWatch.app.dSYM" \
+    "iOS archive Watch app" arm64 arm64_32 || exit $?
+
 mkdir -p "$export_dir"
 echo "Exporting with method $distribution_method..."
 if ! xcodebuild -exportArchive \
@@ -322,6 +334,12 @@ app_store_select_single_ipa \
 # Assigned by the sourced product-validation helper.
 # shellcheck disable=SC2154
 ipa="$validated_app_store_ipa"
+resolve_exactly_one_regular_file_with_suffix \
+    "$export_dir" .ipa "" "Xcode iOS export" || exit $?
+if [[ "$validated_artifact_path" != "$ipa" ]]; then
+    echo "Artifact and product validators selected different IPA files" >&2
+    exit 1
+fi
 
 verification_root="$work_dir/ipa"
 mkdir -p "$verification_root"
@@ -331,12 +349,19 @@ app_store_select_single_payload_app \
 # Assigned by the sourced product-validation helper.
 # shellcheck disable=SC2154
 ios_app="$validated_app_store_ios_app"
-watch_app="$ios_app/Watch/AgentLimitsWatch.app"
-
-if [[ ! -d "$watch_app" ]]; then
-    echo "Exported IPA is missing its embedded Watch app" >&2
+validate_only_named_directory_entry \
+    "$verification_root/Payload" \
+    AgentLimits.app \
+    "exported IPA Payload" || exit $?
+if [[ "$validated_artifact_path" != "$ios_app" ]]; then
+    echo "Artifact and product validators selected different iOS apps" >&2
     exit 1
 fi
+validate_only_named_directory_entry \
+    "$ios_app/Watch" \
+    AgentLimitsWatch.app \
+    "exported IPA Watch products" || exit $?
+watch_app="$validated_artifact_path"
 
 for required_path in \
     "$ios_app/PrivacyInfo.xcprivacy" \
@@ -382,8 +407,17 @@ validate_profile() {
     local profile_team
     local application_id
     local provisions_all_devices
+    local source_identity
+    local source_hash
 
+    validate_unlinked_regular_file_artifact \
+        "$profile" "$label embedded provisioning profile" || exit $?
+    source_identity="$validated_regular_artifact_identity"
+    source_hash="$validated_regular_artifact_hash"
     security cms -D -i "$profile" >"$decoded"
+    verify_unlinked_regular_file_artifact_unchanged \
+        "$profile" "$source_identity" "$source_hash" \
+        "$label embedded provisioning profile" || exit $?
     plutil -lint "$decoded" >/dev/null
     profile_team="$(plutil -extract TeamIdentifier.0 raw "$decoded")"
     application_id="$(plutil -extract Entitlements.application-identifier \
@@ -401,10 +435,8 @@ validate_profile() {
         echo "$label provisioning profile enables get-task-allow" >&2
         exit 1
     fi
-    if ! plutil -extract ExpirationDate raw "$decoded" >/dev/null; then
-        echo "$label provisioning profile has no expiration date" >&2
-        exit 1
-    fi
+    validate_provisioning_profile_validity_window \
+        "$decoded" "$label" || exit $?
 
     case "$distribution_method" in
         app-store-connect)
@@ -425,6 +457,27 @@ validate_profile() {
     esac
 }
 
+validate_profiles_at_final_publication_fence() {
+    local validation_epoch
+    local ios_expiration_epoch
+    local watch_expiration_epoch
+
+    validated_final_profile_expiration_epoch=""
+
+    validation_epoch="$(/bin/date -u '+%s')" || return $?
+    validate_provisioning_profile_validity_window \
+        "$work_dir/ios-profile.plist" ios "$validation_epoch" || return $?
+    ios_expiration_epoch="$validated_profile_expiration_epoch"
+    validate_provisioning_profile_validity_window \
+        "$work_dir/watch-profile.plist" watch "$validation_epoch" || return $?
+    watch_expiration_epoch="$validated_profile_expiration_epoch"
+    if (( ios_expiration_epoch < watch_expiration_epoch )); then
+        validated_final_profile_expiration_epoch="$ios_expiration_epoch"
+    else
+        validated_final_profile_expiration_epoch="$watch_expiration_epoch"
+    fi
+}
+
 verify_distribution_signature "$ios_app" "iOS app"
 verify_distribution_signature "$watch_app" "Watch app"
 
@@ -440,6 +493,28 @@ ios_executable="$(plutil -extract CFBundleExecutable raw "$ios_info")"
 watch_executable="$(plutil -extract CFBundleExecutable raw "$watch_info")"
 ios_archs="$(lipo -archs "$ios_app/$ios_executable")"
 watch_archs="$(lipo -archs "$watch_app/$watch_executable")"
+
+validate_dsym_matches_binary \
+    "$ios_app/$ios_executable" \
+    "$archive/dSYMs/AgentLimits.app.dSYM" \
+    "exported iOS app" arm64 || exit $?
+validate_dsym_matches_binary \
+    "$watch_app/$watch_executable" \
+    "$archive/dSYMs/AgentLimitsWatch.app.dSYM" \
+    "exported Watch app" arm64 arm64_32 || exit $?
+
+if [[ "$(plutil -extract CFBundleIdentifier raw "$ios_info")" \
+        != "com.jimboha.agentlimits.ios" \
+    || "$(plutil -extract CFBundleIdentifier raw "$watch_info")" \
+        != "com.jimboha.agentlimits.ios.watchkitapp" \
+    || "$(plutil -extract WKCompanionAppBundleIdentifier raw "$watch_info")" \
+        != "com.jimboha.agentlimits.ios" \
+    || "$(plutil -extract CFBundleShortVersionString raw "$watch_info")" \
+        != "$version" \
+    || "$(plutil -extract CFBundleVersion raw "$watch_info")" != "$build" ]]; then
+    echo "Exported iOS/watchOS identifiers or versions are inconsistent" >&2
+    exit 1
+fi
 
 validate_app_store_product \
     "$ios_app" "$expected_version" "$expected_build" \
@@ -526,6 +601,9 @@ Watch app: embedded in iOS IPA
 iOS architectures: $ios_archs
 watchOS architectures: $watch_archs
 Signing verification: passed
+Archive/product cardinality: passed
+dSYM UUID and architecture identity: passed
+Provisioning profile validity windows: passed
 EOF
 
 (
@@ -535,6 +613,9 @@ EOF
 )
 
 verify_source_unchanged
+# Both profiles use one timestamp, after every other fallible release check.
+validate_profiles_at_final_publication_fence || exit $?
+profile_publication_headroom_seconds=300
 publish_staged_release_directory \
     "$staging_dir" \
     "$staging_dir_identity" \
@@ -544,6 +625,9 @@ publish_staged_release_directory \
     "$atomic_publisher" \
     "$atomic_publisher_identity" \
     "$atomic_publisher_hash" \
+    "$staging_parent_identity" \
+    "$validated_final_profile_expiration_epoch" \
+    "$profile_publication_headroom_seconds" \
     || exit $?
 staging_dir=""
 rmdir "$staging_parent"
