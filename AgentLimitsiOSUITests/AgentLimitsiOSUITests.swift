@@ -120,10 +120,19 @@ final class AgentLimitsiOSUITests: XCTestCase {
 
         XCTAssertTrue(workCounts.waitForExistence(timeout: 8))
         XCTAssertTrue(personalCounts.waitForExistence(timeout: 8))
+        XCTAssertTrue(
+            app.progressIndicators["Refreshing Personal Copilot"]
+                .waitForNonExistence(timeout: 8)
+        )
+        XCTAssertTrue(
+            app.progressIndicators["Refreshing Work Copilot"]
+                .waitForNonExistence(timeout: 8)
+        )
         XCTAssertTrue(scrollToElement(workAccount, in: app))
         XCTAssertTrue(personalAccount.exists)
         XCTAssertTrue(workAccount.isHittable)
         XCTAssertTrue(workCounts.isHittable)
+        RunLoop.current.run(until: Date().addingTimeInterval(1))
 
         let attachment = XCTAttachment(
             screenshot: XCUIScreen.main.screenshot()

@@ -59,7 +59,7 @@ final class AgentLimitsWatchUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["6"].exists)
         XCTAssertTrue(app.staticTexts["2"].exists)
 
-        dragContent(in: app, fromY: 0.72, toY: 0.62)
+        dragContent(in: app, fromY: 0.30, toY: 0.70)
         XCTAssertTrue(waitForVisualStability())
         addScreenshot(named: "app-store-watch-session-detail")
     }
