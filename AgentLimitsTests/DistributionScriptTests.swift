@@ -1321,6 +1321,36 @@ final class DistributionScriptTests: XCTestCase {
         XCTAssertTrue(result.output.contains("release source"), result.output)
     }
 
+    func testReleaseSourcePinRejectsHiddenIndexFlagsAndContent() throws {
+        for flag in ["--assume-unchanged", "--skip-worktree"] {
+            let repository = try temporaryDirectory()
+            defer { try? FileManager.default.removeItem(at: repository) }
+            _ = try initializeGitRepository(
+                at: repository,
+                fileName: "trusted.txt"
+            )
+            _ = try git(
+                ["update-index", flag, "trusted.txt"],
+                at: repository
+            )
+            try Data("hidden mutation".utf8).write(
+                to: repository.appendingPathComponent("trusted.txt")
+            )
+            let command = #"source "$1"; sanitize_release_git_environment; pin_clean_release_source "$2""#
+
+            let result = try runSigningConfigHelper(
+                command: command,
+                arguments: [repository.path]
+            )
+
+            XCTAssertEqual(result.status, 65, "\(flag): \(result.output)")
+            XCTAssertTrue(
+                result.output.contains("hidden worktree flags"),
+                "\(flag): \(result.output)"
+            )
+        }
+    }
+
     func testReleaseSourceRecheckPropagatesGitStatusFailure() throws {
         let repository = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: repository) }
@@ -1683,7 +1713,12 @@ final class DistributionScriptTests: XCTestCase {
     func testSignedReleaseScriptsUseCleanSnapshotAndRecheckConfig() throws {
         for name in ["package-macos.sh", "export-ios.sh"] {
             let script = try releaseScript(named: name)
-            XCTAssertTrue(script.contains("source \"$script_dir/signing-config.sh\""), name)
+            XCTAssertTrue(script.contains("HEAD:Scripts/signing-config.sh"), name)
+            XCTAssertTrue(script.contains("source \"$trusted_signing_config\""), name)
+            XCTAssertFalse(
+                script.contains("source \"$script_dir/signing-config.sh\""),
+                name
+            )
             XCTAssertTrue(script.contains("sanitize_release_git_environment"), name)
             XCTAssertTrue(script.contains("unset CDPATH"), name)
             XCTAssertTrue(
@@ -1692,6 +1727,14 @@ final class DistributionScriptTests: XCTestCase {
             )
             XCTAssertTrue(script.contains("source \"$script_dir/release-output.sh\""), name)
             XCTAssertTrue(script.contains("pin_clean_release_source"), name)
+            XCTAssertLessThan(
+                try offset(of: "pin_clean_release_source", in: script),
+                try offset(
+                    of: "source \"$script_dir/release-output.sh\"",
+                    in: script
+                ),
+                name
+            )
             XCTAssertTrue(
                 script.contains("create_immutable_release_source_snapshot"),
                 name
@@ -2443,8 +2486,17 @@ final class DistributionScriptTests: XCTestCase {
         let script = try releaseScript(named: "build-unsigned-artifacts.sh")
 
         XCTAssertTrue(script.contains("PATH=\"/usr/bin:/bin:/usr/sbin:/sbin\""))
-        XCTAssertTrue(script.contains("source \"$script_dir/signing-config.sh\""))
+        XCTAssertTrue(script.contains("HEAD:Scripts/signing-config.sh"))
+        XCTAssertTrue(script.contains("source \"$trusted_signing_config\""))
+        XCTAssertFalse(script.contains("source \"$script_dir/signing-config.sh\""))
         XCTAssertTrue(script.contains("sanitize_release_git_environment"))
+        XCTAssertLessThan(
+            try offset(of: "pin_clean_release_source", in: script),
+            try offset(
+                of: "source \"$script_dir/release-output.sh\"",
+                in: script
+            )
+        )
         XCTAssertTrue(script.contains("unset CDPATH"))
         XCTAssertTrue(script.contains("Refusing to run a release build through a script symlink"))
         XCTAssertTrue(script.contains("pin_clean_release_source"))

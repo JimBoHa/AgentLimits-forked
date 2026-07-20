@@ -89,11 +89,15 @@ Scripts/build-unsigned-artifacts.sh /absolute/output/directory
 ```
 
 The output includes unsigned macOS ZIP/DMG/PKG files and unsigned macOS and
-iOS/watchOS archives. The builder requires a clean Git tree, proves an exact
-immutable snapshot of the recorded tree, rejects executable local Git status
-configuration, ignores inherited Git selectors and replacement refs, replaces
-inherited Xcode overrides, and publishes only after validation succeeds. Invoke
-the checked-in script directly, not through Bash or a symlink. The output parent
+iOS/watchOS archives. The builder requires a clean Git tree, rejects hidden
+`assume-unchanged` and `skip-worktree` index flags, independently compares
+tracked contents and modes with the pinned tree, and proves an exact immutable
+snapshot of that tree. Release entrypoints load their initial validation helper
+from the committed Git blob before sourcing any worktree helper. They also
+reject executable local Git status configuration, ignore inherited Git
+selectors and replacement refs, replace inherited Xcode overrides, and publish
+only after validation succeeds. Invoke the checked-in script directly, not
+through Bash or a symlink. The output parent
 must already exist, be owned by
 the current user, and have no group/other write mode or ACL that grants mutation
 access. A per-destination lock plus identity-checked directory descriptors and

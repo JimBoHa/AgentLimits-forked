@@ -76,6 +76,79 @@ sanitize_release_git_environment() {
         LC_ALL
 }
 
+verify_release_tracked_worktree_against_tree() {
+    local project_root="$1"
+    local expected_tree="$2"
+    local validation_directory
+    local validation_metadata
+    local validation_uid
+    local validation_mode
+    local current_uid
+    local index_path
+    local flags_path
+    local validation_status=0
+
+    if ! current_uid="$(/usr/bin/id -u 2>/dev/null)" \
+        || [[ ! "$current_uid" =~ ^[1-9][0-9]*$ ]]; then
+        echo "Could not determine the release account identity" >&2
+        return 65
+    fi
+    if ! validation_directory="$(
+            /usr/bin/mktemp -d \
+                /private/tmp/AgentLimits-release-index.XXXXXX
+        )"; then
+        echo "Could not create a private release index" >&2
+        return 65
+    fi
+    if [[ ! "$validation_directory" =~ ^/private/tmp/AgentLimits-release-index\.[A-Za-z0-9]{6}$ ]] \
+        || [[ -L "$validation_directory" || ! -d "$validation_directory" ]] \
+        || ! validation_metadata="$(
+            /usr/bin/stat -f '%u %Lp' "$validation_directory" 2>/dev/null
+        )" \
+        || [[ "$validation_metadata" == *$'\n'* ]]; then
+        /bin/rmdir "$validation_directory" 2>/dev/null || true
+        echo "Could not validate the private release index" >&2
+        return 65
+    fi
+    validation_uid="${validation_metadata%% *}"
+    validation_mode="${validation_metadata#* }"
+    if [[ "$validation_uid" != "$current_uid" \
+        || "$validation_mode" != 700 ]]; then
+        echo "Could not secure the private release index" >&2
+        /bin/rmdir "$validation_directory" 2>/dev/null || true
+        return 65
+    fi
+
+    index_path="$validation_directory/index"
+    flags_path="$validation_directory/index-flags"
+    if ! /usr/bin/git -C "$project_root" ls-files -v -z \
+            >"$flags_path"; then
+        echo "Could not inspect release source index flags" >&2
+        validation_status=65
+    elif ! /usr/bin/perl -0ne \
+            'exit 1 if /\A(?:S|[a-z]) /' "$flags_path"; then
+        echo "Release source index contains hidden worktree flags" >&2
+        validation_status=65
+    elif ! GIT_INDEX_FILE="$index_path" \
+            /usr/bin/git -C "$project_root" read-tree "$expected_tree"; then
+        echo "Could not create an independent release index" >&2
+        validation_status=65
+    elif ! GIT_INDEX_FILE="$index_path" \
+            /usr/bin/git -c core.filemode=true -C "$project_root" \
+                diff-files --quiet --ignore-submodules=all --; then
+        echo "Tracked release source differs from the pinned tree" >&2
+        validation_status=65
+    fi
+
+    if ! /bin/rm -f \
+            "$flags_path" "$index_path" "$index_path.lock" \
+        || ! /bin/rmdir "$validation_directory"; then
+        echo "Could not remove the private release index" >&2
+        validation_status=65
+    fi
+    return "$validation_status"
+}
+
 pin_clean_release_source() {
     local project_root="$1"
     local canonical_root
@@ -103,6 +176,8 @@ pin_clean_release_source() {
         --verify "$source_commit^{tree}")" || return 65
     validate_release_git_repository_configuration "$canonical_root" \
         || return $?
+    verify_release_tracked_worktree_against_tree \
+        "$canonical_root" "$source_tree" || return $?
     if ! status_output="$(/usr/bin/git \
             -c core.fsmonitor=false \
             -c core.untrackedCache=false \
@@ -135,6 +210,11 @@ verify_pinned_release_source_unchanged() {
         --verify "$actual_commit^{tree}")" || return 65
     validate_release_git_repository_configuration "$project_root" \
         || return $?
+    if ! verify_release_tracked_worktree_against_tree \
+            "$project_root" "$expected_tree"; then
+        echo "Could not recheck the exact tracked release source" >&2
+        return 65
+    fi
     if ! status_output="$(/usr/bin/git \
             -c core.fsmonitor=false \
             -c core.untrackedCache=false \

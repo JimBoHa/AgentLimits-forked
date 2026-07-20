@@ -69,9 +69,58 @@ developer_dir="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}"
 validated_container_app=""
 validated_dmg_device=""
 validated_artifact_path=""
-# shellcheck disable=SC1091
-source "$script_dir/signing-config.sh"
+trusted_signing_config_directory="$(
+    /usr/bin/mktemp -d /private/tmp/AgentLimits-signing-bootstrap.XXXXXX
+)" || {
+    echo "Could not create a trusted release bootstrap directory" >&2
+    exit 65
+}
+trusted_signing_config="$trusted_signing_config_directory/signing-config.sh"
+trusted_signing_config_metadata="$(
+    /usr/bin/stat -f '%u %Lp' "$trusted_signing_config_directory" 2>/dev/null
+)" || {
+    /bin/rmdir "$trusted_signing_config_directory" 2>/dev/null || true
+    echo "Could not validate the trusted release bootstrap directory" >&2
+    exit 65
+}
+if [[ ! "$trusted_signing_config_directory" =~ ^/private/tmp/AgentLimits-signing-bootstrap\.[A-Za-z0-9]{6}$ \
+    || -L "$trusted_signing_config_directory" \
+    || ! -d "$trusted_signing_config_directory" \
+    || "$trusted_signing_config_metadata" != "$(/usr/bin/id -u) 700" ]]; then
+    /bin/rmdir "$trusted_signing_config_directory" 2>/dev/null || true
+    echo "Could not secure the trusted release bootstrap directory" >&2
+    exit 65
+fi
+if ! /usr/bin/env -i \
+        GIT_ATTR_NOSYSTEM=1 \
+        GIT_CONFIG_GLOBAL=/dev/null \
+        GIT_CONFIG_NOSYSTEM=1 \
+        GIT_NO_REPLACE_OBJECTS=1 \
+        HOME="$HOME" \
+        LANG=C \
+        LC_ALL=C \
+        PATH=/usr/bin:/bin:/usr/sbin:/sbin \
+        /usr/bin/git -C "$project_root" cat-file blob \
+            HEAD:Scripts/signing-config.sh \
+        >"$trusted_signing_config"; then
+    /bin/rm -f "$trusted_signing_config"
+    /bin/rmdir "$trusted_signing_config_directory" 2>/dev/null || true
+    echo "Could not load the committed release bootstrap" >&2
+    exit 65
+fi
+/bin/chmod 0400 "$trusted_signing_config" || exit 65
+# shellcheck disable=SC1090
+source "$trusted_signing_config"
+/bin/rm -f "$trusted_signing_config" || exit 65
+/bin/rmdir "$trusted_signing_config_directory" || exit 65
+unset \
+    trusted_signing_config \
+    trusted_signing_config_directory \
+    trusted_signing_config_metadata
 sanitize_release_git_environment
+pin_clean_release_source "$project_root" || exit $?
+source_commit="$validated_release_source_commit"
+source_tree="$validated_release_source_tree"
 # shellcheck disable=SC1091
 source "$script_dir/release-output.sh"
 # shellcheck disable=SC1091
@@ -96,10 +145,6 @@ output_parent="$validated_release_output_parent"
 output_parent_identity="$validated_release_output_parent_identity"
 output_name="$validated_release_output_name"
 output_dir="$validated_release_output_directory"
-
-pin_clean_release_source "$project_root" || exit $?
-source_commit="$validated_release_source_commit"
-source_tree="$validated_release_source_tree"
 
 verify_source_unchanged() {
     verify_pinned_release_source_unchanged \
