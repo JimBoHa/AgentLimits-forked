@@ -21,7 +21,7 @@ final class CopilotBillingAggregationTests: XCTestCase {
             )
         ])
 
-        let snapshot = CopilotBillingFetcher().buildSnapshot(
+        let snapshot = try CopilotBillingFetcher().buildSnapshot(
             from: response,
             now: now,
             calendar: calendar
@@ -46,7 +46,7 @@ final class CopilotBillingAggregationTests: XCTestCase {
             entry(cost: 5, requests: 5, at: "2026-07-01T10:00:00Z")
         ])
 
-        let snapshot = CopilotBillingFetcher().buildSnapshot(
+        let snapshot = try CopilotBillingFetcher().buildSnapshot(
             from: response,
             now: now,
             calendar: calendar
@@ -70,7 +70,7 @@ final class CopilotBillingAggregationTests: XCTestCase {
             entry(cost: 3, requests: 3, at: "2026-07-15T08:00:00Z")
         ])
 
-        let snapshot = CopilotBillingFetcher().buildSnapshot(
+        let snapshot = try CopilotBillingFetcher().buildSnapshot(
             from: response,
             now: now,
             calendar: calendar
@@ -93,7 +93,7 @@ final class CopilotBillingAggregationTests: XCTestCase {
             entry(cost: 3, requests: 3, at: "2026-07-01T00:30:00Z")
         ])
 
-        let snapshot = CopilotBillingFetcher().buildSnapshot(
+        let snapshot = try CopilotBillingFetcher().buildSnapshot(
             from: response,
             now: now,
             calendar: calendar
@@ -115,7 +115,7 @@ final class CopilotBillingAggregationTests: XCTestCase {
             entry(cost: 3, requests: 3, at: "2026-07-15T10:00:00Z")
         ])
 
-        let snapshot = CopilotBillingFetcher().buildSnapshot(
+        let snapshot = try CopilotBillingFetcher().buildSnapshot(
             from: response,
             now: now,
             calendar: calendar
@@ -137,7 +137,7 @@ final class CopilotBillingAggregationTests: XCTestCase {
             entry(cost: 2, requests: 2, at: "2026-03-02T10:00:00Z")
         ])
 
-        let snapshot = CopilotBillingFetcher().buildSnapshot(
+        let snapshot = try CopilotBillingFetcher().buildSnapshot(
             from: response,
             now: now,
             calendar: calendar
@@ -160,7 +160,7 @@ final class CopilotBillingAggregationTests: XCTestCase {
             entry(cost: 2, requests: 2, at: "2026-03-02T10:00:00.123Z")
         ])
 
-        let snapshot = CopilotBillingFetcher().buildSnapshot(
+        let snapshot = try CopilotBillingFetcher().buildSnapshot(
             from: response,
             now: now,
             calendar: calendar
@@ -171,6 +171,183 @@ final class CopilotBillingAggregationTests: XCTestCase {
         XCTAssertEqual(snapshot.dailyUsage, [
             DailyUsageEntry(date: "2026-03-02", totalTokens: 2)
         ])
+    }
+
+    func testFractionalQuantitiesAggregateBeforeTruncation() throws {
+        let calendar = utcCalendar()
+        let now = try XCTUnwrap(Self.iso8601.date(from: "2026-07-15T12:00:00Z"))
+        let response = CopilotBillingResponse(usage: [
+            entry(cost: 0.25, requests: 0.6, at: "2026-07-15T10:00:00Z"),
+            entry(cost: 0.5, requests: 0.6, at: "2026-07-15T11:00:00Z")
+        ])
+
+        let snapshot = try CopilotBillingFetcher().buildSnapshot(
+            from: response,
+            now: now,
+            calendar: calendar
+        )
+
+        let expected = TokenUsagePeriod(costUSD: 0.75, totalTokens: 1)
+        XCTAssertEqual(snapshot.today, expected)
+        XCTAssertEqual(snapshot.thisWeek, expected)
+        XCTAssertEqual(snapshot.thisMonth, expected)
+        XCTAssertEqual(snapshot.dailyUsage, [
+            DailyUsageEntry(date: "2026-07-15", totalTokens: 1)
+        ])
+    }
+
+    func testInvalidPerRowNumericValuesAreRejected() throws {
+        let now = try XCTUnwrap(Self.iso8601.date(from: "2026-07-15T12:00:00Z"))
+        let timestamp = "2026-07-15T10:00:00Z"
+        let cases: [(
+            label: String,
+            entry: CopilotBillingEntry,
+            expected: CopilotBillingValidationError
+        )] = [
+            ("NaN cost", entry(cost: .nan, requests: 1, at: timestamp), .invalidCost),
+            ("infinite cost", entry(cost: .infinity, requests: 1, at: timestamp), .invalidCost),
+            ("negative infinite cost", entry(cost: -.infinity, requests: 1, at: timestamp), .invalidCost),
+            ("negative cost", entry(cost: -0.01, requests: 1, at: timestamp), .invalidCost),
+            ("NaN quantity", entry(cost: 1, requests: .nan, at: timestamp), .invalidQuantity),
+            ("infinite quantity", entry(cost: 1, requests: .infinity, at: timestamp), .invalidQuantity),
+            ("negative infinite quantity", entry(cost: 1, requests: -.infinity, at: timestamp), .invalidQuantity),
+            ("negative quantity", entry(cost: 1, requests: -0.01, at: timestamp), .invalidQuantity),
+            ("Int boundary", entry(cost: 1, requests: Double(Int.max), at: timestamp), .invalidQuantity),
+            ("1e308 quantity", entry(cost: 1, requests: 1e308, at: timestamp), .invalidQuantity)
+        ]
+
+        for testCase in cases {
+            XCTAssertThrowsError(
+                try CopilotBillingFetcher().buildSnapshot(
+                    from: .init(usage: [testCase.entry]),
+                    now: now,
+                    calendar: utcCalendar()
+                ),
+                testCase.label
+            ) {
+                XCTAssertEqual(
+                    $0 as? CopilotBillingValidationError,
+                    testCase.expected,
+                    testCase.label
+                )
+            }
+        }
+    }
+
+    func testLargeFiniteCostRemainsValid() throws {
+        let now = try XCTUnwrap(Self.iso8601.date(from: "2026-07-15T12:00:00Z"))
+        let snapshot = try CopilotBillingFetcher().buildSnapshot(
+            from: .init(usage: [
+                entry(
+                    cost: 1e308,
+                    requests: 1,
+                    at: "2026-07-15T10:00:00Z"
+                )
+            ]),
+            now: now,
+            calendar: utcCalendar()
+        )
+
+        XCTAssertEqual(snapshot.today.costUSD, 1e308)
+        XCTAssertEqual(snapshot.today.totalTokens, 1)
+    }
+
+    func testCheckedAggregatesRejectCostAndQuantityOverflow() throws {
+        let now = try XCTUnwrap(Self.iso8601.date(from: "2026-07-15T12:00:00Z"))
+        let timestamp = "2026-07-15T10:00:00Z"
+        let largestValidQuantity = Double(Int.max).nextDown
+        XCTAssertNotNil(Int(exactly: largestValidQuantity))
+
+        let responses = [
+            CopilotBillingResponse(usage: [
+                entry(cost: 1e308, requests: 1, at: timestamp),
+                entry(cost: 1e308, requests: 1, at: timestamp)
+            ]),
+            CopilotBillingResponse(usage: [
+                entry(cost: 1, requests: largestValidQuantity, at: timestamp),
+                entry(cost: 1, requests: largestValidQuantity, at: timestamp)
+            ])
+        ]
+
+        for response in responses {
+            XCTAssertThrowsError(
+                try CopilotBillingFetcher().buildSnapshot(
+                    from: response,
+                    now: now,
+                    calendar: utcCalendar()
+                )
+            ) {
+                XCTAssertEqual(
+                    $0 as? CopilotBillingValidationError,
+                    .aggregateOverflow
+                )
+            }
+        }
+    }
+
+    func testBuildSnapshotRowCapIsInclusive() throws {
+        let now = try XCTUnwrap(Self.iso8601.date(from: "2026-07-15T12:00:00Z"))
+        let repeatedEntry = entry(
+            cost: 1,
+            requests: 1,
+            at: "2026-07-15T10:00:00Z"
+        )
+        var rows = Array(
+            repeating: repeatedEntry,
+            count: CopilotBillingResponse.maximumUsageRows
+        )
+
+        let snapshot = try CopilotBillingFetcher().buildSnapshot(
+            from: .init(usage: rows),
+            now: now,
+            calendar: utcCalendar()
+        )
+        XCTAssertEqual(
+            snapshot.today.totalTokens,
+            CopilotBillingResponse.maximumUsageRows
+        )
+
+        rows.append(repeatedEntry)
+        XCTAssertThrowsError(
+            try CopilotBillingFetcher().buildSnapshot(
+                from: .init(usage: rows),
+                now: now,
+                calendar: utcCalendar()
+            )
+        ) {
+            XCTAssertEqual(
+                $0 as? CopilotBillingValidationError,
+                .tooManyRows
+            )
+        }
+    }
+
+    func testDecoderRowCapIsInclusive() throws {
+        let decoder = JSONDecoder()
+        let exactCap = try decoder.decode(
+            CopilotBillingResponse.self,
+            from: responseData(
+                rowCount: CopilotBillingResponse.maximumUsageRows
+            )
+        )
+        XCTAssertEqual(
+            exactCap.usage.count,
+            CopilotBillingResponse.maximumUsageRows
+        )
+
+        XCTAssertThrowsError(
+            try decoder.decode(
+                CopilotBillingResponse.self,
+                from: responseData(
+                    rowCount: CopilotBillingResponse.maximumUsageRows + 1
+                )
+            )
+        ) {
+            XCTAssertEqual(
+                $0 as? CopilotBillingValidationError,
+                .tooManyRows
+            )
+        }
     }
 
     private func utcCalendar() -> Calendar {
@@ -192,6 +369,14 @@ final class CopilotBillingAggregationTests: XCTestCase {
             usageAt: timestamp,
             sku: sku
         )
+    }
+
+    private func responseData(rowCount: Int) -> Data {
+        let row = """
+        {"grossAmount":0,"quantity":0,"usageAt":"2026-07-15T10:00:00Z","sku":"copilot_other"}
+        """
+        let rows = Array(repeating: row, count: rowCount).joined(separator: ",")
+        return Data("{\"usage\":[\(rows)]}".utf8)
     }
 
     private static let iso8601: ISO8601DateFormatter = {

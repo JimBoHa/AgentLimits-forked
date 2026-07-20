@@ -9,7 +9,40 @@ import WebKit
 
 /// Response structure from GitHub billing usage_table API
 struct CopilotBillingResponse: Decodable {
+    static let maximumUsageRows = 10_000
+
     let usage: [CopilotBillingEntry]
+
+    private enum CodingKeys: String, CodingKey {
+        case usage
+    }
+
+    init(usage: [CopilotBillingEntry]) {
+        self.usage = usage
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        var usageContainer = try container.nestedUnkeyedContainer(forKey: .usage)
+        if let count = usageContainer.count,
+           count > Self.maximumUsageRows {
+            throw CopilotBillingValidationError.tooManyRows
+        }
+
+        var decodedUsage: [CopilotBillingEntry] = []
+        decodedUsage.reserveCapacity(
+            min(usageContainer.count ?? 0, Self.maximumUsageRows)
+        )
+        while !usageContainer.isAtEnd {
+            guard decodedUsage.count < Self.maximumUsageRows else {
+                throw CopilotBillingValidationError.tooManyRows
+            }
+            decodedUsage.append(
+                try usageContainer.decode(CopilotBillingEntry.self)
+            )
+        }
+        usage = decodedUsage
+    }
 }
 
 /// Single billing entry from usage_table API
@@ -18,6 +51,13 @@ struct CopilotBillingEntry: Decodable {
     let quantity: Double
     let usageAt: String
     let sku: String
+}
+
+enum CopilotBillingValidationError: Error, Equatable {
+    case tooManyRows
+    case invalidCost
+    case invalidQuantity
+    case aggregateOverflow
 }
 
 // MARK: - Error Types
@@ -51,17 +91,20 @@ final class CopilotBillingFetcher {
     /// Fetches and aggregates billing data into a TokenUsageSnapshot.
     @MainActor
     func fetchBillingSnapshot(using webView: WKWebView) async throws -> TokenUsageSnapshot {
-        let response: CopilotBillingResponse
         do {
-            response = try await scriptRunner.decodeJSONScript(
+            let response = try await scriptRunner.decodeJSONScript(
                 CopilotBillingResponse.self,
                 script: Self.billingScript,
                 webView: webView
             )
+            return try buildSnapshot(from: response)
         } catch let error as WebViewScriptRunnerError {
             throw mapScriptError(error)
+        } catch is CopilotBillingValidationError {
+            throw CopilotBillingFetcherError.invalidResponse
+        } catch is DecodingError {
+            throw CopilotBillingFetcherError.invalidResponse
         }
-        return buildSnapshot(from: response)
     }
 
     // MARK: - Snapshot Building
@@ -71,7 +114,11 @@ final class CopilotBillingFetcher {
         from response: CopilotBillingResponse,
         now: Date = Date(),
         calendar: Calendar = .current
-    ) -> TokenUsageSnapshot {
+    ) throws -> TokenUsageSnapshot {
+        guard response.usage.count <= CopilotBillingResponse.maximumUsageRows else {
+            throw CopilotBillingValidationError.tooManyRows
+        }
+
         let localCalendar = Self.localGregorianCalendar(matching: calendar)
         let endOfCurrentMoment = now
         let startOfToday = localCalendar.startOfDay(for: now)
@@ -84,33 +131,35 @@ final class CopilotBillingFetcher {
         let startOfBillingMonth = Self.startOfUTCBillingMonth(for: now)
 
         // Invalid and future timestamps must not contribute to any current period.
-        let premiumEntries = response.usage.compactMap { entry -> DatedBillingEntry? in
-            guard entry.sku == "copilot_premium_request",
-                  let date = Self.parseUsageDate(entry.usageAt),
+        var premiumEntries: [DatedBillingEntry] = []
+        premiumEntries.reserveCapacity(response.usage.count)
+        for entry in response.usage where entry.sku == "copilot_premium_request" {
+            try Self.validateNumericFields(of: entry)
+            guard let date = Self.parseUsageDate(entry.usageAt),
                   date <= endOfCurrentMoment else {
-                return nil
+                continue
             }
-            return DatedBillingEntry(entry: entry, date: date)
+            premiumEntries.append(DatedBillingEntry(entry: entry, date: date))
         }
 
         let billingMonthEntries = premiumEntries.filter { $0.date >= startOfBillingMonth }
         let localMonthEntries = premiumEntries.filter { $0.date >= startOfLocalMonth }
 
         // Calculate today's usage
-        let todayPeriod = aggregatePeriod(
+        let todayPeriod = try aggregatePeriod(
             for: premiumEntries.filter { $0.date >= startOfToday }
         )
 
         // Calculate this week's usage (Sunday start)
-        let thisWeekPeriod = aggregatePeriod(
+        let thisWeekPeriod = try aggregatePeriod(
             for: premiumEntries.filter { $0.date >= startOfWeek }
         )
 
         // GitHub's premium-request billing month resets at 00:00 UTC.
-        let thisMonthPeriod = aggregatePeriod(for: billingMonthEntries)
+        let thisMonthPeriod = try aggregatePeriod(for: billingMonthEntries)
 
         // Build current-month daily entries for the heatmap.
-        let dailyUsage = buildDailyUsage(
+        let dailyUsage = try buildDailyUsage(
             from: localMonthEntries,
             calendar: localCalendar
         )
@@ -131,25 +180,67 @@ final class CopilotBillingFetcher {
     }
 
     /// Aggregates cost and quantity for a set of entries.
-    private func aggregatePeriod(for entries: [DatedBillingEntry]) -> TokenUsagePeriod {
-        let totalCost = entries.reduce(0.0) { $0 + $1.entry.grossAmount }
-        let totalRequests = entries.reduce(0.0) { $0 + $1.entry.quantity }
-        return TokenUsagePeriod(costUSD: totalCost, totalTokens: Int(totalRequests))
+    private func aggregatePeriod(
+        for entries: [DatedBillingEntry]
+    ) throws -> TokenUsagePeriod {
+        var totalCost = 0.0
+        var totalRequests = 0.0
+
+        for datedEntry in entries {
+            let nextCost = totalCost + datedEntry.entry.grossAmount
+            guard nextCost.isFinite, nextCost >= 0 else {
+                throw CopilotBillingValidationError.aggregateOverflow
+            }
+            totalCost = nextCost
+
+            let nextRequests = totalRequests + datedEntry.entry.quantity
+            guard Self.requestCount(from: nextRequests) != nil else {
+                throw CopilotBillingValidationError.aggregateOverflow
+            }
+            totalRequests = nextRequests
+        }
+
+        guard let requestCount = Self.requestCount(from: totalRequests) else {
+            throw CopilotBillingValidationError.aggregateOverflow
+        }
+        return TokenUsagePeriod(costUSD: totalCost, totalTokens: requestCount)
     }
 
     /// Builds sorted daily usage entries from grouped data for heatmap.
     private func buildDailyUsage(
         from entries: [DatedBillingEntry],
         calendar: Calendar
-    ) -> [DailyUsageEntry] {
+    ) throws -> [DailyUsageEntry] {
         let groupedByDate = Dictionary(grouping: entries) {
             Self.localDateKey(for: $0.date, calendar: calendar)
         }
-        return groupedByDate.map { dateKey, datedEntries in
-            let totalRequests = datedEntries.reduce(0.0) { $0 + $1.entry.quantity }
-            return DailyUsageEntry(date: dateKey, totalTokens: Int(totalRequests))
+        return try groupedByDate.map { dateKey, datedEntries in
+            let period = try aggregatePeriod(for: datedEntries)
+            return DailyUsageEntry(
+                date: dateKey,
+                totalTokens: period.totalTokens
+            )
         }
         .sorted { $0.date < $1.date }
+    }
+
+    private static func validateNumericFields(
+        of entry: CopilotBillingEntry
+    ) throws {
+        guard entry.grossAmount.isFinite,
+              entry.grossAmount >= 0 else {
+            throw CopilotBillingValidationError.invalidCost
+        }
+        guard requestCount(from: entry.quantity) != nil else {
+            throw CopilotBillingValidationError.invalidQuantity
+        }
+    }
+
+    /// GitHub quantities may be fractional. Validate the truncated value that
+    /// the UI displays while preserving aggregate-then-truncate behavior.
+    private static func requestCount(from quantity: Double) -> Int? {
+        guard quantity.isFinite, quantity >= 0 else { return nil }
+        return Int(exactly: quantity.rounded(.towardZero))
     }
 
     // MARK: - Error Mapping
