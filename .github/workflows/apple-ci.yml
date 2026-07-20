@@ -93,7 +93,7 @@ jobs:
             result: iPad
           - name: Apple Watch
             scheme: AgentLimitsWatch
-            destination: platform=watchOS Simulator,name=Apple Watch Series 11 (46mm),OS=latest
+            destination: ""
             result: Watch
     steps:
       - name: Check out source
@@ -101,13 +101,107 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Run tests
+      - name: Resolve Apple Watch simulator
+        if: ${{ matrix.result == 'Watch' }}
+        id: watch-destination
+        env:
+          WATCH_DEVICE_NAME: Apple Watch Series 11 (46mm)
         run: |
+          set -euo pipefail
+
+          runtimes_json="$(xcrun simctl list runtimes --json)"
+          available_runtimes="$(
+            jq -c '
+              [.runtimes[]
+                | select(.platform == "watchOS" and .isAvailable == true)
+                | {identifier, version}]
+            ' <<< "$runtimes_json"
+          )"
+          runtime_count="$(jq 'length' <<< "$available_runtimes")"
+
+          if [[ "$runtime_count" -eq 0 ]]; then
+            echo 'No available watchOS simulator runtime is installed.' >&2
+            jq -r '
+              .runtimes[]
+              | select(.platform == "watchOS")
+              | "  \(.name) [\(.identifier)] available=\(.isAvailable)"
+            ' <<< "$runtimes_json" >&2
+            exit 1
+          fi
+
+          latest_version="$(
+            jq -r 'max_by(.version | split(".") | map(tonumber)) | .version' \
+              <<< "$available_runtimes"
+          )"
+          latest_runtimes="$(
+            jq -c --arg version "$latest_version" \
+              '[.[] | select(.version == $version)]' \
+              <<< "$available_runtimes"
+          )"
+          latest_runtime_count="$(jq 'length' <<< "$latest_runtimes")"
+
+          if [[ "$latest_runtime_count" -ne 1 ]]; then
+            echo "Expected exactly one available watchOS $latest_version runtime; found $latest_runtime_count:" >&2
+            jq -r '.[] | "  \(.identifier)"' <<< "$latest_runtimes" >&2
+            exit 1
+          fi
+
+          runtime_id="$(jq -r '.[0].identifier' <<< "$latest_runtimes")"
+          devices_json="$(xcrun simctl list devices --json)"
+          matching_devices="$(
+            jq -c \
+              --arg runtime "$runtime_id" \
+              --arg name "$WATCH_DEVICE_NAME" \
+              '[.devices[$runtime][]?
+                | select(.name == $name and .isAvailable == true)
+                | {udid, state}]' \
+              <<< "$devices_json"
+          )"
+          device_count="$(jq 'length' <<< "$matching_devices")"
+
+          if [[ "$device_count" -eq 0 ]]; then
+            echo "No available '$WATCH_DEVICE_NAME' simulator exists for watchOS $latest_version ($runtime_id)." >&2
+            echo 'Available devices for that runtime:' >&2
+            jq -r --arg runtime "$runtime_id" '
+              .devices[$runtime][]?
+              | select(.isAvailable == true)
+              | "  \(.name): \(.udid)"
+            ' <<< "$devices_json" | sort >&2
+            exit 1
+          fi
+
+          if [[ "$device_count" -ne 1 ]]; then
+            echo "Expected exactly one available '$WATCH_DEVICE_NAME' simulator for watchOS $latest_version; found $device_count:" >&2
+            jq -r '.[] | "  \(.udid) (\(.state))"' <<< "$matching_devices" >&2
+            exit 1
+          fi
+
+          watch_udid="$(jq -r '.[0].udid' <<< "$matching_devices")"
+          printf 'destination=platform=watchOS Simulator,id=%s\n' "$watch_udid" >> "$GITHUB_OUTPUT"
+          echo "Selected $WATCH_DEVICE_NAME on watchOS $latest_version: $watch_udid"
+
+      - name: Run tests
+        env:
+          CONFIGURED_DESTINATION: ${{ matrix.destination }}
+          RESOLVED_WATCH_DESTINATION: ${{ steps.watch-destination.outputs.destination }}
+          TEST_RESULT: ${{ matrix.result }}
+        run: |
+          if [[ "$TEST_RESULT" == "Watch" ]]; then
+            destination="$RESOLVED_WATCH_DESTINATION"
+          else
+            destination="$CONFIGURED_DESTINATION"
+          fi
+
+          if [[ -z "$destination" ]]; then
+            echo "No test destination was resolved for $TEST_RESULT." >&2
+            exit 1
+          fi
+
           xcodebuild test \
             -project AgentLimits.xcodeproj \
             -scheme "${{ matrix.scheme }}" \
             -configuration Debug \
-            -destination "${{ matrix.destination }}" \
+            -destination "$destination" \
             -onlyUsePackageVersionsFromResolvedFile \
             -resultBundlePath "$RUNNER_TEMP/${{ matrix.result }}.xcresult" \
             -derivedDataPath "$RUNNER_TEMP/DerivedData-${{ matrix.result }}" \
