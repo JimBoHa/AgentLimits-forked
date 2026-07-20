@@ -270,7 +270,7 @@ final class AgentLimitsUITests: XCTestCase {
         in app: XCUIApplication
     ) -> XCUIElement {
         let selectedLabel = "Selected — \(accountLabel)"
-        app.staticTexts.matching(
+        return app.staticTexts.matching(
             NSPredicate(
                 format: "identifier BEGINSWITH %@ AND (label == %@ OR value == %@)",
                 "mac.accounts.selected.",
