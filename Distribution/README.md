@@ -40,10 +40,14 @@ chmod -N Configurations/DevelopmentTeam.local.xcconfig
 
 The local file is gitignored and must remain Team-only. Signed release scripts
 reject includes, conditional assignments, compiler flags, symlinks, ACLs, and
-group/other-writable files. They build from a clean `git archive` snapshot with
-a generated Team-only config, then record and recheck the local config hash.
-They also replace inherited Xcode config/toolchain overrides and use the system
-release-tool path before invoking Xcode.
+group/other-writable files. They bind every archived path, mode, and unfiltered
+blob hash to the pinned Git tree before making the source snapshot immutable;
+local or tracked archive attributes cannot silently omit or substitute source.
+The generated Team-only config stays outside that snapshot, and its hash is
+recorded and rechecked. Direct execution uses Bash privileged mode, then
+re-executes under a minimal environment allowlist so inherited startup files and
+exported functions cannot reach build subprocesses. The scripts also replace
+inherited Xcode config/toolchain overrides and use the system release-tool path.
 Never commit certificates, private keys, provisioning profiles, App Store
 Connect keys, passwords, or notarization credentials.
 
@@ -57,15 +61,16 @@ Scripts/build-unsigned-artifacts.sh /absolute/output/directory
 ```
 
 The output includes unsigned macOS ZIP/DMG/PKG files and unsigned macOS and
-iOS/watchOS archives. The builder requires a clean Git tree, builds from a
-snapshot of the recorded commit, ignores inherited Git repository/configuration
-selectors and replacement refs, replaces inherited Xcode configuration and
-toolchain overrides, and publishes through a temporary sibling directory only
-after validation succeeds. Invoke the checked-in script directly, not through a
-symlink. The output parent must already exist, be owned by
+iOS/watchOS archives. The builder requires a clean Git tree, proves an exact
+immutable snapshot of the recorded tree, rejects executable local Git status
+configuration, ignores inherited Git selectors and replacement refs, replaces
+inherited Xcode overrides, and publishes only after validation succeeds. Invoke
+the checked-in script directly, not through Bash or a symlink. The output parent
+must already exist, be owned by
 the current user, and have no group/other write mode or ACL that grants mutation
-access. A per-destination lock plus no-clobber rename prevents concurrent
-builders from racing publication. The builder reopens every ZIP, DMG, and PKG
+access. A per-destination lock plus identity-checked directory descriptors and
+no-clobber `renameatx_np` prevent concurrent builders or replaced parent paths
+from redirecting publication. The builder reopens every ZIP, DMG, and PKG
 and compares the contained app or archive against a canonical file-tree
 manifest.
 Before packaging, it also requires exactly one expected app at each archive
@@ -106,8 +111,9 @@ exists, is owned by the current user, and grants no group/other or mutating ACL
 write access. They ignore caller temporary-directory overrides and Git
 repository/configuration selectors, disable replacement refs, hold an exclusive
 per-destination lock, and use private temporary and DerivedData directories.
-Invoke the checked-in scripts directly, not through symlinks. The requested
-output appears only through macOS `RENAME_EXCL` no-clobber atomic rename after
+Invoke the checked-in scripts directly, not through Bash or symlinks. The
+requested output appears only through identity-checked parent directory
+descriptors and macOS `RENAME_EXCL` no-clobber atomic rename after
 final source, signing-config, signature, container, and checksum validation
 succeeds. Filesystems without exclusive-rename support fail closed. Existing
 files, directories, and symlinks are never overwritten.

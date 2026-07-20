@@ -1,7 +1,11 @@
 #!/bin/bash
+# shellcheck disable=SC2034
 
 # Shared validation for the gitignored Apple Team configuration.
 # This file is sourced by signed release scripts.
+
+validated_release_source_commit=""
+validated_release_source_tree=""
 
 sanitize_release_git_environment() {
     local variable
@@ -11,6 +15,28 @@ sanitize_release_git_environment() {
     for variable in "${!GIT_@}"; do
         unset "$variable"
     done
+    for variable in "${!DYLD_@}"; do
+        unset "$variable"
+    done
+    for variable in "${!CCC_@}"; do
+        unset "$variable"
+    done
+    unset \
+        BASH_ENV \
+        COPY_EXTENDED_ATTRIBUTES_DISABLE \
+        COPYFILE_DISABLE \
+        ENV \
+        GREP_OPTIONS \
+        PERL5LIB \
+        PERL5OPT \
+        PERLLIB \
+        TAR_OPTIONS \
+        xcrun_cache_path \
+        xcrun_log \
+        xcrun_verbose
+    COPY_EXTENDED_ATTRIBUTES_DISABLE=1
+    COPYFILE_DISABLE=1
+    LC_ALL=C
     GIT_ATTR_NOSYSTEM=1
     GIT_CONFIG_GLOBAL=/dev/null
     GIT_CONFIG_NOSYSTEM=1
@@ -19,7 +45,105 @@ sanitize_release_git_environment() {
         GIT_ATTR_NOSYSTEM \
         GIT_CONFIG_GLOBAL \
         GIT_CONFIG_NOSYSTEM \
-        GIT_NO_REPLACE_OBJECTS
+        GIT_NO_REPLACE_OBJECTS \
+        COPY_EXTENDED_ATTRIBUTES_DISABLE \
+        COPYFILE_DISABLE \
+        LC_ALL
+}
+
+pin_clean_release_source() {
+    local project_root="$1"
+    local canonical_root
+    local repository_root
+    local source_commit
+    local source_tree
+    local status_output
+
+    validated_release_source_commit=""
+    validated_release_source_tree=""
+    if [[ -L "$project_root" || ! -d "$project_root" ]]; then
+        echo "Release source root is missing or unsafe" >&2
+        return 65
+    fi
+    canonical_root="$(cd "$project_root" >/dev/null && pwd -P)" || return 65
+    repository_root="$(/usr/bin/git -C "$canonical_root" rev-parse \
+        --show-toplevel)" || return 65
+    if [[ "$repository_root" != "$canonical_root" ]]; then
+        echo "Release source root does not match the Git worktree" >&2
+        return 65
+    fi
+    source_commit="$(/usr/bin/git -C "$canonical_root" rev-parse \
+        --verify 'HEAD^{commit}')" || return 65
+    source_tree="$(/usr/bin/git -C "$canonical_root" rev-parse \
+        --verify "$source_commit^{tree}")" || return 65
+    validate_release_git_repository_configuration "$canonical_root" \
+        || return $?
+    if ! status_output="$(/usr/bin/git \
+            -c core.fsmonitor=false \
+            -c core.untrackedCache=false \
+            -C "$canonical_root" status --no-renames \
+            --porcelain --untracked-files=normal \
+            --ignore-submodules=all)"; then
+        echo "Could not verify that the release source is clean" >&2
+        return 65
+    fi
+    if [[ -n "$status_output" ]]; then
+        echo "Refusing release artifacts from a dirty Git working tree" >&2
+        return 65
+    fi
+
+    validated_release_source_commit="$source_commit"
+    validated_release_source_tree="$source_tree"
+}
+
+verify_pinned_release_source_unchanged() {
+    local project_root="$1"
+    local expected_commit="$2"
+    local expected_tree="$3"
+    local actual_commit
+    local actual_tree
+    local status_output
+
+    actual_commit="$(/usr/bin/git -C "$project_root" rev-parse \
+        --verify 'HEAD^{commit}')" || return 65
+    actual_tree="$(/usr/bin/git -C "$project_root" rev-parse \
+        --verify "$actual_commit^{tree}")" || return 65
+    validate_release_git_repository_configuration "$project_root" \
+        || return $?
+    if ! status_output="$(/usr/bin/git \
+            -c core.fsmonitor=false \
+            -c core.untrackedCache=false \
+            -C "$project_root" status --no-renames \
+            --porcelain --untracked-files=normal \
+            --ignore-submodules=all)"; then
+        echo "Could not recheck the release source" >&2
+        return 65
+    fi
+    if [[ "$actual_commit" != "$expected_commit" \
+        || "$actual_tree" != "$expected_tree" \
+        || -n "$status_output" ]]; then
+        echo "Source changed while building; discard these artifacts" >&2
+        return 65
+    fi
+}
+
+validate_release_git_repository_configuration() {
+    local project_root="$1"
+    local unsafe_configuration
+    local config_status=0
+
+    unsafe_configuration="$(/usr/bin/git -C "$project_root" config \
+        --includes --name-only --get-regexp \
+        '^(core\.fsmonitor|core\.attributesfile|filter\..*\.(clean|process|required))$')" \
+        || config_status=$?
+    if [[ "$config_status" != "0" && "$config_status" != "1" ]]; then
+        echo "Could not validate local Git release configuration" >&2
+        return 65
+    fi
+    if [[ -n "$unsafe_configuration" ]]; then
+        echo "Repository Git configuration can alter or execute during release validation" >&2
+        return 65
+    fi
 }
 
 validate_development_team_config() {
@@ -93,9 +217,16 @@ verify_development_team_config_unchanged() {
 
 prepare_xcode_signing_environment() {
     local sanitized_config="$1"
+    local variable
 
     XCODE_XCCONFIG_FILE="$sanitized_config"
     export XCODE_XCCONFIG_FILE
+    for variable in "${!DYLD_@}"; do
+        unset "$variable"
+    done
+    for variable in "${!CCC_@}"; do
+        unset "$variable"
+    done
     unset \
         TOOLCHAINS \
         XCRUN_TOOLCHAIN_NAME \

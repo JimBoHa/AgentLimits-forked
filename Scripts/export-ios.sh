@@ -1,5 +1,45 @@
-#!/bin/bash
+#!/bin/bash -p
 # shellcheck disable=SC2154
+
+release_environment_needs_reset=false
+if [[ "${AGENTLIMITS_RELEASE_ENV_PID:-}" != "$$" ]]; then
+    release_environment_needs_reset=true
+else
+    while IFS= read -r -d '' inherited_environment_entry; do
+        case "$inherited_environment_entry" in
+            "AGENTLIMITS_RELEASE_ENV_PID=$$" \
+                | DEVELOPER_DIR=* \
+                | "LANG=C" \
+                | "LC_ALL=C" \
+                | "PATH=/usr/bin:/bin:/usr/sbin:/sbin" \
+                | PWD=* \
+                | SHLVL=* \
+                | _=*)
+                ;;
+            *)
+                release_environment_needs_reset=true
+                break
+                ;;
+        esac
+    done < <(/usr/bin/env -0)
+fi
+if [[ "$release_environment_needs_reset" == "true" ]]; then
+    exec /usr/bin/env -i \
+        AGENTLIMITS_RELEASE_ENV_PID="$$" \
+        DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}" \
+        LANG=C \
+        LC_ALL=C \
+        PATH=/usr/bin:/bin:/usr/sbin:/sbin \
+        /bin/bash -p "$0" "$@"
+    echo "Could not create a sanitized release environment" >&2
+    exit 70
+fi
+unset \
+    AGENTLIMITS_RELEASE_ENV_PID \
+    inherited_environment_entry \
+    release_environment_needs_reset
+HOME="$(cd ~ >/dev/null && pwd -P)" || exit 70
+export HOME
 
 set -euo pipefail
 
@@ -71,26 +111,21 @@ output_parent="$validated_release_output_parent"
 output_parent_identity="$validated_release_output_parent_identity"
 output_name="$validated_release_output_name"
 release_output_dir="$validated_release_output_directory"
-source_commit="$(git -C "$project_root" rev-parse HEAD)"
-if [[ -n "$(git -C "$project_root" status --porcelain \
-        --untracked-files=normal)" ]]; then
-    echo "Refusing a signed export from a dirty Git working tree" >&2
-    exit 65
-fi
+pin_clean_release_source "$project_root" || exit $?
+source_commit="$validated_release_source_commit"
+source_tree="$validated_release_source_tree"
 
 verify_source_unchanged() {
     verify_development_team_config_unchanged \
         "$local_config" "$team_id" "$local_config_hash" || exit $?
-    if [[ "$(git -C "$project_root" rev-parse HEAD)" != "$source_commit" \
-        || -n "$(git -C "$project_root" status --porcelain \
-            --untracked-files=normal)" ]]; then
-        echo "Source changed while building; discard this export" >&2
-        exit 65
-    fi
+    verify_pinned_release_source_unchanged \
+        "$project_root" "$source_commit" "$source_tree" || exit $?
 }
 
 work_dir=""
 work_dir_identity=""
+source_snapshot=""
+source_snapshot_identity=""
 staging_parent=""
 staging_parent_identity=""
 staging_dir=""
@@ -104,6 +139,7 @@ derived_data=""
 
 cleanup() {
     local exit_status=$?
+    local work_cleanup_allowed=true
 
     set +e
     cleanup_private_release_directory \
@@ -112,12 +148,23 @@ cleanup() {
         "$output_parent" \
         '^\.AgentLimits-ios-export-stage\.[A-Za-z0-9]{6}$' \
         || true
-    cleanup_private_release_directory \
-        "${work_dir:-}" \
-        "${work_dir_identity:-}" \
-        /private/tmp \
-        '^AgentLimits-ios-export\.[A-Za-z0-9]{6}$' \
-        || true
+    if [[ -n "${source_snapshot:-}" ]] \
+        && ! unlock_immutable_release_source_snapshot_for_cleanup \
+            "$source_snapshot" \
+            "$source_snapshot_identity" \
+            "$work_dir" \
+            "$project_root" \
+            "$source_tree"; then
+        work_cleanup_allowed=false
+    fi
+    if [[ "$work_cleanup_allowed" == "true" ]]; then
+        cleanup_private_release_directory \
+            "${work_dir:-}" \
+            "${work_dir_identity:-}" \
+            /private/tmp \
+            '^AgentLimits-ios-export\.[A-Za-z0-9]{6}$' \
+            || true
+    fi
     if [[ -n "${publication_lock:-}" ]]; then
         release_release_publication_lock \
             "$publication_lock" \
@@ -156,11 +203,12 @@ verify_source_unchanged
 
 export DEVELOPER_DIR="$developer_dir"
 
-build_root="$work_dir/source"
-mkdir -p "$build_root"
-git -C "$project_root" archive --format=tar "$source_commit" \
-    | tar -xf - -C "$build_root"
-snapshot_config="$build_root/Configurations/DevelopmentTeam.local.xcconfig"
+create_immutable_release_source_snapshot \
+    "$project_root" "$source_commit" "$source_tree" "$work_dir" || exit $?
+source_snapshot="$validated_release_source_snapshot"
+source_snapshot_identity="$validated_release_source_snapshot_identity"
+build_root="$source_snapshot"
+snapshot_config="$work_dir/DevelopmentTeam.local.xcconfig"
 printf 'DEVELOPMENT_TEAM = %s\n' "$team_id" >"$snapshot_config"
 chmod 600 "$snapshot_config"
 prepare_xcode_signing_environment "$snapshot_config"
@@ -561,6 +609,7 @@ publish_staged_release_directory \
     "$atomic_publisher" \
     "$atomic_publisher_identity" \
     "$atomic_publisher_hash" \
+    "$staging_parent_identity" \
     "$validated_final_profile_expiration_epoch" \
     "$profile_publication_headroom_seconds" \
     || exit $?
