@@ -1,4 +1,38 @@
+import AppKit
 import Foundation
+
+final class MenuBarDashboardMenuItem: NSMenuItem {
+    override func accessibilityPerformPress() -> Bool {
+        performConfiguredAction()
+    }
+
+    func performConfiguredAction() -> Bool {
+        guard isEnabled, let action else { return false }
+        return NSApplication.shared.sendAction(
+            action,
+            to: target,
+            from: self
+        )
+    }
+}
+
+enum MenuBarDashboardActivation {
+    static func configure(
+        _ item: NSMenuItem,
+        provider: UsageProvider,
+        target: AnyObject,
+        action: Selector
+    ) {
+        item.representedObject = provider
+        item.target = target
+        item.action = action
+        item.isEnabled = true
+    }
+
+    static func provider(from item: NSMenuItem) -> UsageProvider? {
+        item.representedObject as? UsageProvider
+    }
+}
 
 /// The selected account is retained only to validate session snapshots. Its
 /// label and local data path must never be included in accessibility output.
@@ -51,13 +85,18 @@ enum MenuBarAccessibilityPresentation {
     static func dashboardValue(
         provider: UsageProvider,
         snapshot: UsageSnapshot,
-        displayMode: UsageDisplayMode
+        displayMode: UsageDisplayMode,
+        now: Date = Date()
     ) -> String {
-        usageValue(
+        var components = [usageValue(
             provider: provider,
             snapshot: snapshot,
             displayMode: displayMode
-        )
+        )]
+        if let timing = dashboardTimingValue(snapshot: snapshot, now: now) {
+            components.append(timing)
+        }
+        return components.joined(separator: ". ")
     }
 
     static func dashboardMenuItemTitle(
@@ -119,6 +158,70 @@ enum MenuBarAccessibilityPresentation {
             return "status.notFetched".localized()
         }
         return "\(displayMode.localizedDisplayName): \(windows.joined(separator: ", "))"
+    }
+
+    private static func dashboardTimingValue(
+        snapshot: UsageSnapshot,
+        now: Date
+    ) -> String? {
+        if snapshot.isSingleMonthlyWindow {
+            guard let resetAt = snapshot.primaryWindow?.resetAt else {
+                return nil
+            }
+            return resetDescription(
+                windowLabel: "content.month".localized(),
+                resetAt: resetAt,
+                now: now
+            )
+        }
+
+        var components: [String] = []
+        if let resetAt = snapshot.primaryWindow?.resetAt {
+            components.append(resetDescription(
+                windowLabel: "content.5hours".localized(),
+                resetAt: resetAt,
+                now: now
+            ))
+        }
+        if let resetAt = snapshot.secondaryWindow?.resetAt {
+            components.append(resetDescription(
+                windowLabel: "content.week".localized(),
+                resetAt: resetAt,
+                now: now
+            ))
+        }
+        return components.isEmpty ? nil : components.joined(separator: ", ")
+    }
+
+    private static func resetDescription(
+        windowLabel: String,
+        resetAt: Date,
+        now: Date
+    ) -> String {
+        "\(windowLabel) \("content.reset".localized()) \(resetText(resetAt, now: now))"
+    }
+
+    private static func resetText(_ resetAt: Date, now: Date) -> String {
+        let remaining = resetAt.timeIntervalSince(now)
+        if remaining <= 60 {
+            return "menu.dashboard.soon".localized()
+        }
+        if remaining >= 86_400 {
+            return String(
+                format: "menu.dashboard.resetDaysLater".localized(),
+                remaining / 86_400
+            )
+        }
+        if remaining >= 3_600 {
+            return String(
+                format: "menu.dashboard.resetHoursLater".localized(),
+                remaining / 3_600
+            )
+        }
+        return String(
+            format: "menu.dashboard.resetMinutesLater".localized(),
+            max(1, Int(remaining) / 60)
+        )
     }
 
     private static func windowValue(

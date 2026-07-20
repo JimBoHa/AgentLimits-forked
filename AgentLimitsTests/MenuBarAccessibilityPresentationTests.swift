@@ -1,3 +1,4 @@
+import AppKit
 import XCTest
 @testable import AgentLimits
 
@@ -72,6 +73,31 @@ final class MenuBarAccessibilityPresentationTests: XCTestCase {
         XCTAssertTrue(
             value.contains(UsagePercentFormatter.formatPercentText(20))
         )
+        XCTAssertTrue(value.contains("content.reset".localized()))
+    }
+
+    @MainActor
+    func testDashboardMenuItemVoiceOverPressInvokesConfiguredAction() {
+        let item = MenuBarDashboardMenuItem(
+            title: "Codex",
+            action: nil,
+            keyEquivalent: ""
+        )
+        let target = DashboardActionTarget()
+        MenuBarDashboardActivation.configure(
+            item,
+            provider: .chatgptCodex,
+            target: target,
+            action: #selector(DashboardActionTarget.activate(_:))
+        )
+        XCTAssertTrue(item.target === target)
+        XCTAssertEqual(item.action, #selector(DashboardActionTarget.activate(_:)))
+        XCTAssertEqual(
+            MenuBarDashboardActivation.provider(from: item),
+            .chatgptCodex
+        )
+        XCTAssertTrue(item.performConfiguredAction())
+        XCTAssertEqual(target.activationCount, 1)
     }
 
     func testDashboardMenuItemTitleIsNonemptyAndDescribesProviderState() {
@@ -178,5 +204,14 @@ final class MenuBarAccessibilityPresentationTests: XCTestCase {
                 ? UsageLimitDuration.fiveHours
                 : UsageLimitDuration.sevenDays
         )
+    }
+}
+
+@MainActor
+private final class DashboardActionTarget: NSObject {
+    private(set) var activationCount = 0
+
+    @objc func activate(_ sender: NSMenuItem) {
+        activationCount += 1
     }
 }

@@ -434,7 +434,7 @@ extension MenuBarController: NSMenuDelegate {
         hosting.frame = NSRect(x: 0, y: 0, width: max(300, fittingSize.width), height: fittingSize.height)
         hosting.autoresizingMask = [.width]
 
-        let item = NSMenuItem(
+        let item = MenuBarDashboardMenuItem(
             title: MenuBarAccessibilityPresentation.dashboardMenuItemTitle(
                 provider: provider,
                 snapshot: snapshot,
@@ -443,8 +443,13 @@ extension MenuBarController: NSMenuDelegate {
             action: nil,
             keyEquivalent: ""
         )
+        MenuBarDashboardActivation.configure(
+            item,
+            provider: provider,
+            target: self,
+            action: #selector(openDashboardProvider(_:))
+        )
         item.view = hosting
-        item.isEnabled = true
         return item
     }
 
@@ -587,6 +592,13 @@ extension MenuBarController: NSMenuDelegate {
     @objc private func setLanguage(_ sender: NSMenuItem) {
         guard let language = sender.representedObject as? AppLanguageOption else { return }
         LanguageManager.shared.setLanguage(language)
+        scheduleImageUpdate()
+    }
+
+    @objc private func openDashboardProvider(_ sender: NSMenuItem) {
+        guard let provider = MenuBarDashboardActivation.provider(from: sender)
+        else { return }
+        NSWorkspace.shared.open(provider.usageURL)
     }
 
     @objc private func triggerWakeUp(_ sender: NSMenuItem) {
