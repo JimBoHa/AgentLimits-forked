@@ -7,33 +7,190 @@
 validated_container_app=""
 validated_dmg_device=""
 
-validate_zip_container_root() {
+create_tree_manifest() {
     local root="$1"
+    local output="$2"
+    local inventory=""
+    local entry
+    local full_path
+    local relative
+    local relative_hex
+    local target_hex
+    local mode
+    local size
+    local digest
+    local result=0
+
+    if [[ -L "$root" || ! -d "$root" ]]; then
+        echo "Tree manifest root is not a regular directory" >&2
+        return 1
+    fi
+    if [[ -L "$output" || -d "$output" ]]; then
+        echo "Tree manifest output is unsafe" >&2
+        return 1
+    fi
+
+    if ! inventory="$(mktemp "/private/tmp/AgentLimits-tree-inventory.XXXXXX")"; then
+        echo "Could not create tree inventory" >&2
+        return 1
+    fi
+    if ! (cd "$root" && LC_ALL=C find -s . -print0 >"$inventory"); then
+        echo "Could not inventory tree manifest root" >&2
+        rm -f "$inventory"
+        return 1
+    fi
+    if ! : >"$output"; then
+        echo "Could not create tree manifest output" >&2
+        rm -f "$inventory"
+        return 1
+    fi
+
+    while IFS= read -r -d '' entry; do
+        relative="${entry#./}"
+        full_path="$root/$relative"
+        if ! relative_hex="$(
+            set -o pipefail
+            printf '%s' "$relative" \
+                | LC_ALL=C od -An -v -tx1 \
+                | tr -d ' \n'
+        )"; then
+            echo "Could not encode tree path" >&2
+            result=1
+            break
+        fi
+        if [[ -L "$full_path" ]]; then
+            if ! target_hex="$(
+                set -o pipefail
+                readlink "$full_path" \
+                    | LC_ALL=C od -An -v -tx1 \
+                    | tr -d ' \n'
+            )"; then
+                echo "Could not read tree symlink: $relative" >&2
+                result=1
+                break
+            fi
+            if ! printf 'L\t%s\t%s\n' \
+                "$target_hex" "$relative_hex" >>"$output"; then
+                result=1
+                break
+            fi
+        elif [[ -d "$full_path" ]]; then
+            if ! mode="$(stat -f '%Lp' "$full_path")" \
+                || ! printf 'D\t%s\t%s\n' \
+                    "$mode" "$relative_hex" >>"$output"; then
+                echo "Could not record tree directory: $relative" >&2
+                result=1
+                break
+            fi
+        elif [[ -f "$full_path" ]]; then
+            if ! mode="$(stat -f '%Lp' "$full_path")" \
+                || ! size="$(stat -f '%z' "$full_path")" \
+                || ! digest="$(
+                    set -o pipefail
+                    shasum -a 256 "$full_path" | awk '{ print $1 }'
+                )" \
+                || [[ ! "$digest" =~ ^[0-9a-f]{64}$ ]] \
+                || ! printf 'F\t%s\t%s\t%s\t%s\n' \
+                    "$mode" "$size" "$digest" "$relative_hex" >>"$output"; then
+                echo "Could not hash tree file: $relative" >&2
+                result=1
+                break
+            fi
+        else
+            echo "Tree contains unsupported content: $relative" >&2
+            result=1
+            break
+        fi
+    done <"$inventory"
+
+    rm -f "$inventory"
+    if [[ "$result" != "0" ]]; then
+        rm -f "$output"
+        return "$result"
+    fi
+}
+
+validate_tree_matches_manifest() {
+    local root="$1"
+    local expected_manifest="$2"
+    local actual_manifest="$3"
+    local label="$4"
+
+    if [[ -L "$expected_manifest" || ! -f "$expected_manifest" ]]; then
+        echo "$label reference manifest is missing or unsafe" >&2
+        return 1
+    fi
+    create_tree_manifest "$root" "$actual_manifest" || return $?
+    if ! cmp -s "$expected_manifest" "$actual_manifest"; then
+        echo "$label content differs from the archived source" >&2
+        return 1
+    fi
+}
+
+publish_staged_directory() {
+    local staged_directory="$1"
+    local output_parent="$2"
+    local expected_name="$3"
+    local output_directory="$output_parent/$expected_name"
+
+    if [[ -L "$staged_directory" || ! -d "$staged_directory" \
+        || -L "$output_parent" || ! -d "$output_parent" \
+        || -z "$expected_name" || "$expected_name" == "." \
+        || "$expected_name" == ".." || "$expected_name" == */* \
+        || "$(/usr/bin/basename "$staged_directory")" != "$expected_name" ]]; then
+        echo "Staged publication paths are unsafe" >&2
+        return 73
+    fi
+
+    if ! /bin/mv -n "$staged_directory" "$output_parent/"; then
+        echo "Could not publish the staged output directory" >&2
+        return 73
+    fi
+    if [[ -e "$staged_directory" || -L "$staged_directory" \
+        || -L "$output_directory" || ! -d "$output_directory" ]]; then
+        echo "Output path appeared while building: $output_directory" >&2
+        return 73
+    fi
+}
+
+validate_single_directory_container_root() {
+    local root="$1"
+    local expected_name="$2"
     local entry
     local relative
     local seen=0
 
     validated_container_app=""
+    if [[ -z "$expected_name" || "$expected_name" == "." \
+        || "$expected_name" == ".." || "$expected_name" == */* ]]; then
+        echo "Container expected name is unsafe" >&2
+        return 1
+    fi
     if [[ -L "$root" || ! -d "$root" ]]; then
-        echo "ZIP extraction root is not a regular directory" >&2
+        echo "Container extraction root is not a regular directory" >&2
         return 1
     fi
     while IFS= read -r -d '' entry; do
         relative="${entry#"$root"/}"
-        if [[ "$relative" != "AgentLimitsForked.app" ]]; then
-            echo "ZIP contains unexpected top-level content: $relative" >&2
+        if [[ "$relative" != "$expected_name" ]]; then
+            echo "Container contains unexpected top-level content: $relative" >&2
             return 1
         fi
         ((seen += 1))
     done < <(find "$root" -mindepth 1 -maxdepth 1 -print0)
 
     if [[ "$seen" != "1" \
-        || -L "$root/AgentLimitsForked.app" \
-        || ! -d "$root/AgentLimitsForked.app" ]]; then
-        echo "ZIP must contain one regular AgentLimitsForked.app" >&2
+        || -L "$root/$expected_name" \
+        || ! -d "$root/$expected_name" ]]; then
+        echo "Container must contain one regular $expected_name" >&2
         return 1
     fi
-    validated_container_app="$root/AgentLimitsForked.app"
+    validated_container_app="$root/$expected_name"
+}
+
+validate_zip_container_root() {
+    validate_single_directory_container_root \
+        "$1" "AgentLimitsForked.app"
 }
 
 validate_dmg_container_root() {
