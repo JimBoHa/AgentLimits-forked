@@ -1,10 +1,30 @@
 import Darwin
+import Dispatch
 import Foundation
 import XCTest
 @testable import AgentLimits
 
 @MainActor
 final class LaunchAgentManagerTests: XCTestCase {
+    func testLaunchCtlWaitDoesNotReenterMainRunLoop() throws {
+        let reentrantMainCallback = DispatchSemaphore(value: 0)
+        DispatchQueue.main.async {
+            reentrantMainCallback.signal()
+        }
+
+        let result = try LaunchCtlProcessRunner.run(
+            arguments: ["-c", "exec 2>&-; sleep 0.1; exit 17"],
+            executableURL: URL(fileURLWithPath: "/bin/sh")
+        )
+
+        XCTAssertEqual(result.terminationStatus, 17)
+        XCTAssertEqual(
+            reentrantMainCallback.wait(timeout: .now()),
+            .timedOut,
+            "Waiting for process exit must not spin the main run loop"
+        )
+    }
+
     func testFailedBootstrapThrowsAndRemovesNewPlist() throws {
         let context = makeContext()
         defer { context.cleanup() }

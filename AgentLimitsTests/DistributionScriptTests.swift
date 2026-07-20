@@ -2,6 +2,632 @@ import Foundation
 import XCTest
 
 final class DistributionScriptTests: XCTestCase {
+    func testDependencySecurityConfigurationStaysEnforced() throws {
+        let configResult = try runDependencySecurityConfigValidator(
+            workflow: repositoryRoot.appendingPathComponent(
+                ".github/workflows/dependency-review.yml"
+            )
+        )
+        XCTAssertEqual(configResult.status, 0, configResult.output)
+
+        let registryResult = try runDependencyExceptionValidator(
+            registry: repositoryRoot.appendingPathComponent(
+                ".github/dependency-review-exceptions.json"
+            )
+        )
+        XCTAssertEqual(registryResult.status, 0, registryResult.output)
+        XCTAssertEqual(registryResult.output, "\n")
+    }
+
+    func testDependencyWorkflowRejectsCommentedSecurityDecoy() throws {
+        let workflow = try repositoryFile(".github/workflows/dependency-review.yml")
+            .replacingOccurrences(
+                of: "warn-only: false",
+                with: "warn-only: true # warn-only: false"
+            )
+        let fixture = try temporaryFile(
+            named: "dependency-review.yml",
+            contents: workflow
+        )
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+        let result = try runDependencySecurityConfigValidator(
+            workflow: fixture.file
+        )
+
+        XCTAssertEqual(result.status, 78, result.output)
+        XCTAssertTrue(
+            result.output.contains("dependency-review inputs changed"),
+            result.output
+        )
+    }
+
+    func testDependencyWorkflowRejectsSeverityWeakening() throws {
+        let workflow = try repositoryFile(".github/workflows/dependency-review.yml")
+            .replacingOccurrences(
+                of: "fail-on-severity: moderate",
+                with: "fail-on-severity: critical # fail-on-severity: moderate"
+            )
+        let fixture = try temporaryFile(
+            named: "dependency-review.yml",
+            contents: workflow
+        )
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+        let result = try runDependencySecurityConfigValidator(
+            workflow: fixture.file
+        )
+
+        XCTAssertEqual(result.status, 78, result.output)
+        XCTAssertTrue(
+            result.output.contains("dependency-review inputs changed"),
+            result.output
+        )
+    }
+
+    func testDependencyWorkflowRejectsSecretBearingStepNames() throws {
+        let workflow = try repositoryFile(".github/workflows/dependency-review.yml")
+        let forbiddenNames = [
+            #"${{ secrets["TOKEN"] }}"#,
+            #"${{ github.token }}"#,
+            #"${{ github['token'] }}"#
+        ]
+
+        for (index, forbiddenName) in forbiddenNames.enumerated() {
+            let contents = workflow.replacingOccurrences(
+                of: "name: Check out dependency policy",
+                with: "name: \(forbiddenName)"
+            )
+            let fixture = try temporaryFile(
+                named: "dependency-review-secret-name-\(index).yml",
+                contents: contents
+            )
+            defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+            let result = try runDependencySecurityConfigValidator(
+                workflow: fixture.file
+            )
+
+            XCTAssertEqual(result.status, 78, result.output)
+            XCTAssertTrue(
+                result.output.contains("checkout step name changed")
+                    || result.output.contains("references secrets or github.token"),
+                result.output
+            )
+        }
+    }
+
+    func testDependencyWorkflowRejectsUnregisteredException() throws {
+        let workflow = try repositoryFile(".github/workflows/dependency-review.yml")
+            .replacingOccurrences(
+                of: "${{ steps.dependency-exceptions.outputs.allow-ghsas }}",
+                with: "GHSA-2345-6789-cfgh"
+            )
+        let fixture = try temporaryFile(
+            named: "dependency-review.yml",
+            contents: workflow
+        )
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+        let result = try runDependencySecurityConfigValidator(
+            workflow: fixture.file
+        )
+
+        XCTAssertEqual(result.status, 78, result.output)
+        XCTAssertTrue(
+            result.output.contains("dependency-review inputs changed"),
+            result.output
+        )
+    }
+
+    func testDependencyWorkflowRejectsMultipleYAMLDocuments() throws {
+        let workflow = try repositoryFile(".github/workflows/dependency-review.yml")
+            + "\n---\nname: Decoy\n"
+        let fixture = try temporaryFile(
+            named: "dependency-review.yml",
+            contents: workflow
+        )
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+        let result = try runDependencySecurityConfigValidator(
+            workflow: fixture.file
+        )
+
+        XCTAssertEqual(result.status, 78, result.output)
+        XCTAssertTrue(
+            result.output.contains("exactly one YAML document"),
+            result.output
+        )
+    }
+
+    func testDependabotRejectsMultipleYAMLDocuments() throws {
+        let dependabot = try repositoryFile(".github/dependabot.yml")
+            + "\n---\nversion: 2\nupdates: []\n"
+        let fixture = try temporaryFile(
+            named: "dependabot.yml",
+            contents: dependabot
+        )
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+        let result = try runDependencySecurityConfigValidator(
+            workflow: repositoryRoot.appendingPathComponent(
+                ".github/workflows/dependency-review.yml"
+            ),
+            dependabot: fixture.file
+        )
+
+        XCTAssertEqual(result.status, 78, result.output)
+        XCTAssertTrue(
+            result.output.contains("exactly one YAML document"),
+            result.output
+        )
+    }
+
+    func testDependencyWorkflowRejectsDuplicateYAMLMappingKeys() throws {
+        let workflow = try repositoryFile(".github/workflows/dependency-review.yml")
+        let duplicateWorkflows = [
+            "name: Decoy\n" + workflow,
+            workflow.replacingOccurrences(
+                of: "          warn-only: false",
+                with: "          warn-only: true\n          warn-only: false"
+            )
+        ]
+
+        for (index, contents) in duplicateWorkflows.enumerated() {
+            let fixture = try temporaryFile(
+                named: "dependency-review-\(index).yml",
+                contents: contents
+            )
+            defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+            let result = try runDependencySecurityConfigValidator(
+                workflow: fixture.file
+            )
+
+            XCTAssertEqual(result.status, 78, result.output)
+            XCTAssertTrue(
+                result.output.contains("duplicate YAML mapping key"),
+                result.output
+            )
+        }
+    }
+
+    func testDependabotRejectsDuplicateYAMLMappingKeys() throws {
+        let dependabot = try repositoryFile(".github/dependabot.yml")
+        let duplicateConfigurations = [
+            "version: 1\n" + dependabot,
+            dependabot.replacingOccurrences(
+                of: "      interval: weekly",
+                with: "      interval: daily\n      interval: weekly"
+            )
+        ]
+
+        for (index, contents) in duplicateConfigurations.enumerated() {
+            let fixture = try temporaryFile(
+                named: "dependabot-\(index).yml",
+                contents: contents
+            )
+            defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+            let result = try runDependencySecurityConfigValidator(
+                workflow: repositoryRoot.appendingPathComponent(
+                    ".github/workflows/dependency-review.yml"
+                ),
+                dependabot: fixture.file
+            )
+
+            XCTAssertEqual(result.status, 78, result.output)
+            XCTAssertTrue(
+                result.output.contains("duplicate YAML mapping key"),
+                result.output
+            )
+        }
+    }
+
+    func testDependencyExceptionRegistryRejectsExpiredRecord() throws {
+        let fixture = try temporaryFile(
+            named: "dependency-review-exceptions.json",
+            contents: dependencyExceptionRegistry(expiresOn: "2000-01-01")
+        )
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+        let result = try runDependencyExceptionValidator(registry: fixture.file)
+
+        XCTAssertEqual(result.status, 78, result.output)
+        XCTAssertTrue(result.output.contains("expired record"), result.output)
+    }
+
+    func testDependencyExceptionRegistryRejectsHiddenExpiredRecord() throws {
+        let contents = dependencyExceptionRegistry(expiresOn: "2000-01-01") + "\n" + """
+        {
+          "schema_version": 1,
+          "exceptions": []
+        }
+        """
+        let fixture = try temporaryFile(
+            named: "dependency-review-exceptions.json",
+            contents: contents
+        )
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+        let result = try runDependencyExceptionValidator(registry: fixture.file)
+
+        XCTAssertEqual(result.status, 78, result.output)
+        XCTAssertTrue(result.output.contains("expired record"), result.output)
+    }
+
+    func testDependencyExceptionRegistryRejectsDuplicateObjectKeys() throws {
+        let registry = dependencyExceptionRegistry(expiresOn: "2099-01-01")
+        let duplicateRegistries = [
+            registry.replacingOccurrences(
+                of: #""schema_version": 1,"#,
+                with: #""schema_version": 1, "\u0073chema_version": 1,"#
+            ),
+            registry.replacingOccurrences(
+                of: #""exceptions": ["#,
+                with: #""exceptions": [], "exceptions": ["#
+            ),
+            registry.replacingOccurrences(
+                of: #""owner": "@JimBoHa","#,
+                with: #""owner": "@attacker", "owner": "@JimBoHa","#
+            )
+        ]
+
+        for (index, contents) in duplicateRegistries.enumerated() {
+            let result = try validateDependencyExceptionRegistry(contents)
+
+            XCTAssertEqual(result.status, 78, "fixture \(index): \(result.output)")
+            XCTAssertTrue(
+                result.output.contains("duplicate object key"),
+                "fixture \(index): \(result.output)"
+            )
+        }
+    }
+
+    func testDependencyExceptionRegistryRejectsNonCanonicalIdentities() throws {
+        let registry = dependencyExceptionRegistry(expiresOn: "2099-01-01")
+        let invalidValues = [
+            (
+                "owner line feed",
+                registry.replacingOccurrences(
+                    of: #""owner": "@JimBoHa""#,
+                    with: #""owner": "@JimBoHa\n""#
+                )
+            ),
+            (
+                "owner whitespace",
+                registry.replacingOccurrences(
+                    of: #""owner": "@JimBoHa""#,
+                    with: #""owner": "@JimBoHa ""#
+                )
+            ),
+            (
+                "tracking line feed",
+                registry.replacingOccurrences(
+                    of: #"issues/1""#,
+                    with: #"issues/1\n""#
+                )
+            ),
+            (
+                "tracking control",
+                registry.replacingOccurrences(
+                    of: #"issues/1""#,
+                    with: #"issues/1\u0001""#
+                )
+            ),
+            (
+                "package whitespace",
+                registry.replacingOccurrences(
+                    of: #"Sparkle@2.9.4""#,
+                    with: #"Sparkle@2.9.4 ""#
+                )
+            ),
+            (
+                "package control",
+                registry.replacingOccurrences(
+                    of: #"Sparkle@2.9.4""#,
+                    with: #"Sparkle@2.9.4\u0001""#
+                )
+            ),
+            (
+                "package suffix",
+                registry.replacingOccurrences(
+                    of: #"Sparkle@2.9.4""#,
+                    with: #"Sparkle@2.9.4?download=untrusted""#
+                )
+            )
+        ]
+
+        for (label, contents) in invalidValues {
+            let result = try validateDependencyExceptionRegistry(contents)
+
+            XCTAssertEqual(result.status, 78, "\(label): \(result.output)")
+        }
+    }
+
+    func testDependencyExceptionRegistryRejectsInvalidSemVerPrereleases() throws {
+        let registry = dependencyExceptionRegistry(expiresOn: "2099-01-01")
+        let invalidVersions = ["2.9.4-01", "2.9.4-alpha.01"]
+
+        for version in invalidVersions {
+            let contents = registry.replacingOccurrences(
+                of: "Sparkle@2.9.4",
+                with: "Sparkle@\(version)"
+            )
+            let result = try validateDependencyExceptionRegistry(contents)
+
+            XCTAssertEqual(result.status, 78, "\(version): \(result.output)")
+        }
+    }
+
+    func testDependencyExceptionRegistryRejectsMissingSwiftSourceHost() throws {
+        let registry = dependencyExceptionRegistry(expiresOn: "2099-01-01")
+            .replacingOccurrences(
+                of: "pkg:swift/github.com/sparkle-project/Sparkle@2.9.4",
+                with: "pkg:swift/sparkle-project/Sparkle@2.9.4"
+            )
+
+        let result = try validateDependencyExceptionRegistry(registry)
+
+        XCTAssertEqual(result.status, 78, result.output)
+    }
+
+    func testDependencyExceptionRegistryAcceptsSemVerPrereleaseBoundaries() throws {
+        let registry = dependencyExceptionRegistry(expiresOn: "2099-01-01")
+        let validVersions = [
+            "2.9.4-0",
+            "2.9.4-1",
+            "2.9.4-01alpha",
+            "2.9.4-alpha.0",
+            "2.9.4+01"
+        ]
+
+        for version in validVersions {
+            let contents = registry.replacingOccurrences(
+                of: "Sparkle@2.9.4",
+                with: "Sparkle@\(version)"
+            )
+            let result = try validateDependencyExceptionRegistry(contents)
+
+            XCTAssertEqual(result.status, 0, "\(version): \(result.output)")
+            XCTAssertEqual(result.output, "GHSA-2345-6789-cfgh\n")
+        }
+    }
+
+    func testDependencyExceptionRegistryEmitsOnlyRegisteredAdvisories() throws {
+        let fixture = try temporaryFile(
+            named: "dependency-review-exceptions.json",
+            contents: dependencyExceptionRegistry(expiresOn: "2099-01-01")
+        )
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+        let result = try runDependencyExceptionValidator(registry: fixture.file)
+
+        XCTAssertEqual(result.status, 0, result.output)
+        XCTAssertEqual(result.output, "GHSA-2345-6789-cfgh\n")
+    }
+
+    func testDependencyExceptionPullRequestBootstrapRequiresEmptyRegistry()
+        throws
+    {
+        let passing = try dependencyPolicyRepository(registry: nil)
+        defer { try? FileManager.default.removeItem(at: passing.directory) }
+        try writeDependencyRegistry(
+            emptyDependencyExceptionRegistry,
+            in: passing.directory
+        )
+        try Data("policy\n".utf8).write(
+            to: passing.directory.appendingPathComponent("Policy.txt")
+        )
+        let passingHead = try commitAll(
+            in: passing.directory,
+            message: "bootstrap"
+        )
+
+        let passingResult = try runDependencyExceptionPullRequestValidator(
+            repository: passing.directory,
+            baseSHA: passing.baseSHA,
+            headSHA: passingHead
+        )
+
+        XCTAssertEqual(passingResult.status, 0, passingResult.output)
+        XCTAssertEqual(passingResult.githubOutput, "allow-ghsas=\n")
+
+        let rejected = try dependencyPolicyRepository(registry: nil)
+        defer { try? FileManager.default.removeItem(at: rejected.directory) }
+        try writeDependencyRegistry(
+            dependencyExceptionRegistry(expiresOn: "2099-01-01"),
+            in: rejected.directory
+        )
+        let rejectedHead = try commitAll(
+            in: rejected.directory,
+            message: "unsafe bootstrap"
+        )
+
+        let rejectedResult = try runDependencyExceptionPullRequestValidator(
+            repository: rejected.directory,
+            baseSHA: rejected.baseSHA,
+            headSHA: rejectedHead
+        )
+
+        XCTAssertEqual(rejectedResult.status, 78, rejectedResult.output)
+        XCTAssertEqual(rejectedResult.githubOutput, "")
+    }
+
+    func testDependencyExceptionPullRequestUsesUnchangedRegistry() throws {
+        let fixture = try dependencyPolicyRepository(
+            registry: dependencyExceptionRegistry(expiresOn: "2099-01-01")
+        )
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+        try Data("source change\n".utf8).write(
+            to: fixture.directory.appendingPathComponent("Source.txt")
+        )
+        let head = try commitAll(in: fixture.directory, message: "source change")
+
+        let result = try runDependencyExceptionPullRequestValidator(
+            repository: fixture.directory,
+            baseSHA: fixture.baseSHA,
+            headSHA: head
+        )
+
+        XCTAssertEqual(result.status, 0, result.output)
+        XCTAssertEqual(
+            result.githubOutput,
+            "allow-ghsas=GHSA-2345-6789-cfgh\n"
+        )
+    }
+
+    func testDependencyExceptionPullRequestDefersRegistryOnlyChange() throws {
+        let fixture = try dependencyPolicyRepository(
+            registry: emptyDependencyExceptionRegistry
+        )
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+        try writeDependencyRegistry(
+            dependencyExceptionRegistry(expiresOn: "2099-01-01"),
+            in: fixture.directory
+        )
+        let head = try commitAll(in: fixture.directory, message: "add exception")
+
+        let result = try runDependencyExceptionPullRequestValidator(
+            repository: fixture.directory,
+            baseSHA: fixture.baseSHA,
+            headSHA: head
+        )
+
+        XCTAssertEqual(result.status, 0, result.output)
+        XCTAssertEqual(result.githubOutput, "allow-ghsas=\n")
+    }
+
+    func testDependencyExceptionPullRequestRejectsMixedRegistryChange() throws {
+        let fixture = try dependencyPolicyRepository(
+            registry: emptyDependencyExceptionRegistry
+        )
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+        try writeDependencyRegistry(
+            dependencyExceptionRegistry(expiresOn: "2099-01-01"),
+            in: fixture.directory
+        )
+        try Data("mixed\n".utf8).write(
+            to: fixture.directory.appendingPathComponent("Source.txt")
+        )
+        let head = try commitAll(in: fixture.directory, message: "mixed change")
+
+        let result = try runDependencyExceptionPullRequestValidator(
+            repository: fixture.directory,
+            baseSHA: fixture.baseSHA,
+            headSHA: head
+        )
+
+        XCTAssertEqual(result.status, 78, result.output)
+        XCTAssertTrue(result.output.contains("registry-only"), result.output)
+        XCTAssertEqual(result.githubOutput, "")
+    }
+
+    func testDependencyExceptionPullRequestUsesRegistryAddedToDivergedBase()
+        throws
+    {
+        let fixture = try dependencyPolicyRepository(registry: nil)
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+        _ = try runGit(["switch", "-q", "-c", "feature"], in: fixture.directory)
+        try Data("source change\n".utf8).write(
+            to: fixture.directory.appendingPathComponent("Source.txt")
+        )
+        let featureHead = try commitAll(
+            in: fixture.directory,
+            message: "source change"
+        )
+
+        _ = try runGit(["switch", "-q", "main"], in: fixture.directory)
+        try writeDependencyRegistry(
+            emptyDependencyExceptionRegistry,
+            in: fixture.directory
+        )
+        let updatedBase = try commitAll(
+            in: fixture.directory,
+            message: "bootstrap registry"
+        )
+        _ = try runGit(
+            ["merge", "-q", "--no-ff", "feature", "-m", "merge fixture"],
+            in: fixture.directory
+        )
+
+        let result = try runDependencyExceptionPullRequestValidator(
+            repository: fixture.directory,
+            baseSHA: updatedBase,
+            headSHA: featureHead
+        )
+
+        XCTAssertEqual(result.status, 0, result.output)
+        XCTAssertEqual(result.githubOutput, "allow-ghsas=\n")
+    }
+
+    func testDependencyExceptionPullRequestAllowsDivergedRegistryOnlyChange()
+        throws
+    {
+        let fixture = try dependencyPolicyRepository(
+            registry: emptyDependencyExceptionRegistry
+        )
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+        _ = try runGit(["switch", "-q", "-c", "feature"], in: fixture.directory)
+        try writeDependencyRegistry(
+            dependencyExceptionRegistry(expiresOn: "2099-01-01"),
+            in: fixture.directory
+        )
+        let featureHead = try commitAll(
+            in: fixture.directory,
+            message: "add exception"
+        )
+
+        _ = try runGit(["switch", "-q", "main"], in: fixture.directory)
+        try Data("base-only\n".utf8).write(
+            to: fixture.directory.appendingPathComponent("BaseOnly.txt")
+        )
+        let updatedBase = try commitAll(
+            in: fixture.directory,
+            message: "advance base"
+        )
+        _ = try runGit(
+            ["merge", "-q", "--no-ff", "feature", "-m", "merge fixture"],
+            in: fixture.directory
+        )
+
+        let result = try runDependencyExceptionPullRequestValidator(
+            repository: fixture.directory,
+            baseSHA: updatedBase,
+            headSHA: featureHead
+        )
+
+        XCTAssertEqual(result.status, 0, result.output)
+        XCTAssertEqual(result.githubOutput, "allow-ghsas=\n")
+    }
+
+    func testDependencyExceptionPullRequestRejectsUnrelatedHistories() throws {
+        let fixture = try dependencyPolicyRepository(
+            registry: emptyDependencyExceptionRegistry
+        )
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+        let tree = try runGit(
+            ["rev-parse", "HEAD^{tree}"],
+            in: fixture.directory
+        ).trimmingCharacters(in: .whitespacesAndNewlines)
+        let unrelatedHead = try runGit(
+            ["commit-tree", tree, "-m", "unrelated root"],
+            in: fixture.directory
+        ).trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let result = try runDependencyExceptionPullRequestValidator(
+            repository: fixture.directory,
+            baseSHA: fixture.baseSHA,
+            headSHA: unrelatedHead
+        )
+
+        XCTAssertEqual(result.status, 78, result.output)
+        XCTAssertTrue(result.output.contains("merge base"), result.output)
+        XCTAssertEqual(result.githubOutput, "")
+    }
+
     func testSigningConfigAcceptsOnlyCanonicalTeamAssignment() throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -2388,6 +3014,149 @@ final class DistributionScriptTests: XCTestCase {
         )
     }
 
+    private func repositoryFile(_ path: String) throws -> String {
+        try String(
+            contentsOf: repositoryRoot.appendingPathComponent(path),
+            encoding: .utf8
+        )
+    }
+
+    private func temporaryFile(
+        named name: String,
+        contents: String
+    ) throws -> (directory: URL, file: URL) {
+        let directory = try temporaryDirectory()
+        let file = directory.appendingPathComponent(name)
+        try Data(contents.utf8).write(to: file)
+        return (directory, file)
+    }
+
+    private func dependencyExceptionRegistry(expiresOn: String) -> String {
+        """
+        {
+          "schema_version": 1,
+          "exceptions": [
+            {
+              "advisory_url": "https://github.com/advisories/GHSA-2345-6789-cfgh",
+              "affected_packages": ["pkg:swift/github.com/sparkle-project/Sparkle@2.9.4"],
+              "compensating_controls": "Affected path is disabled until upgrade.",
+              "expires_on": "\(expiresOn)",
+              "ghsa": "GHSA-2345-6789-cfgh",
+              "justification": "No patched release is currently available.",
+              "owner": "@JimBoHa",
+              "tracking_issue": "https://github.com/JimBoHa/AgentLimits-forked/issues/1"
+            }
+          ]
+        }
+        """
+    }
+
+    private var emptyDependencyExceptionRegistry: String {
+        """
+        {
+          "schema_version": 1,
+          "exceptions": []
+        }
+        """
+    }
+
+    private func validateDependencyExceptionRegistry(
+        _ contents: String
+    ) throws -> (status: Int32, output: String) {
+        let fixture = try temporaryFile(
+            named: "dependency-review-exceptions.json",
+            contents: contents
+        )
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+        return try runDependencyExceptionValidator(registry: fixture.file)
+    }
+
+    private func dependencyPolicyRepository(
+        registry: String?
+    ) throws -> (directory: URL, baseSHA: String) {
+        let directory = try temporaryDirectory()
+        _ = try runGit(["init", "-q", "-b", "main"], in: directory)
+        _ = try runGit(
+            ["config", "user.name", "Dependency Policy Fixture"],
+            in: directory
+        )
+        _ = try runGit(
+            ["config", "user.email", "fixture@example.invalid"],
+            in: directory
+        )
+        try Data("base\n".utf8).write(
+            to: directory.appendingPathComponent("Marker.txt")
+        )
+        if let registry {
+            try writeDependencyRegistry(registry, in: directory)
+        }
+        let baseSHA = try commitAll(in: directory, message: "base")
+        return (directory, baseSHA)
+    }
+
+    private func writeDependencyRegistry(
+        _ contents: String,
+        in directory: URL
+    ) throws {
+        let github = directory.appendingPathComponent(".github")
+        try FileManager.default.createDirectory(
+            at: github,
+            withIntermediateDirectories: true
+        )
+        try Data(contents.utf8).write(
+            to: github.appendingPathComponent(
+                "dependency-review-exceptions.json"
+            )
+        )
+    }
+
+    private func commitAll(in directory: URL, message: String) throws -> String {
+        _ = try runGit(["add", "--all"], in: directory)
+        _ = try runGit(["commit", "-q", "-m", message], in: directory)
+        return try runGit(["rev-parse", "HEAD"], in: directory)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func runGit(
+        _ arguments: [String],
+        in directory: URL
+    ) throws -> String {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+        process.arguments = arguments
+        process.currentDirectoryURL = directory
+        process.environment = dependencyPolicyProcessEnvironment()
+        let output = Pipe()
+        process.standardOutput = output
+        process.standardError = output
+        try process.run()
+        process.waitUntilExit()
+        let text = String(
+            decoding: output.fileHandleForReading.readDataToEndOfFile(),
+            as: UTF8.self
+        )
+        guard process.terminationStatus == 0 else {
+            throw NSError(
+                domain: "DependencyPolicyGitFixture",
+                code: Int(process.terminationStatus),
+                userInfo: [NSLocalizedDescriptionKey: text]
+            )
+        }
+        return text
+    }
+
+    private func dependencyPolicyProcessEnvironment() -> [String: String] {
+        var environment = ProcessInfo.processInfo.environment
+        environment.keys
+            .filter { $0.hasPrefix("GIT_") }
+            .forEach { environment.removeValue(forKey: $0) }
+        environment["GIT_CONFIG_GLOBAL"] = "/dev/null"
+        environment["GIT_CONFIG_NOSYSTEM"] = "1"
+        environment["LC_ALL"] = "C"
+        environment["PATH"] = "/usr/bin:/bin"
+        return environment
+    }
+
     private func schemeDocument(named name: String) throws -> XMLDocument {
         let path = "AgentLimits.xcodeproj/xcshareddata/xcschemes/\(name).xcscheme"
         return try XMLDocument(
@@ -2598,6 +3367,95 @@ final class DistributionScriptTests: XCTestCase {
         return (
             process.terminationStatus,
             String(decoding: data, as: UTF8.self)
+        )
+    }
+
+    private func runDependencySecurityConfigValidator(
+        workflow: URL,
+        dependabot: URL? = nil
+    ) throws -> (status: Int32, output: String) {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/ruby")
+        process.arguments = [
+            repositoryRoot.appendingPathComponent(
+                "Scripts/validate-dependency-security-config.rb"
+            ).path,
+            workflow.path,
+            (dependabot ?? repositoryRoot.appendingPathComponent(
+                ".github/dependabot.yml"
+            )).path
+        ]
+        let output = Pipe()
+        process.standardOutput = output
+        process.standardError = output
+        try process.run()
+        process.waitUntilExit()
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        return (
+            process.terminationStatus,
+            String(decoding: data, as: UTF8.self)
+        )
+    }
+
+    private func runDependencyExceptionValidator(
+        registry: URL
+    ) throws -> (status: Int32, output: String) {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/bash")
+        process.arguments = [
+            repositoryRoot.appendingPathComponent(
+                "Scripts/dependency-exceptions.sh"
+            ).path,
+            "validate",
+            registry.path
+        ]
+        let output = Pipe()
+        process.standardOutput = output
+        process.standardError = output
+        try process.run()
+        process.waitUntilExit()
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        return (
+            process.terminationStatus,
+            String(decoding: data, as: UTF8.self)
+        )
+    }
+
+    private func runDependencyExceptionPullRequestValidator(
+        repository: URL,
+        baseSHA: String,
+        headSHA: String
+    ) throws -> (status: Int32, output: String, githubOutput: String) {
+        let githubOutput = FileManager.default.temporaryDirectory
+            .appendingPathComponent("dependency-output-\(UUID().uuidString)")
+        try Data().write(to: githubOutput)
+        defer { try? FileManager.default.removeItem(at: githubOutput) }
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/bash")
+        process.arguments = [
+            repositoryRoot.appendingPathComponent(
+                "Scripts/dependency-exceptions.sh"
+            ).path,
+            "prepare-pull-request",
+            ".github/dependency-review-exceptions.json",
+            baseSHA,
+            headSHA,
+            githubOutput.path
+        ]
+        process.currentDirectoryURL = repository
+        process.environment = dependencyPolicyProcessEnvironment()
+        let output = Pipe()
+        process.standardOutput = output
+        process.standardError = output
+        try process.run()
+        process.waitUntilExit()
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        let emitted = try String(contentsOf: githubOutput, encoding: .utf8)
+        return (
+            process.terminationStatus,
+            String(decoding: data, as: UTF8.self),
+            emitted
         )
     }
 
