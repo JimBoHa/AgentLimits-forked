@@ -88,6 +88,15 @@ the Team, signing identity, and provisioning metadata.
 
 ## Signed iOS and watchOS export
 
+Signed workflows require a canonical absolute output path whose parent already
+exists, is owned by the current user, and grants no group/other or mutating ACL
+write access. They ignore caller temporary-directory overrides, hold an exclusive
+per-destination lock, and build in a private same-filesystem sibling directory.
+The requested output appears only through macOS `RENAME_EXCL` no-clobber atomic
+rename after final source, signing-config, signature, container, and checksum
+validation succeeds. Filesystems without exclusive-rename support fail closed.
+Existing files, directories, and symlinks are never overwritten.
+
 For App Store Connect:
 
 ```sh

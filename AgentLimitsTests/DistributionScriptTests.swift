@@ -70,6 +70,7 @@ final class DistributionScriptTests: XCTestCase {
         for name in ["package-macos.sh", "export-ios.sh"] {
             let script = try releaseScript(named: name)
             XCTAssertTrue(script.contains("source \"$script_dir/signing-config.sh\""), name)
+            XCTAssertTrue(script.contains("source \"$script_dir/release-output.sh\""), name)
             XCTAssertTrue(script.contains("git -C \"$project_root\" archive"), name)
             XCTAssertTrue(script.contains("$build_root/AgentLimits.xcodeproj"), name)
             XCTAssertTrue(
@@ -82,6 +83,322 @@ final class DistributionScriptTests: XCTestCase {
                 name
             )
         }
+    }
+
+    func testSignedReleaseScriptsPublishOnlyAfterFinalSourceFence() throws {
+        for name in ["package-macos.sh", "export-ios.sh"] {
+            let script = try releaseScript(named: name)
+            let dirtyRejection = try offset(of: "Refusing a signed", in: script)
+            let lock = try offset(of: "acquire_release_publication_lock", in: script)
+            let stage = try offset(of: "create_release_staging_directory", in: script)
+            let publish = try offset(of: "publish_staged_release_directory", in: script)
+
+            XCTAssertLessThan(dirtyRejection, lock, name)
+            XCTAssertLessThan(lock, stage, name)
+            XCTAssertLessThan(stage, publish, name)
+            XCTAssertTrue(
+                script.contains(
+                    "verify_source_unchanged\npublish_staged_release_directory"
+                ),
+                name
+            )
+            XCTAssertTrue(script.contains("output_dir=\"$staging_dir\""), name)
+            XCTAssertTrue(script.contains("release_output_dir"), name)
+            XCTAssertTrue(
+                script.contains("configure_private_release_temporary_directory"),
+                name
+            )
+            XCTAssertFalse(script.contains("${TMPDIR:-"), name)
+        }
+    }
+
+    func testSignedPublicationUsesAtomicExclusiveRenameHelper() throws {
+        let helper = try releaseScript(named: "release-output.sh")
+        let publisher = try releaseScript(named: "atomic-release-publish.c")
+
+        XCTAssertTrue(publisher.contains("renamex_np"))
+        XCTAssertTrue(publisher.contains("RENAME_EXCL"))
+        XCTAssertTrue(publisher.contains("RENAME_NOFOLLOW_ANY"))
+        XCTAssertTrue(helper.contains("/usr/bin/xcrun --sdk macosx clang"))
+        XCTAssertTrue(helper.contains("verify_atomic_release_publisher"))
+        XCTAssertFalse(helper.contains("/bin/mv -n"))
+        for name in ["package-macos.sh", "export-ios.sh"] {
+            let script = try releaseScript(named: name)
+            XCTAssertTrue(
+                script.contains(
+                    "$build_root/Scripts/atomic-release-publish.c"
+                ),
+                name
+            )
+        }
+    }
+
+    func testReleaseOutputRejectsRelativeTraversalAndSymlinkAliases() throws {
+        let directory = try releaseTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let child = directory.appendingPathComponent("child")
+        try FileManager.default.createDirectory(at: child, withIntermediateDirectories: false)
+        let parentLink = directory.appendingPathComponent("parent-link")
+        try FileManager.default.createSymbolicLink(
+            at: parentLink,
+            withDestinationURL: child
+        )
+        let command = #"source "$1"; validate_release_output_request "$2" "$3"; exit $?"#
+
+        var result = try runReleaseOutputHelper(
+            command: command,
+            arguments: ["relative-output", repositoryRoot.path]
+        )
+        XCTAssertEqual(result.status, 64, result.output)
+
+        result = try runReleaseOutputHelper(
+            command: command,
+            arguments: [
+                child.appendingPathComponent("../result").path,
+                repositoryRoot.path
+            ]
+        )
+        XCTAssertEqual(result.status, 64, result.output)
+
+        result = try runReleaseOutputHelper(
+            command: command,
+            arguments: [
+                parentLink.appendingPathComponent("result").path,
+                repositoryRoot.path
+            ]
+        )
+        XCTAssertEqual(result.status, 73, result.output)
+    }
+
+    func testReleaseOutputRejectsExistingAndDanglingTargets() throws {
+        let directory = try releaseTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let existingFile = directory.appendingPathComponent("existing-file")
+        let existingDirectory = directory.appendingPathComponent("existing-directory")
+        let dangling = directory.appendingPathComponent("dangling")
+        try Data("occupied".utf8).write(to: existingFile)
+        try FileManager.default.createDirectory(
+            at: existingDirectory,
+            withIntermediateDirectories: false
+        )
+        try FileManager.default.createSymbolicLink(
+            atPath: dangling.path,
+            withDestinationPath: directory.appendingPathComponent("missing").path
+        )
+        let command = #"source "$1"; validate_release_output_request "$2" "$3"; exit $?"#
+
+        for target in [existingFile, existingDirectory, dangling] {
+            let result = try runReleaseOutputHelper(
+                command: command,
+                arguments: [target.path, repositoryRoot.path]
+            )
+            XCTAssertEqual(result.status, 73, "\(target.lastPathComponent): \(result.output)")
+        }
+    }
+
+    func testReleaseOutputRejectsExternallyWritableParentAndMutatingACL() throws {
+        let directory = try releaseTemporaryDirectory()
+        defer {
+            _ = try? runProcess(
+                executable: "/bin/chmod",
+                arguments: ["-N", directory.path]
+            )
+            try? FileManager.default.removeItem(at: directory)
+        }
+        let output = directory.appendingPathComponent("result")
+        let command = #"source "$1"; validate_release_output_request "$2" "$3"; exit $?"#
+
+        try setPermissions(0o722, for: directory)
+        var result = try runReleaseOutputHelper(
+            command: command,
+            arguments: [output.path, repositoryRoot.path]
+        )
+        XCTAssertEqual(result.status, 73, result.output)
+
+        try setPermissions(0o700, for: directory)
+        let aclResult = try runProcess(
+            executable: "/bin/chmod",
+            arguments: ["+a", "everyone allow add_file", directory.path]
+        )
+        XCTAssertEqual(aclResult.status, 0, aclResult.output)
+        result = try runReleaseOutputHelper(
+            command: command,
+            arguments: [output.path, repositoryRoot.path]
+        )
+        XCTAssertEqual(result.status, 73, result.output)
+    }
+
+    func testReleasePublicationLockIsExclusiveAndNoClobber() throws {
+        let directory = try releaseTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let output = directory.appendingPathComponent("result")
+        let command = #"source "$1"; validate_release_output_request "$2" "$3" || exit $?; parent="$validated_release_output_parent"; parent_id="$validated_release_output_parent_identity"; name="$validated_release_output_name"; acquire_release_publication_lock "$parent" "$name" "$parent_id" || exit $?; lock="$validated_release_publication_lock"; lock_id="$validated_release_publication_lock_identity"; second=0; acquire_release_publication_lock "$parent" "$name" "$parent_id" || second=$?; printf '%s\n' "$second"; release_release_publication_lock "$lock" "$lock_id" "$parent" "$name" || exit $?; [[ "$second" == 73 ]]"#
+
+        let result = try runReleaseOutputHelper(
+            command: command,
+            arguments: [output.path, repositoryRoot.path]
+        )
+
+        XCTAssertEqual(result.status, 0, result.output)
+        XCTAssertTrue(result.output.contains("73"), result.output)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: output.path))
+        XCTAssertEqual(
+            try FileManager.default.contentsOfDirectory(atPath: directory.path),
+            []
+        )
+    }
+
+    func testReleasePublicationRejectsExistingEmptyDestination() throws {
+        let directory = try releaseTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let output = directory.appendingPathComponent("result")
+        let command = #"source "$1"; validate_release_output_request "$2" "$3" || exit $?; parent="$validated_release_output_parent"; parent_id="$validated_release_output_parent_identity"; name="$validated_release_output_name"; build_atomic_release_publisher "$4" "$parent/atomic-release-publish" || exit $?; publisher="$validated_release_atomic_publisher"; publisher_id="$validated_release_atomic_publisher_identity"; publisher_hash="$validated_release_atomic_publisher_hash"; acquire_release_publication_lock "$parent" "$name" "$parent_id" || exit $?; lock="$validated_release_publication_lock"; lock_id="$validated_release_publication_lock_identity"; create_release_staging_directory "$parent" "$name" "$parent_id" race || exit $?; stage_parent="$validated_release_staging_parent"; stage_parent_id="$validated_release_staging_parent_identity"; stage="$validated_release_staging_directory"; stage_id="$validated_release_staging_directory_identity"; touch "$stage/staged"; mkdir "$parent/$name"; competitor_id="$(release_path_identity "$parent/$name")"; publish=0; publish_staged_release_directory "$stage" "$stage_id" "$parent" "$parent_id" "$name" "$publisher" "$publisher_id" "$publisher_hash" || publish=$?; [[ "$publish" == 73 && -f "$stage/staged" && -d "$parent/$name" && "$(release_path_identity "$parent/$name")" == "$competitor_id" && -z "$(find "$parent/$name" -mindepth 1 -print -quit)" ]] || exit 1; rmdir "$parent/$name"; cleanup_private_release_directory "$stage_parent" "$stage_parent_id" "$parent" '^\.AgentLimits-race-stage\.[A-Za-z0-9]{6}$' || exit $?; release_release_publication_lock "$lock" "$lock_id" "$parent" "$name" || exit $?; rm "$publisher""#
+
+        let result = try runReleaseOutputHelper(
+            command: command,
+            arguments: [
+                output.path,
+                repositoryRoot.path,
+                repositoryRoot.appendingPathComponent(
+                    "Scripts/atomic-release-publish.c"
+                ).path
+            ]
+        )
+
+        XCTAssertEqual(result.status, 0, result.output)
+        XCTAssertEqual(
+            try FileManager.default.contentsOfDirectory(atPath: directory.path),
+            []
+        )
+    }
+
+    func testAtomicPublisherNeverReplacesEmptyDestination() throws {
+        let directory = try releaseTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let source = directory.appendingPathComponent("source")
+        let destination = directory.appendingPathComponent("destination")
+        let publisher = directory.appendingPathComponent("atomic-release-publish")
+        try FileManager.default.createDirectory(
+            at: source,
+            withIntermediateDirectories: false
+        )
+        try FileManager.default.createDirectory(
+            at: destination,
+            withIntermediateDirectories: false
+        )
+        try Data("staged".utf8).write(
+            to: source.appendingPathComponent("payload")
+        )
+        let build = try runReleaseOutputHelper(
+            command: #"source "$1"; build_atomic_release_publisher "$2" "$3""#,
+            arguments: [
+                repositoryRoot.appendingPathComponent(
+                    "Scripts/atomic-release-publish.c"
+                ).path,
+                publisher.path
+            ]
+        )
+        XCTAssertEqual(build.status, 0, build.output)
+        let sourceIdentity = try fileIdentity(at: source)
+        let destinationIdentity = try fileIdentity(at: destination)
+
+        let result = try runProcess(
+            executable: publisher.path,
+            arguments: [source.path, destination.path]
+        )
+
+        XCTAssertEqual(result.status, 73, result.output)
+        XCTAssertEqual(try fileIdentity(at: source), sourceIdentity)
+        XCTAssertEqual(try fileIdentity(at: destination), destinationIdentity)
+        XCTAssertTrue(
+            FileManager.default.fileExists(
+                atPath: source.appendingPathComponent("payload").path
+            )
+        )
+        XCTAssertEqual(
+            try FileManager.default.contentsOfDirectory(atPath: destination.path),
+            []
+        )
+    }
+
+    func testReleasePublicationAtomicallyPreservesStagedIdentity() throws {
+        let directory = try releaseTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let output = directory.appendingPathComponent("result")
+        let command = #"source "$1"; validate_release_output_request "$2" "$3" || exit $?; parent="$validated_release_output_parent"; parent_id="$validated_release_output_parent_identity"; name="$validated_release_output_name"; build_atomic_release_publisher "$4" "$parent/atomic-release-publish" || exit $?; publisher="$validated_release_atomic_publisher"; publisher_id="$validated_release_atomic_publisher_identity"; publisher_hash="$validated_release_atomic_publisher_hash"; acquire_release_publication_lock "$parent" "$name" "$parent_id" || exit $?; lock="$validated_release_publication_lock"; lock_id="$validated_release_publication_lock_identity"; create_release_staging_directory "$parent" "$name" "$parent_id" atomic || exit $?; stage_parent="$validated_release_staging_parent"; stage="$validated_release_staging_directory"; stage_id="$validated_release_staging_directory_identity"; touch "$stage/payload"; publish_staged_release_directory "$stage" "$stage_id" "$parent" "$parent_id" "$name" "$publisher" "$publisher_id" "$publisher_hash" || exit $?; [[ ! -e "$stage" && -f "$parent/$name/payload" && "$(release_path_identity "$parent/$name")" == "$stage_id" ]] || exit 1; rmdir "$stage_parent"; release_release_publication_lock "$lock" "$lock_id" "$parent" "$name" || exit $?; rm "$publisher""#
+
+        let result = try runReleaseOutputHelper(
+            command: command,
+            arguments: [
+                output.path,
+                repositoryRoot.path,
+                repositoryRoot.appendingPathComponent(
+                    "Scripts/atomic-release-publish.c"
+                ).path
+            ]
+        )
+
+        XCTAssertEqual(result.status, 0, result.output)
+        XCTAssertTrue(
+            FileManager.default.fileExists(
+                atPath: output.appendingPathComponent("payload").path
+            )
+        )
+        XCTAssertEqual(
+            try FileManager.default.contentsOfDirectory(atPath: directory.path),
+            ["result"]
+        )
+    }
+
+    func testReleaseWorkDirectoryIgnoresHostileTMPDIRAndIsPrivate() throws {
+        let hostileTMPDIR = try releaseTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: hostileTMPDIR) }
+        let command = #"source "$1"; create_private_release_work_directory AgentLimits-test-work || exit $?; work="$validated_release_work_directory"; work_id="$validated_release_work_directory_identity"; configure_private_release_temporary_directory "$work" || exit $?; probe="$(mktemp "${TMPDIR}probe.XXXXXX")" || exit $?; [[ "$probe" == "$validated_release_temporary_directory/"* ]] || exit 1; printf '%s\n%s\n%s\n%s\n' "$work" "$(stat -f '%Lp' "$work")" "$(release_acl_entry_count "$work")" "$TMPDIR"; cleanup_private_release_directory "$work" "$work_id" /private/tmp '^AgentLimits-test-work\.[A-Za-z0-9]{6}$'"#
+
+        let result = try runReleaseOutputHelper(
+            command: command,
+            environment: ["TMPDIR": hostileTMPDIR.path]
+        )
+
+        XCTAssertEqual(result.status, 0, result.output)
+        let lines = result.output.split(separator: "\n").map(String.init)
+        XCTAssertEqual(lines.count, 4, result.output)
+        XCTAssertTrue(lines[0].hasPrefix("/private/tmp/AgentLimits-test-work."), result.output)
+        XCTAssertEqual(lines[1], "700", result.output)
+        XCTAssertEqual(lines[2], "0", result.output)
+        XCTAssertEqual(lines[3], "\(lines[0])/tmp/", result.output)
+        XCTAssertEqual(
+            try FileManager.default.contentsOfDirectory(atPath: hostileTMPDIR.path),
+            []
+        )
+    }
+
+    func testReleaseCleanupRefusesChangedIdentity() throws {
+        let command = #"source "$1"; create_private_release_work_directory AgentLimits-cleanup-test || exit $?; work="$validated_release_work_directory"; work_id="$validated_release_work_directory_identity"; refused=0; cleanup_private_release_directory "$work" '0:0' /private/tmp '^AgentLimits-cleanup-test\.[A-Za-z0-9]{6}$' || refused=$?; [[ "$refused" == 73 && -d "$work" ]] || exit 1; cleanup_private_release_directory "$work" "$work_id" /private/tmp '^AgentLimits-cleanup-test\.[A-Za-z0-9]{6}$' || exit $?; [[ ! -e "$work" ]]"#
+
+        let result = try runReleaseOutputHelper(command: command)
+
+        XCTAssertEqual(result.status, 0, result.output)
+        XCTAssertTrue(result.output.contains("identity changed"), result.output)
+    }
+
+    func testReleaseCleanupNeverFollowsReplacementSymlink() throws {
+        let directory = try releaseTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let protectedFile = directory.appendingPathComponent("protected")
+        try Data("keep".utf8).write(to: protectedFile)
+        let command = #"source "$1"; create_private_release_work_directory AgentLimits-cleanup-link || exit $?; work="$validated_release_work_directory"; work_id="$validated_release_work_directory_identity"; rmdir "$work"; ln -s "$2" "$work"; trap '[[ ! -L "$work" ]] || rm "$work"' EXIT; refused=0; cleanup_private_release_directory "$work" "$work_id" /private/tmp '^AgentLimits-cleanup-link\.[A-Za-z0-9]{6}$' || refused=$?; [[ "$refused" == 73 && -L "$work" && -f "$2/protected" ]]"#
+
+        let result = try runReleaseOutputHelper(
+            command: command,
+            arguments: [directory.path]
+        )
+
+        XCTAssertEqual(result.status, 0, result.output)
+        XCTAssertEqual(
+            try String(contentsOf: protectedFile, encoding: .utf8),
+            "keep"
+        )
     }
 
     func testUnsignedBuildUsesCleanSnapshotAndAtomicStaging() throws {
@@ -106,7 +423,10 @@ final class DistributionScriptTests: XCTestCase {
         )
         XCTAssertTrue(script.contains("publication_lock"))
         XCTAssertTrue(script.contains("publish_staged_directory"))
-        XCTAssertTrue(script.contains("Output path appeared while building"))
+        XCTAssertTrue(
+            try releaseScript(named: "macos-container-validation.sh")
+                .contains("Output path appeared while building")
+        )
     }
 
     func testUnsignedBuildValidatesEveryBundleIdentityAndVersion() throws {
@@ -1004,10 +1324,11 @@ final class DistributionScriptTests: XCTestCase {
         XCTAssertTrue(script.contains("verify_packaged_app \"$pkg_app\""))
         XCTAssertTrue(script.contains("verify_packaged_app \"$mounted_app\""))
         XCTAssertTrue(script.contains("-readonly"))
+        let outputHelper = try releaseScript(named: "release-output.sh")
         XCTAssertTrue(
-            script.contains(
+            outputHelper.contains(
                 "mktemp -d \"/private/tmp/AgentLimits-macos-package.XXXXXX\""
-            )
+            ) || outputHelper.contains("/private/tmp/$work_label.XXXXXX")
         )
     }
 
@@ -1096,6 +1417,17 @@ final class DistributionScriptTests: XCTestCase {
         try FileManager.default.createDirectory(
             at: directory,
             withIntermediateDirectories: false
+        )
+        return directory
+    }
+
+    private func releaseTemporaryDirectory() throws -> URL {
+        let directory = URL(fileURLWithPath: "/private/tmp", isDirectory: true)
+            .appendingPathComponent("AgentLimitsReleaseOutputTests-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: false,
+            attributes: [.posixPermissions: 0o700]
         )
         return directory
     }
@@ -1269,6 +1601,63 @@ final class DistributionScriptTests: XCTestCase {
             process.terminationStatus,
             String(decoding: data, as: UTF8.self)
         )
+    }
+
+    private func runReleaseOutputHelper(
+        command: String,
+        arguments: [String] = [],
+        environment: [String: String] = [:]
+    ) throws -> (status: Int32, output: String) {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/bash")
+        process.arguments = [
+            "-c",
+            command,
+            "release-output-test",
+            repositoryRoot.appendingPathComponent("Scripts/release-output.sh").path
+        ] + arguments
+        process.environment = ProcessInfo.processInfo.environment.merging(
+            environment,
+            uniquingKeysWith: { _, override in override }
+        )
+        let output = Pipe()
+        process.standardOutput = output
+        process.standardError = output
+        try process.run()
+        process.waitUntilExit()
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        return (
+            process.terminationStatus,
+            String(decoding: data, as: UTF8.self)
+        )
+    }
+
+    private func runProcess(
+        executable: String,
+        arguments: [String]
+    ) throws -> (status: Int32, output: String) {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: executable)
+        process.arguments = arguments
+        let output = Pipe()
+        process.standardOutput = output
+        process.standardError = output
+        try process.run()
+        process.waitUntilExit()
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        return (
+            process.terminationStatus,
+            String(decoding: data, as: UTF8.self)
+        )
+    }
+
+    private func fileIdentity(at url: URL) throws -> String {
+        let result = try runProcess(
+            executable: "/usr/bin/stat",
+            arguments: ["-f", "%d:%i", url.path]
+        )
+        XCTAssertEqual(result.status, 0, result.output)
+        return result.output.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private func offset(
