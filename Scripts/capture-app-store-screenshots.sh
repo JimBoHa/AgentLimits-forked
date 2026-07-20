@@ -947,7 +947,7 @@ normalize_simulator_presentation() {
         iphone)
             selected_xcrun simctl status_bar "$udid" override \
                 --time "$fixed_time" \
-                --dataNetwork wifi \
+                --dataNetwork 5g \
                 --wifiMode active \
                 --wifiBars 3 \
                 --cellularMode active \
@@ -1265,16 +1265,6 @@ for app_path in "$release_ios_app" "$release_watch_app"; do
     done
 done
 
-(
-    cd "$staging_dir"
-    shasum -a 256 \
-        iphone-6.9-01-copilot-accounts.jpg \
-        ipad-13-01-copilot-accounts.jpg \
-        watch-46mm-01-copilot-accounts.jpg \
-        watch-46mm-02-session-detail.jpg \
-        > SHA256SUMS
-)
-
 iphone_sha="$(shasum -a 256 "$staging_dir/iphone-6.9-01-copilot-accounts.jpg" | awk '{print $1}')"
 ipad_sha="$(shasum -a 256 "$staging_dir/ipad-13-01-copilot-accounts.jpg" | awk '{print $1}')"
 watch_root_sha="$(shasum -a 256 "$staging_dir/watch-46mm-01-copilot-accounts.jpg" | awk '{print $1}')"
@@ -1465,6 +1455,17 @@ jq -n \
         }
     }
 ' >"$staging_dir/MANIFEST.json"
+
+(
+    cd "$staging_dir"
+    shasum -a 256 \
+        iphone-6.9-01-copilot-accounts.jpg \
+        ipad-13-01-copilot-accounts.jpg \
+        watch-46mm-01-copilot-accounts.jpg \
+        watch-46mm-02-session-detail.jpg \
+        MANIFEST.json \
+        > SHA256SUMS
+)
 
 publish_files=(
     iphone-6.9-01-copilot-accounts.jpg

@@ -1683,6 +1683,84 @@ final class DistributionScriptTests: XCTestCase {
         XCTAssertFalse(script.contains("${TMPDIR:-"))
     }
 
+    func testScreenshotCaptureIPhoneNetworkMatchesStatusAssertion() throws {
+        let script = try releaseScript(
+            named: "capture-app-store-screenshots.sh"
+        )
+
+        XCTAssertTrue(
+            script.contains(
+                #"""
+                        iphone)
+                            selected_xcrun simctl status_bar "$udid" override \
+                                --time "$fixed_time" \
+                                --dataNetwork 5g \
+                                --wifiMode active \
+                """#
+            )
+        )
+        XCTAssertTrue(
+            script.contains(
+                """
+                        iphone)
+                            [[ "$status_supported" == "true" ]]
+                            grep -q '^DataNetworkType: 11$' <<<"$status"
+                """
+            )
+        )
+        XCTAssertEqual(
+            occurrenceCount(of: "--dataNetwork 5g", in: script),
+            1
+        )
+        XCTAssertEqual(
+            occurrenceCount(of: "--dataNetwork wifi", in: script),
+            1
+        )
+    }
+
+    func testScreenshotChecksumsIncludeManifestBeforeVerification() throws {
+        let script = try releaseScript(
+            named: "capture-app-store-screenshots.sh"
+        )
+        let manifest = try offset(
+            of: #"' >"$staging_dir/MANIFEST.json""#,
+            in: script
+        )
+        let checksums = try offset(
+            of: "> SHA256SUMS",
+            in: script,
+            after: manifest
+        )
+        let verification = try offset(
+            of: "shasum -a 256 -c SHA256SUMS >/dev/null",
+            in: script,
+            after: checksums
+        )
+        let publish = try offset(
+            of: "publish_staged_release_directory",
+            in: script,
+            after: verification
+        )
+
+        XCTAssertLessThan(manifest, checksums)
+        XCTAssertLessThan(checksums, verification)
+        XCTAssertLessThan(verification, publish)
+        XCTAssertEqual(occurrenceCount(of: "> SHA256SUMS", in: script), 1)
+        XCTAssertTrue(
+            script.contains(
+                #"""
+                    shasum -a 256 \
+                        iphone-6.9-01-copilot-accounts.jpg \
+                        ipad-13-01-copilot-accounts.jpg \
+                        watch-46mm-01-copilot-accounts.jpg \
+                        watch-46mm-02-session-detail.jpg \
+                        MANIFEST.json \
+                        > SHA256SUMS
+                """#
+            )
+        )
+    }
+
     func testAppStoreScreenshotAttachmentsRequireStableFrames() throws {
         let ios = try repositoryText(
             "AgentLimitsiOSUITests/AgentLimitsiOSUITests.swift"
