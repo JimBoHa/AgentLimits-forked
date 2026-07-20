@@ -36,8 +36,8 @@ final class AgentLimitsUITests: XCTestCase {
             in: app
         )
         XCTAssertTrue(
-            copilotProvider.waitForExistence(timeout: 5),
-            "Missing Copilot provider segment"
+            waitForHittable(copilotProvider, timeout: 5),
+            "Copilot provider segment is missing or off-screen"
         )
         copilotProvider.click()
 
@@ -281,6 +281,19 @@ final class AgentLimitsUITests: XCTestCase {
     ) -> Bool {
         let expectation = XCTNSPredicateExpectation(
             predicate: NSPredicate(format: "value == %@", value),
+            object: element
+        )
+        return XCTWaiter().wait(for: [expectation], timeout: timeout)
+            == .completed
+    }
+
+    @MainActor
+    private func waitForHittable(
+        _ element: XCUIElement,
+        timeout: TimeInterval
+    ) -> Bool {
+        let expectation = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == true AND hittable == true"),
             object: element
         )
         return XCTWaiter().wait(for: [expectation], timeout: timeout)

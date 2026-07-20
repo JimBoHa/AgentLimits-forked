@@ -77,10 +77,12 @@ final class SettingsWindowController: NSWindowController {
         window.title = "window.settings.title".localized()
         window.identifier = Self.settingsWindowIdentifier
         window.styleMask = [.titled, .closable, .resizable]
-        window.minSize = NSSize(
+        let initialContentSize = NSSize(
             width: DesignTokens.WindowSize.minWidth,
             height: DesignTokens.WindowSize.minHeight
         )
+        window.minSize = initialContentSize
+        window.setContentSize(initialContentSize)
         window.standardWindowButton(.miniaturizeButton)?.isEnabled = false
         window.standardWindowButton(.zoomButton)?.isEnabled = false
         window.isReleasedWhenClosed = false
