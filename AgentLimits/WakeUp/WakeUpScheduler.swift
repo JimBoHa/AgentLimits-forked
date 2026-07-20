@@ -4,6 +4,7 @@
 
 import Combine
 import Darwin
+@preconcurrency import Dispatch
 @preconcurrency import Foundation
 import OSLog
 
@@ -809,19 +810,40 @@ struct LaunchAgentRollbackFailure: LocalizedError {
     }
 }
 
-private enum LaunchCtlProcessRunner {
+enum LaunchCtlProcessRunner {
     nonisolated static func run(arguments: [String]) throws -> LaunchCtlResult {
+        try run(
+            arguments: arguments,
+            executableURL: URL(fileURLWithPath: "/bin/launchctl")
+        )
+    }
+
+    nonisolated static func run(
+        arguments: [String],
+        executableURL: URL
+    ) throws -> LaunchCtlResult {
         let process = Process()
         let standardError = Pipe()
-        process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+        let completion = DispatchSemaphore(value: 0)
+        process.executableURL = executableURL
         process.arguments = arguments
         process.standardOutput = FileHandle.nullDevice
         process.standardError = standardError
 
         try process.run()
+        let waiter = Thread {
+            process.waitUntilExit()
+            completion.signal()
+        }
+        waiter.name = "AgentLimits.launchctl-waiter"
+        waiter.start()
         // Drain while launchctl runs so its stderr pipe cannot block completion.
         let errorData = standardError.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
+        // Process.waitUntilExit() spins the caller's run loop. During hosted
+        // XCTest startup that can re-enter XCTest before app launch returns;
+        // XCTest then waits for launch while the process waiter cannot resume.
+        // Keep that call on a dedicated worker with no main-run-loop dependency.
+        completion.wait()
         return LaunchCtlResult(
             terminationStatus: process.terminationStatus,
             standardError: String(decoding: errorData, as: UTF8.self)
