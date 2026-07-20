@@ -190,7 +190,7 @@ final class UsageViewModelAccountIsolationTests: XCTestCase {
     }
 
     func testGlobalClearRejectsFetchCompletionAfterDeletion() async throws {
-        let fixture = try makeFixture()
+        let fixture = try makeFixture(quiescenceTimeout: .seconds(2))
         let personalStore = fixture.pool.getWebViewStore(
             for: fixture.personal
         )
@@ -663,7 +663,8 @@ final class UsageViewModelAccountIsolationTests: XCTestCase {
             ((ProviderAccountStore) -> [UUID: UsageSnapshot])? = nil,
         additionalTokenSnapshots:
             ((ProviderAccountStore) -> [UUID: TokenUsageSnapshot])? = nil,
-        indeterminateSelectedUsage: Bool = false
+        indeterminateSelectedUsage: Bool = false,
+        quiescenceTimeout: Duration = .milliseconds(100)
     ) throws -> IsolationFixture {
         let defaults = UserDefaults(
             suiteName: "UsageAccountIsolation-\(UUID().uuidString)"
@@ -693,7 +694,7 @@ final class UsageViewModelAccountIsolationTests: XCTestCase {
             accountStore: accountStore,
             websiteDataClearer: IsolationWebsiteDataClearer(),
             websiteDataStoreProvider: { _ in .nonPersistent() },
-            quiescenceTimeout: .milliseconds(100)
+            quiescenceTimeout: quiescenceTimeout
         )
         var tokenSnapshots = [
             personal.id: makeTokenSnapshot(
