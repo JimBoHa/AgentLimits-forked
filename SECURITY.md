@@ -47,6 +47,11 @@ control. Submit the suppression as a separate pull request that:
    evaluated in UTC.
 4. Receives maintainer approval before merge.
 
+Affected packages use the exact Swift package URL form
+`pkg:swift/github.com/OWNER/REPOSITORY@SEMVER`; the required namespace contains
+the package source host. Qualifiers, subpaths, non-GitHub sources, and
+non-semantic versions are not supported.
+
 The workflow validates every field, rejects duplicate or expired entries, and
 derives `allow-ghsas` only from the registry. A new exception is not active in
 the pull request that registers it; it can apply only after that registry-only

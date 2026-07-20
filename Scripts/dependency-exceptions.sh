@@ -20,17 +20,46 @@ validate_dependency_exception_registry() {
     || dependency_exception_error "registry must be a regular, non-symlink file"
   [[ "$(wc -c < "$registry" | tr -d '[:space:]')" -le 65536 ]] \
     || dependency_exception_error "registry exceeds 64 KiB"
+  [[ -x /usr/bin/ruby ]] \
+    || dependency_exception_error "Ruby is required"
   command -v jq >/dev/null 2>&1 \
     || dependency_exception_error "jq is required"
 
   today="$(date -u +%F)"
-  if ! allow_ghsas="$(jq -er --slurp --arg today "$today" '
+  if ! allow_ghsas="$(
+    /usr/bin/ruby --disable-gems -rjson -e '
+      # JSON.parse normally keeps the last duplicate key. This map sees every
+      # parsed pair and fails before canonical JSON can collapse either value.
+      class UniqueJSONMap < Hash
+        def []=(key, value)
+          if key?(key)
+            raise JSON::ParserError, "duplicate object key: #{key}"
+          end
+          super
+        end
+      end
+
+      begin
+        document = JSON.parse(
+          File.binread(ARGV.fetch(0)),
+          object_class: UniqueJSONMap,
+          array_class: Array,
+          create_additions: false,
+          max_nesting: 32
+        )
+        STDOUT.write(JSON.generate(document))
+      rescue JSON::JSONError, ArgumentError, SystemCallError => error
+        warn "JSON preflight failed: #{error.message}"
+        exit 78
+      end
+    ' "$registry" |
+      jq -er --arg today "$today" '
     def nonempty_string:
       type == "string" and test("[^[:space:]]");
     def valid_date($minimum):
       . as $date
       | (type == "string")
-        and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}$")
+        and test("\\A[0-9]{4}-[0-9]{2}-[0-9]{2}\\z")
         and (
           (try (
             $date + "T00:00:00Z"
@@ -53,21 +82,23 @@ validate_dependency_exception_registry() {
       ]
       and (.ghsa | type == "string")
       and (.ghsa | test(
-        "^GHSA-[23456789cfghjmpqrvwx]{4}-[23456789cfghjmpqrvwx]{4}-[23456789cfghjmpqrvwx]{4}$"
+        "\\AGHSA-[23456789cfghjmpqrvwx]{4}-[23456789cfghjmpqrvwx]{4}-[23456789cfghjmpqrvwx]{4}\\z"
       ))
       and .advisory_url == "https://github.com/advisories/\(.ghsa)"
       and (.tracking_issue | type == "string")
       and (.tracking_issue | test(
-        "^https://github\\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/issues/[1-9][0-9]*$"
+        "\\Ahttps://github\\.com/[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?/[A-Za-z0-9][A-Za-z0-9._-]{0,99}/issues/[1-9][0-9]*\\z"
       ))
       and (.owner | type == "string")
       and (.owner | test(
-        "^@[A-Za-z0-9][A-Za-z0-9-]{0,38}(/[A-Za-z0-9][A-Za-z0-9_-]{0,99})?$"
+        "\\A@[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?(?:/[A-Za-z0-9][A-Za-z0-9_-]{0,99})?\\z"
       ))
       and (.affected_packages | type == "array" and length > 0)
       and (.affected_packages | all(
         .[];
-        type == "string" and test("^pkg:[a-z0-9.+-]+/.+")
+        type == "string" and test(
+          "\\Apkg:swift/github\\.com/[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?/[A-Za-z0-9][A-Za-z0-9._-]{0,99}@(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-(?:0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?\\z"
+        )
       ))
       and (
         .affected_packages
@@ -92,12 +123,13 @@ validate_dependency_exception_registry() {
         | . == sort
       );
 
-    if length == 1 and (.[0] | valid_registry($today)) then
-      .[0] | [.exceptions[].ghsa] | join(",")
+    if valid_registry($today) then
+      [.exceptions[].ghsa] | join(",")
     else
       empty
     end
-  ' "$registry")"; then
+      '
+  )"; then
     dependency_exception_error \
       "registry is malformed, duplicated, unsorted, or contains an expired record"
   fi
@@ -113,8 +145,9 @@ prepare_dependency_exceptions_for_pull_request() {
   local repository_root
   local allow_ghsas
   local base_has_registry=false
+  local diff_status=0
+  local merge_base
   local registry_changed=false
-  local -a changed_paths=()
 
   [[ "$registry" == "$dependency_exception_registry_path" ]] \
     || dependency_exception_error "unexpected registry path"
@@ -129,28 +162,41 @@ prepare_dependency_exceptions_for_pull_request() {
     || dependency_exception_error "base commit is unavailable"
   git cat-file -e "$head_sha^{commit}" 2>/dev/null \
     || dependency_exception_error "head commit is unavailable"
+  if ! merge_base="$(git merge-base --all "$base_sha" "$head_sha")"; then
+    dependency_exception_error "base and head do not have a merge base"
+  fi
+  [[ "$merge_base" =~ ^[0-9a-f]{40}$ ]] \
+    || dependency_exception_error "base and head need exactly one merge base"
 
   allow_ghsas="$(validate_dependency_exception_registry "$registry")"
   if git cat-file -e "$base_sha:$registry" 2>/dev/null; then
     base_has_registry=true
   fi
-  if ! git diff --quiet --no-ext-diff --no-textconv \
-    "$base_sha" "$head_sha" -- "$registry"; then
-    registry_changed=true
-  fi
+  diff_status=0
+  git diff --quiet --no-ext-diff --no-textconv \
+    "$merge_base" "$head_sha" -- "$registry" \
+    || diff_status=$?
+  case "$diff_status" in
+    0) ;;
+    1) registry_changed=true ;;
+    *) dependency_exception_error "unable to compare dependency registry" ;;
+  esac
 
   if [[ "$registry_changed" == true ]]; then
     if [[ "$base_has_registry" == true ]]; then
-      while IFS= read -r -d '' path; do
-        changed_paths+=("$path")
-      done < <(
-        git diff --name-only -z --no-ext-diff --no-textconv \
-          "$base_sha" "$head_sha"
-      )
-      [[ "${#changed_paths[@]}" -eq 1 \
-        && "${changed_paths[0]}" == "$registry" ]] \
-        || dependency_exception_error \
-          "registry changes must be submitted in a registry-only pull request"
+      diff_status=0
+      git diff --quiet --no-ext-diff --no-textconv \
+        "$merge_base" "$head_sha" -- \
+        . ":(top,exclude,literal)$registry" \
+        || diff_status=$?
+      case "$diff_status" in
+        0) ;;
+        1)
+          dependency_exception_error \
+            "registry changes must be submitted in a registry-only pull request"
+          ;;
+        *) dependency_exception_error "unable to compare pull request paths" ;;
+      esac
     elif [[ -n "$allow_ghsas" ]]; then
       dependency_exception_error \
         "bootstrap registry must not contain exceptions"

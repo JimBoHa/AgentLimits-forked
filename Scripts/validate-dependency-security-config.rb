@@ -7,9 +7,41 @@ def fail_validation(message)
   exit 78
 end
 
+def reject_duplicate_yaml_mapping_keys(node, path)
+  if node.is_a?(Psych::Nodes::Mapping)
+    seen = {}
+    node.children.each_slice(2) do |key, _value|
+      unless key.is_a?(Psych::Nodes::Scalar)
+        fail_validation("#{path} mapping keys must be scalars")
+      end
+      if seen.key?(key.value)
+        fail_validation(
+          "#{path} contains duplicate YAML mapping key #{key.value.inspect} " \
+          "at line #{key.start_line + 1}"
+        )
+      end
+      seen[key.value] = true
+    end
+  end
+
+  children = node.respond_to?(:children) ? node.children : nil
+  return if children.nil?
+
+  children.each do |child|
+    reject_duplicate_yaml_mapping_keys(child, path)
+  end
+end
+
 def load_yaml(path, contents = nil)
+  source = contents.nil? ? File.read(path) : contents
+  stream = Psych.parse_stream(source)
+  unless stream.children.length == 1
+    fail_validation("#{path} must contain exactly one YAML document")
+  end
+  reject_duplicate_yaml_mapping_keys(stream, path)
+
   document = YAML.safe_load(
-    contents || File.read(path),
+    source,
     permitted_classes: [],
     aliases: false
   )
@@ -67,11 +99,13 @@ def validate_workflow(path)
 
   checkout, exceptions, review = steps
   exact_keys(checkout, %w[name uses with], "checkout step")
+  fail_validation("checkout step name changed") unless checkout["name"] == "Check out dependency policy"
   fail_validation("checkout action is not commit-pinned") unless pinned_action?(checkout["uses"], "actions/checkout")
   expected_checkout_inputs = {"fetch-depth" => 0, "persist-credentials" => false}
   fail_validation("checkout inputs changed") unless checkout["with"] == expected_checkout_inputs
 
   exact_keys(exceptions, %w[env id name run], "exception-validation step")
+  fail_validation("exception-validation step name changed") unless exceptions["name"] == "Validate dependency exceptions"
   fail_validation("exception-validation output ID changed") unless exceptions["id"] == "dependency-exceptions"
   expected_environment = {
     "BASE_SHA" => "${{ github.event.pull_request.base.sha }}",
@@ -98,6 +132,7 @@ def validate_workflow(path)
   fail_validation("exception-validation command changed") unless exceptions["run"].strip == expected_run
 
   exact_keys(review, %w[name uses with], "dependency-review step")
+  fail_validation("dependency-review step name changed") unless review["name"] == "Review dependency changes"
   fail_validation("dependency-review action is not commit-pinned") unless pinned_action?(review["uses"], "actions/dependency-review-action")
   expected_inputs = {
     "allow-ghsas" => "${{ steps.dependency-exceptions.outputs.allow-ghsas }}",
@@ -111,7 +146,16 @@ def validate_workflow(path)
 
   pinned_comments = raw.scan(/^\s*uses:\s+actions\/(?:checkout|dependency-review-action)@[0-9a-f]{40}\s+#\s+v[0-9]+\.[0-9]+\.[0-9]+\s*$/)
   fail_validation("action pins need exact semantic-version comments") unless pinned_comments.length == 2
-  fail_validation("workflow references secrets") if raw.match?(/\$\{\{\s*secrets\./)
+  forbidden_context = %r!
+    \$\{\{
+    [^}]*
+    (?:
+      \bsecrets\s*(?:\.|\[)
+      |
+      \bgithub\s*(?:\.\s*token|\[\s*["']token["']\s*\])
+    )
+  !ix
+  fail_validation("workflow references secrets or github.token") if raw.match?(forbidden_context)
 end
 
 def validate_dependabot(path)
