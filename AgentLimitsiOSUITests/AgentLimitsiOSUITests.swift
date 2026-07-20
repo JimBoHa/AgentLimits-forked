@@ -106,7 +106,7 @@ final class AgentLimitsiOSUITests: XCTestCase {
     func testAppStoreCopilotAccountsScreenshot() {
         XCUIDevice.shared.orientation = .portrait
         let app = XCUIApplication()
-        app.launchArguments = ["-ui-testing-sample-data"]
+        app.launchArguments = appStoreScreenshotLaunchArguments
         app.launch()
 
         let personalAccount = app.staticTexts["Personal Copilot"]
@@ -119,9 +119,9 @@ final class AgentLimitsiOSUITests: XCTestCase {
         ]
 
         XCTAssertTrue(workCounts.waitForExistence(timeout: 8))
+        XCTAssertTrue(personalCounts.waitForExistence(timeout: 8))
         XCTAssertTrue(scrollToElement(workAccount, in: app))
         XCTAssertTrue(personalAccount.exists)
-        XCTAssertTrue(personalCounts.exists)
         XCTAssertTrue(workAccount.isHittable)
         XCTAssertTrue(workCounts.isHittable)
 
@@ -131,6 +131,20 @@ final class AgentLimitsiOSUITests: XCTestCase {
         attachment.name = "app-store-copilot-accounts"
         attachment.lifetime = .keepAlways
         add(attachment)
+    }
+
+    private var appStoreScreenshotLaunchArguments: [String] {
+        [
+            "-ui-testing-sample-data",
+            "-AppleLanguages",
+            "(en)",
+            "-AppleLocale",
+            "en_US",
+            "-AppleInterfaceStyle",
+            "Light",
+            "-UIPreferredContentSizeCategoryName",
+            "UICTContentSizeCategoryL"
+        ]
     }
 
     @MainActor

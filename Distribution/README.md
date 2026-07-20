@@ -70,9 +70,10 @@ Scripts/capture-app-store-screenshots.sh /absolute/new/output/directory
 ```
 
 The command requires Xcode and `jq`. It resolves exactly one named simulator
-from each latest installed iOS/watchOS runtime, runs screenshot tests
-sequentially, and refuses to overwrite any existing output path. It neither
-erases nor uninstalls simulator data.
+from each latest installed iOS/watchOS runtime, atomically reserves a private
+output directory, runs screenshot tests sequentially, and never overwrites an
+existing path or published file. It neither erases nor uninstalls simulator
+data.
 
 Screenshot launches use a Debug-only, isolated fixture containing fictional
 personal/work accounts. They cannot read production account defaults,
@@ -81,6 +82,13 @@ native pixel dimensions, converts screenshots to JPEG without resizing, and
 writes `MANIFEST.json` plus `SHA256SUMS`. It also builds unsigned Release iOS
 and embedded Watch apps and rejects any screenshot launch argument or fixture
 marker found in either Release executable.
+
+Capture launches force English, light appearance, and standard Dynamic Type.
+Supported simulator-wide appearance, contrast, and status-bar settings are
+normalized, verified, then restored byte-for-byte with the original boot
+state—even after failure. Current watchOS Simulator runtimes reject status-bar
+overrides, so the script capability-checks that limitation and preserves the
+native Watch status bar instead.
 
 ## Signed iOS and watchOS export
 

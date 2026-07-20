@@ -60,13 +60,24 @@ final class AgentLimitsWatchUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["2"].exists)
 
         dragContent(in: app, fromY: 0.72, toY: 0.62)
+        XCTAssertTrue(waitForVisualStability())
         addScreenshot(named: "app-store-watch-session-detail")
     }
 
     @MainActor
     private func launchAppStoreFixture() -> XCUIApplication {
         let app = XCUIApplication()
-        app.launchArguments = ["-ui-testing-sample-data"]
+        app.launchArguments = [
+            "-ui-testing-sample-data",
+            "-AppleLanguages",
+            "(en)",
+            "-AppleLocale",
+            "en_US",
+            "-AppleInterfaceStyle",
+            "Light",
+            "-UIPreferredContentSizeCategoryName",
+            "UICTContentSizeCategoryL"
+        ]
         app.launch()
         XCTAssertTrue(
             app.descendants(matching: .any)["watch.root"]
@@ -88,6 +99,34 @@ final class AgentLimitsWatchUITests: XCTestCase {
             withNormalizedOffset: CGVector(dx: 0.5, dy: toY)
         )
         start.press(forDuration: 0.05, thenDragTo: end)
+    }
+
+    @MainActor
+    private func waitForVisualStability(
+        timeout: TimeInterval = 5,
+        sampleInterval: TimeInterval = 0.2,
+        requiredMatchingSamples: Int = 3
+    ) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        var previousFrame: Data?
+        var matchingSamples = 0
+
+        while Date() < deadline {
+            let frame = XCUIScreen.main.screenshot().pngRepresentation
+            if frame == previousFrame {
+                matchingSamples += 1
+                if matchingSamples >= requiredMatchingSamples {
+                    return true
+                }
+            } else {
+                previousFrame = frame
+                matchingSamples = 0
+            }
+            RunLoop.current.run(
+                until: Date().addingTimeInterval(sampleInterval)
+            )
+        }
+        return false
     }
 
     @MainActor
