@@ -5,6 +5,7 @@ set -euo pipefail
 
 PATH="/usr/bin:/bin:/usr/sbin:/sbin"
 export PATH
+unset CDPATH
 
 usage() {
     echo "Usage: $0 /ABSOLUTE/OUTPUT_DIRECTORY {app-store-connect|release-testing}" >&2
@@ -32,14 +33,20 @@ case "$distribution_method" in
         ;;
 esac
 
-script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
-project_root="$(cd "$script_dir/.." && pwd -P)"
+invoked_script="${BASH_SOURCE[0]}"
+if [[ -L "$invoked_script" ]]; then
+    echo "Refusing to run a signed release through a script symlink" >&2
+    exit 64
+fi
+script_dir="$(cd "$(dirname "$invoked_script")" >/dev/null && pwd -P)"
+project_root="$(cd "$script_dir/.." >/dev/null && pwd -P)"
 developer_dir="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}"
 local_config="$project_root/Configurations/DevelopmentTeam.local.xcconfig"
 validated_development_team=""
 validated_development_team_config_hash=""
 # shellcheck disable=SC1091
 source "$script_dir/signing-config.sh"
+sanitize_release_git_environment
 # shellcheck disable=SC1091
 source "$script_dir/release-output.sh"
 # shellcheck disable=SC1091
@@ -94,6 +101,7 @@ publication_lock_identity=""
 atomic_publisher=""
 atomic_publisher_identity=""
 atomic_publisher_hash=""
+derived_data=""
 
 cleanup() {
     local exit_status=$?
@@ -142,6 +150,9 @@ create_private_release_work_directory AgentLimits-ios-export || exit $?
 work_dir="$validated_release_work_directory"
 work_dir_identity="$validated_release_work_directory_identity"
 configure_private_release_temporary_directory "$work_dir" || exit $?
+derived_data="$work_dir/DerivedData"
+mkdir -m 700 "$derived_data"
+make_release_directory_private "$derived_data" || exit $?
 verify_source_unchanged
 
 export DEVELOPER_DIR="$developer_dir"
@@ -169,6 +180,7 @@ settings="$(xcodebuild \
     -scheme AgentLimitsiOS \
     -configuration Release \
     -onlyUsePackageVersionsFromResolvedFile \
+    -derivedDataPath "$derived_data" \
     -showBuildSettings 2>/dev/null)"
 resolved_team_id="$(printf '%s\n' "$settings" \
     | sed -n 's/^[[:space:]]*DEVELOPMENT_TEAM = //p' \
@@ -193,6 +205,7 @@ if ! xcodebuild archive \
     -configuration Release \
     -destination 'generic/platform=iOS' \
     -onlyUsePackageVersionsFromResolvedFile \
+    -derivedDataPath "$derived_data" \
     -archivePath "$archive" \
     SWIFT_TREAT_WARNINGS_AS_ERRORS=YES \
     GCC_TREAT_WARNINGS_AS_ERRORS=YES \

@@ -5,6 +5,7 @@ set -euo pipefail
 
 PATH="/usr/bin:/bin:/usr/sbin:/sbin"
 export PATH
+unset CDPATH
 
 usage() {
     echo "Usage: $0 /ABSOLUTE/OUTPUT_DIRECTORY" >&2
@@ -16,14 +17,20 @@ if [[ $# -ne 1 ]]; then
     exit 64
 fi
 
-script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
-project_root="$(cd "$script_dir/.." && pwd -P)"
+invoked_script="${BASH_SOURCE[0]}"
+if [[ -L "$invoked_script" ]]; then
+    echo "Refusing to run a release build through a script symlink" >&2
+    exit 64
+fi
+script_dir="$(cd "$(dirname "$invoked_script")" >/dev/null && pwd -P)"
+project_root="$(cd "$script_dir/.." >/dev/null && pwd -P)"
 requested_output="$1"
 developer_dir="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}"
 validated_container_app=""
 validated_dmg_device=""
 # shellcheck disable=SC1091
 source "$script_dir/signing-config.sh"
+sanitize_release_git_environment
 # shellcheck disable=SC1091
 source "$script_dir/macos-container-validation.sh"
 # shellcheck disable=SC1091

@@ -70,6 +70,8 @@
 - [ ] iOS app is `arm64`; embedded Watch app is `arm64_32` + `arm64`.
 - [ ] IPA includes both privacy manifests and the dependent Watch app.
 - [ ] iOS/Watch version and build values match.
+- [ ] Only the iOS companion scheme is archivable; the standalone Watch scheme
+      remains non-archivable.
 - [ ] Xcode/App Store validation passes without warning.
 - [ ] TestFlight install and full smoke test pass.
 

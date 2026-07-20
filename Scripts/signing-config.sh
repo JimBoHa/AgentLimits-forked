@@ -3,6 +3,25 @@
 # Shared validation for the gitignored Apple Team configuration.
 # This file is sourced by signed release scripts.
 
+sanitize_release_git_environment() {
+    local variable
+
+    # Repository selectors, command-line config injection, and replacement
+    # refs must not redirect or reinterpret the source snapshot being signed.
+    for variable in "${!GIT_@}"; do
+        unset "$variable"
+    done
+    GIT_ATTR_NOSYSTEM=1
+    GIT_CONFIG_GLOBAL=/dev/null
+    GIT_CONFIG_NOSYSTEM=1
+    GIT_NO_REPLACE_OBJECTS=1
+    export \
+        GIT_ATTR_NOSYSTEM \
+        GIT_CONFIG_GLOBAL \
+        GIT_CONFIG_NOSYSTEM \
+        GIT_NO_REPLACE_OBJECTS
+}
+
 validate_development_team_config() {
     local config="$1"
     local owner_uid
