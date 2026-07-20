@@ -78,6 +78,8 @@ Scripts/export-ios.sh /absolute/output/directory release-testing
 Both commands archive the `AgentLimitsiOS` scheme. They verify that the signed
 IPA contains `Watch/AgentLimitsWatch.app`, that identifiers and version numbers
 match, and that distribution signatures do not contain `get-task-allow`.
+The standalone `AgentLimitsWatch` scheme intentionally has no Archive action;
+it remains available for Watch build, test, run, profile, and analyze workflows.
 
 After local verification, validate and upload through Xcode Organizer or App
 Store Connect. TestFlight and a physical paired iPhone/Apple Watch smoke test
