@@ -1,4 +1,5 @@
 #!/bin/bash
+# shellcheck disable=SC2154
 
 set -euo pipefail
 
@@ -27,11 +28,16 @@ source "$script_dir/signing-config.sh"
 source "$script_dir/macos-container-validation.sh"
 # shellcheck disable=SC1091
 source "$script_dir/macos-code-signing.sh"
+# shellcheck disable=SC1091
+source "$script_dir/apple-toolchain.sh"
 
 if [[ ! -x "$developer_dir/usr/bin/xcodebuild" ]]; then
     echo "Xcode not found at $developer_dir" >&2
     exit 69
 fi
+validate_apple_distribution_toolchain \
+    "$developer_dir" macosx iphoneos watchos || exit $?
+developer_dir="$validated_apple_developer_dir"
 if [[ "$requested_output" != /* ]]; then
     echo "Output directory must be an absolute path" >&2
     exit 64
@@ -350,6 +356,14 @@ mac_info="$mac_app/Contents/Info.plist"
 widget_info="$widget/Contents/Info.plist"
 ios_info="$ios_app/Info.plist"
 watch_info="$watch_app/Info.plist"
+verify_apple_product_toolchain_metadata \
+    "$mac_info" macosx "Unsigned macOS app" || exit $?
+verify_apple_product_toolchain_metadata \
+    "$widget_info" macosx "Unsigned macOS widget" || exit $?
+verify_apple_product_toolchain_metadata \
+    "$ios_info" iphoneos "Unsigned iOS app" || exit $?
+verify_apple_product_toolchain_metadata \
+    "$watch_info" watchos "Unsigned Watch app" || exit $?
 version="$(plutil -extract CFBundleShortVersionString raw "$mac_info")"
 build="$(plutil -extract CFBundleVersion raw "$mac_info")"
 
@@ -566,7 +580,10 @@ Built: $(date -u '+%Y-%m-%dT%H:%M:%SZ')
 Git commit: $source_commit
 Git state: clean; pre/post build fence passed
 Build source: clean git archive snapshot
-Xcode: $(xcodebuild -version | tr '\n' ' ')
+Xcode: $validated_apple_xcode_version ($validated_apple_xcode_build), DTXcode $validated_apple_dtxcode
+macOS SDK: $validated_apple_macosx_sdk_version ($validated_apple_macosx_sdk_build)
+iOS/iPadOS SDK: $validated_apple_iphoneos_sdk_version ($validated_apple_iphoneos_sdk_build)
+watchOS SDK: $validated_apple_watchos_sdk_version ($validated_apple_watchos_sdk_build)
 macOS architectures: $mac_archs
 macOS widget architectures: $widget_archs
 iOS architectures: $ios_archs

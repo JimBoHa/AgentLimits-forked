@@ -2,6 +2,103 @@ import Foundation
 import XCTest
 
 final class DistributionScriptTests: XCTestCase {
+    func testAppleToolchainVersionComparisonIsNumericAndFailClosed() throws {
+        let command = #"source "$1"; apple_version_is_at_least 26.10 26.9 || exit 1; older=0; apple_version_is_at_least 26.9 26.10 || older=$?; malformed=0; apple_version_is_at_least 26.beta 26 || malformed=$?; oversized=0; apple_version_is_at_least 1234567890.1 26 || oversized=$?; [[ "$older" == 1 && "$malformed" == 2 && "$oversized" == 2 ]]"#
+
+        let result = try runAppleToolchainHelper(command: command)
+
+        XCTAssertEqual(result.status, 0, result.output)
+    }
+
+    func testAppleToolchainPreflightUsesCurrentXcodeAndDeviceSDKFloors() throws {
+        let developerDirectory = ProcessInfo.processInfo.environment["DEVELOPER_DIR"]
+            ?? "/Applications/Xcode.app/Contents/Developer"
+        let command = #"source "$1"; validate_apple_distribution_toolchain "$2" macosx iphoneos watchos || exit $?; printf '%s\n%s\n%s\n%s\n' "$validated_apple_xcode_version" "$validated_apple_macosx_sdk_version" "$validated_apple_iphoneos_sdk_version" "$validated_apple_watchos_sdk_version""#
+
+        let result = try runAppleToolchainHelper(
+            command: command,
+            arguments: [developerDirectory]
+        )
+
+        XCTAssertEqual(result.status, 0, result.output)
+        let versions = result.output.split(separator: "\n").map(String.init)
+        XCTAssertEqual(versions.count, 4, result.output)
+        for version in versions {
+            let major = try XCTUnwrap(Int(version.split(separator: ".")[0]))
+            XCTAssertGreaterThanOrEqual(major, 26, result.output)
+        }
+    }
+
+    func testAppleProductMetadataMustExactlyMatchPreflight() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let info = directory.appendingPathComponent("Info.plist")
+        let validMetadata: [String: Any] = [
+            "DTXcode": "2660",
+            "DTXcodeBuild": "17F113",
+            "DTSDKName": "iphoneos26.5",
+            "DTSDKBuild": "23F81a",
+            "DTPlatformName": "iphoneos",
+            "DTPlatformVersion": "26.5"
+        ]
+        let command = #"source "$1"; validated_apple_toolchain_ready=1; validated_apple_xcode_version=26.6; validated_apple_xcode_build=17F113; validated_apple_dtxcode=2660; validated_apple_iphoneos_sdk_version=26.5; validated_apple_iphoneos_sdk_name=iphoneos26.5; validated_apple_iphoneos_sdk_build=23F81a; verify_apple_product_toolchain_metadata "$2" iphoneos fixture; exit $?"#
+
+        try PropertyListSerialization.data(
+            fromPropertyList: validMetadata,
+            format: .xml,
+            options: 0
+        ).write(to: info)
+        var result = try runAppleToolchainHelper(
+            command: command,
+            arguments: [info.path]
+        )
+        XCTAssertEqual(result.status, 0, result.output)
+
+        for key in [
+            "DTXcode", "DTXcodeBuild", "DTSDKName", "DTSDKBuild",
+            "DTPlatformName", "DTPlatformVersion"
+        ] {
+            var invalidMetadata = validMetadata
+            invalidMetadata[key] = "unexpected"
+            try PropertyListSerialization.data(
+                fromPropertyList: invalidMetadata,
+                format: .xml,
+                options: 0
+            ).write(to: info)
+            result = try runAppleToolchainHelper(
+                command: command,
+                arguments: [info.path]
+            )
+            XCTAssertNotEqual(result.status, 0, "\(key): \(result.output)")
+        }
+    }
+
+    func testReleasePathsEnforcePreflightAndPostBuildMetadata() throws {
+        let expectedPlatforms = [
+            "build-unsigned-artifacts.sh": "macosx iphoneos watchos",
+            "export-ios.sh": "iphoneos watchos",
+            "package-macos.sh": "macosx"
+        ]
+
+        for (name, platforms) in expectedPlatforms {
+            let script = try releaseScript(named: name)
+            XCTAssertTrue(
+                script.contains("source \"$script_dir/apple-toolchain.sh\""),
+                name
+            )
+            XCTAssertTrue(
+                script.contains("$developer_dir\" \(platforms)")
+                    || script.contains("$developer_dir\" macosx iphoneos watchos"),
+                name
+            )
+            XCTAssertTrue(
+                script.contains("verify_apple_product_toolchain_metadata"),
+                name
+            )
+            XCTAssertFalse(script.contains("sort -V"), name)
+        }
+    }
+
     func testSigningConfigAcceptsOnlyCanonicalTeamAssignment() throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -1515,6 +1612,30 @@ final class DistributionScriptTests: XCTestCase {
             repositoryRoot.appendingPathComponent("Scripts/signing-config.sh").path,
             config.path
         ]
+        let output = Pipe()
+        process.standardOutput = output
+        process.standardError = output
+        try process.run()
+        process.waitUntilExit()
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        return (
+            process.terminationStatus,
+            String(decoding: data, as: UTF8.self)
+        )
+    }
+
+    private func runAppleToolchainHelper(
+        command: String,
+        arguments: [String] = []
+    ) throws -> (status: Int32, output: String) {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/bash")
+        process.arguments = [
+            "-c",
+            command,
+            "apple-toolchain-test",
+            repositoryRoot.appendingPathComponent("Scripts/apple-toolchain.sh").path
+        ] + arguments
         let output = Pipe()
         process.standardOutput = output
         process.standardError = output

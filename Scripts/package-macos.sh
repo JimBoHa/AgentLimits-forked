@@ -35,6 +35,8 @@ source "$script_dir/macos-code-signing.sh"
 source "$script_dir/macos-container-validation.sh"
 # shellcheck disable=SC1091
 source "$script_dir/release-output.sh"
+# shellcheck disable=SC1091
+source "$script_dir/apple-toolchain.sh"
 validated_container_app=""
 validated_dmg_device=""
 
@@ -42,6 +44,8 @@ if [[ ! -x "$developer_dir/usr/bin/xcodebuild" ]]; then
     echo "Xcode not found at $developer_dir" >&2
     exit 69
 fi
+validate_apple_distribution_toolchain "$developer_dir" macosx || exit $?
+developer_dir="$validated_apple_developer_dir"
 if [[ ! -e "$local_config" && ! -L "$local_config" ]]; then
     echo "Missing $local_config" >&2
     echo "Copy the .example file and set your Apple Developer Team ID." >&2
@@ -226,6 +230,13 @@ if [[ "$archive_team" != "$team_id" || -z "$archive_identity" ]]; then
     echo "Archive is missing the expected Team or signing identity" >&2
     exit 1
 fi
+archive_app="$archive/Products/Applications/AgentLimitsForked.app"
+archive_widget="$archive_app/Contents/PlugIns/AgentLimitsWidgetExtension.appex"
+verify_apple_product_toolchain_metadata \
+    "$archive_app/Contents/Info.plist" macosx "Archived macOS app" || exit $?
+verify_apple_product_toolchain_metadata \
+    "$archive_widget/Contents/Info.plist" macosx "Archived macOS widget" \
+    || exit $?
 
 mkdir -p "$export_dir"
 echo "Exporting with Developer ID..."
@@ -589,6 +600,10 @@ build="$(plutil -extract CFBundleVersion raw "$app_info")"
 executable="$(plutil -extract CFBundleExecutable raw "$app_info")"
 architectures="$(lipo -archs "$app/Contents/MacOS/$executable")"
 widget_info="$widget/Contents/Info.plist"
+verify_apple_product_toolchain_metadata \
+    "$app_info" macosx "Developer ID app" || exit $?
+verify_apple_product_toolchain_metadata \
+    "$widget_info" macosx "Developer ID widget" || exit $?
 widget_executable="$(plutil -extract CFBundleExecutable raw "$widget_info")"
 widget_architectures="$(lipo -archs \
     "$widget/Contents/MacOS/$widget_executable")"
@@ -731,6 +746,10 @@ verify_packaged_app() {
         echo "$label is missing the regular app or widget bundle" >&2
         exit 1
     fi
+    verify_apple_product_toolchain_metadata \
+        "$candidate_info" macosx "$label" || exit $?
+    verify_apple_product_toolchain_metadata \
+        "$candidate_widget_info" macosx "$label widget" || exit $?
     codesign --verify --all-architectures --deep --strict --verbose=4 \
         "$candidate_app"
     verify_developer_id_signature \
@@ -948,7 +967,8 @@ Team ID: $team_id
 Git commit: $source_commit
 Signing config SHA-256: $local_config_hash
 Build source: clean git archive with generated Team-only config
-Xcode: $(xcodebuild -version | tr '\n' ' ')
+Xcode: $validated_apple_xcode_version ($validated_apple_xcode_build), DTXcode $validated_apple_dtxcode
+macOS SDK: $validated_apple_macosx_sdk_version ($validated_apple_macosx_sdk_build)
 macOS architectures: $architectures
 macOS widget architectures: $widget_architectures
 Sparkle: $sparkle_version ($sparkle_revision), build $sparkle_build

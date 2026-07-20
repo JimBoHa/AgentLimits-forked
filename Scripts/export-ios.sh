@@ -42,11 +42,16 @@ validated_development_team_config_hash=""
 source "$script_dir/signing-config.sh"
 # shellcheck disable=SC1091
 source "$script_dir/release-output.sh"
+# shellcheck disable=SC1091
+source "$script_dir/apple-toolchain.sh"
 
 if [[ ! -x "$developer_dir/usr/bin/xcodebuild" ]]; then
     echo "Xcode not found at $developer_dir" >&2
     exit 69
 fi
+validate_apple_distribution_toolchain \
+    "$developer_dir" iphoneos watchos || exit $?
+developer_dir="$validated_apple_developer_dir"
 if [[ ! -e "$local_config" && ! -L "$local_config" ]]; then
     echo "Missing $local_config" >&2
     echo "Copy the .example file and set your Apple Developer Team ID." >&2
@@ -205,6 +210,12 @@ if [[ "$archive_team" != "$team_id" || -z "$archive_identity" ]]; then
     echo "Archive is missing the expected Team or signing identity" >&2
     exit 1
 fi
+archive_ios_info="$archive/Products/Applications/AgentLimits.app/Info.plist"
+archive_watch_info="$archive/Products/Applications/AgentLimits.app/Watch/AgentLimitsWatch.app/Info.plist"
+verify_apple_product_toolchain_metadata \
+    "$archive_ios_info" iphoneos "Archived iOS app" || exit $?
+verify_apple_product_toolchain_metadata \
+    "$archive_watch_info" watchos "Archived Watch app" || exit $?
 
 mkdir -p "$export_dir"
 echo "Exporting with method $distribution_method..."
@@ -331,6 +342,10 @@ verify_distribution_signature "$watch_app" "Watch app"
 
 ios_info="$ios_app/Info.plist"
 watch_info="$watch_app/Info.plist"
+verify_apple_product_toolchain_metadata \
+    "$ios_info" iphoneos "Exported iOS app" || exit $?
+verify_apple_product_toolchain_metadata \
+    "$watch_info" watchos "Exported Watch app" || exit $?
 version="$(plutil -extract CFBundleShortVersionString raw "$ios_info")"
 build="$(plutil -extract CFBundleVersion raw "$ios_info")"
 ios_executable="$(plutil -extract CFBundleExecutable raw "$ios_info")"
@@ -431,7 +446,9 @@ Team ID: $team_id
 Git commit: $source_commit
 Signing config SHA-256: $local_config_hash
 Build source: clean git archive with generated Team-only config
-Xcode: $(xcodebuild -version | tr '\n' ' ')
+Xcode: $validated_apple_xcode_version ($validated_apple_xcode_build), DTXcode $validated_apple_dtxcode
+iOS/iPadOS SDK: $validated_apple_iphoneos_sdk_version ($validated_apple_iphoneos_sdk_build)
+watchOS SDK: $validated_apple_watchos_sdk_version ($validated_apple_watchos_sdk_build)
 Watch app: embedded in iOS IPA
 iOS architectures: $ios_archs
 watchOS architectures: $watch_archs

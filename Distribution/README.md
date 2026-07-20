@@ -47,6 +47,26 @@ release-tool path before invoking Xcode.
 Never commit certificates, private keys, provisioning profiles, App Store
 Connect keys, passwords, or notarization credentials.
 
+## Apple upload toolchain floor
+
+[Apple requires](https://developer.apple.com/news/upcoming-requirements/?id=02032026a)
+App Store Connect uploads made on or after April 28, 2026 to use Xcode 26 or
+later. iOS and iPadOS uploads must use the iOS 26 SDK or later, and embedded
+watchOS apps must use the watchOS 26 SDK or later.
+
+Every release script fails before building unless the selected Xcode and each
+needed device SDK meet version 26. Version components are parsed and compared
+as bounded decimal integers, so values such as `26.10` are handled correctly
+and malformed output is rejected. The project applies the same Xcode 26 and
+macOS 26 SDK floor to Developer ID and unsigned macOS preflight builds so every
+release unit uses one current toolchain baseline.
+
+After each archive and export, the scripts require every first-party app and
+extension to record the exact preflight `DTXcode`, `DTXcodeBuild`, `DTSDKName`,
+`DTSDKBuild`, platform name, and platform version. A toolchain or SDK change
+during a build therefore fails closed instead of producing mixed provenance.
+The validated versions and builds are recorded in `BUILD-METADATA.txt`.
+
 ## Unsigned preflight artifacts
 
 Use this only to prove the Release archive and installer layout before signing
