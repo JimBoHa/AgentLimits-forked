@@ -95,6 +95,9 @@ struct MobileRootView: View {
                                         account: nil
                                     )
                             }
+                            .accessibilityIdentifier(
+                                "mobile.addAccount.\(provider.rawValue)"
+                            )
                         }
                     } label: {
                         Label("Add Account", systemImage: "plus")
