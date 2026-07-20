@@ -281,7 +281,7 @@ final class DistributionScriptTests: XCTestCase {
             at: directory,
             dtxcode: "2610"
         ).resolvingSymlinksInPath()
-        let command = #"source "$1"; apple_validate_xcode_bundle_trust "$2"; exit $?"#
+        let command = #"source "$1"; canonical="$(cd "$2" && pwd -P)" || exit 1; apple_validate_xcode_bundle_trust "$canonical"; exit $?"#
 
         let result = try runAppleToolchainHelper(
             command: command,
