@@ -5,6 +5,54 @@
 
 validated_artifact_path=""
 validated_dwarfdump_uuid_inventory=""
+validated_regular_artifact_identity=""
+validated_regular_artifact_hash=""
+
+validate_unlinked_regular_file_artifact() {
+    local path="$1"
+    local label="$2"
+    local identity
+    local link_count
+    local digest
+
+    validated_regular_artifact_identity=""
+    validated_regular_artifact_hash=""
+    if [[ -L "$path" || ! -f "$path" ]]; then
+        echo "$label is not one regular file" >&2
+        return 1
+    fi
+    identity="$(/usr/bin/stat -f '%d:%i' "$path")" || return $?
+    link_count="$(/usr/bin/stat -f '%l' "$path")" || return $?
+    if [[ "$link_count" != "1" ]]; then
+        echo "$label must have exactly one filesystem link" >&2
+        return 1
+    fi
+    digest="$(/usr/bin/shasum -a 256 "$path" \
+        | /usr/bin/awk '{ print $1 }')" || return $?
+    if [[ ! "$digest" =~ ^[0-9a-f]{64}$ \
+        || -L "$path" || ! -f "$path" \
+        || "$(/usr/bin/stat -f '%d:%i' "$path")" != "$identity" \
+        || "$(/usr/bin/stat -f '%l' "$path")" != "1" ]]; then
+        echo "$label changed while it was being validated" >&2
+        return 1
+    fi
+    validated_regular_artifact_identity="$identity"
+    validated_regular_artifact_hash="$digest"
+}
+
+verify_unlinked_regular_file_artifact_unchanged() {
+    local path="$1"
+    local expected_identity="$2"
+    local expected_hash="$3"
+    local label="$4"
+
+    validate_unlinked_regular_file_artifact "$path" "$label" || return $?
+    if [[ "$validated_regular_artifact_identity" != "$expected_identity" \
+        || "$validated_regular_artifact_hash" != "$expected_hash" ]]; then
+        echo "$label changed while it was being consumed" >&2
+        return 1
+    fi
+}
 
 validate_only_named_directory_entry() {
     local parent="$1"
@@ -369,11 +417,13 @@ validate_provisioning_profile_validity_window() {
     local validation_epoch="${3:-}"
     local creation_date
     local expiration_date
+    local profile_identity
+    local profile_hash
 
-    if [[ -L "$decoded_profile" || ! -f "$decoded_profile" ]]; then
-        echo "$label provisioning profile data is missing or unsafe" >&2
-        return 1
-    fi
+    validate_unlinked_regular_file_artifact \
+        "$decoded_profile" "$label provisioning profile data" || return $?
+    profile_identity="$validated_regular_artifact_identity"
+    profile_hash="$validated_regular_artifact_hash"
     if ! creation_date="$(plutil -extract CreationDate raw -expect date \
             "$decoded_profile" 2>/dev/null)"; then
         echo "$label provisioning profile has no typed CreationDate" >&2
@@ -384,6 +434,9 @@ validate_provisioning_profile_validity_window() {
         echo "$label provisioning profile has no typed ExpirationDate" >&2
         return 1
     fi
+    verify_unlinked_regular_file_artifact_unchanged \
+        "$decoded_profile" "$profile_identity" "$profile_hash" \
+        "$label provisioning profile data" || return $?
     if [[ -z "$validation_epoch" ]]; then
         validation_epoch="$(/bin/date -u '+%s')"
     fi

@@ -122,9 +122,12 @@ and version numbers match; and that distribution signatures do not contain
 dSYM UUID/architecture inventories (`arm64` for iOS and `arm64` + `arm64_32`
 for Watch). Both decoded profiles must contain typed `CreationDate` and
 `ExpirationDate` values and be valid at verification time; future, expired, or
-internally inconsistent validity windows fail closed. Both profiles are checked
-again at the final publication fence so a near-expiry profile cannot age out
-during validation and still be published.
+internally inconsistent validity windows fail closed. An embedded profile must
+also be a single-link regular file that remains unchanged while its signed CMS
+payload is decoded. Both profiles are checked again with one timestamp after
+checksums, metadata, and the final source fence, immediately before atomic
+publication, so a near-expiry profile cannot age out during validation and still
+be published.
 
 After local verification, validate and upload through Xcode Organizer or App
 Store Connect. TestFlight and a physical paired iPhone/Apple Watch smoke test
@@ -166,9 +169,10 @@ architectures. The workflow never performs an unsafe recursive ad-hoc re-sign.
 It requires exactly one expected macOS archive/export app and exactly one widget
 plug-in. App and widget dSYMs must exactly match both archived and exported
 universal binaries by UUID and architecture. Decoded Developer ID provisioning
-profiles must be currently valid, with typed creation and expiration dates.
-Both profiles are checked again after notarization at the final publication
-fence.
+profiles must come from unchanged, single-link regular files and be currently
+valid, with typed creation and expiration dates. Both profiles are checked again
+with one timestamp after notarization, checksums, metadata, and the final source
+fence, immediately before atomic publication.
 It then reopens the final ZIP, expanded product PKG, and read-only DMG; rejects
 unexpected layout or installer metadata; and rechecks the contained app's
 per-slice Code Directory hashes, signatures, stapled ticket, and Gatekeeper

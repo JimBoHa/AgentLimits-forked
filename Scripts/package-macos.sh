@@ -335,8 +335,17 @@ validate_developer_id_profile() {
     local decoded="$work_dir/$label-profile.plist"
     local profile_team
     local application_id
+    local source_identity
+    local source_hash
 
+    validate_unlinked_regular_file_artifact \
+        "$profile" "$label embedded provisioning profile" || exit $?
+    source_identity="$validated_regular_artifact_identity"
+    source_hash="$validated_regular_artifact_hash"
     security cms -D -i "$profile" >"$decoded"
+    verify_unlinked_regular_file_artifact_unchanged \
+        "$profile" "$source_identity" "$source_hash" \
+        "$label embedded provisioning profile" || exit $?
     plutil -lint "$decoded" >/dev/null
     profile_team="$(plutil -extract TeamIdentifier.0 raw "$decoded")"
     application_id="$(plutil -extract \
@@ -366,6 +375,16 @@ validate_developer_id_profile() {
     fi
     validate_provisioning_profile_validity_window \
         "$decoded" "$label" || exit $?
+}
+
+validate_profiles_at_final_publication_fence() {
+    local validation_epoch
+
+    validation_epoch="$(/bin/date -u '+%s')" || return $?
+    validate_provisioning_profile_validity_window \
+        "$work_dir/macos-profile.plist" macos "$validation_epoch" || return $?
+    validate_provisioning_profile_validity_window \
+        "$work_dir/widget-profile.plist" widget "$validation_epoch"
 }
 
 application_identity="$(codesign -dvvv "$app" 2>&1 \
@@ -963,13 +982,6 @@ spctl --assess --type open \
     --context context:primary-signature \
     --verbose=4 "$dmg"
 
-# Notarization can outlast a near-expiry profile. Recheck both decoded profiles
-# at the final publication fence.
-validate_provisioning_profile_validity_window \
-    "$work_dir/macos-profile.plist" macos || exit $?
-validate_provisioning_profile_validity_window \
-    "$work_dir/widget-profile.plist" widget || exit $?
-
 (
     verify_source_unchanged
     cd "$output_dir"
@@ -1000,6 +1012,8 @@ Provisioning profile validity windows: passed
 EOF
 
 verify_source_unchanged
+# Both profiles use one timestamp, after every other fallible release check.
+validate_profiles_at_final_publication_fence || exit $?
 publish_staged_release_directory \
     "$staging_dir" \
     "$staging_dir_identity" \

@@ -305,8 +305,17 @@ validate_profile() {
     local profile_team
     local application_id
     local provisions_all_devices
+    local source_identity
+    local source_hash
 
+    validate_unlinked_regular_file_artifact \
+        "$profile" "$label embedded provisioning profile" || exit $?
+    source_identity="$validated_regular_artifact_identity"
+    source_hash="$validated_regular_artifact_hash"
     security cms -D -i "$profile" >"$decoded"
+    verify_unlinked_regular_file_artifact_unchanged \
+        "$profile" "$source_identity" "$source_hash" \
+        "$label embedded provisioning profile" || exit $?
     plutil -lint "$decoded" >/dev/null
     profile_team="$(plutil -extract TeamIdentifier.0 raw "$decoded")"
     application_id="$(plutil -extract Entitlements.application-identifier \
@@ -344,6 +353,16 @@ validate_profile() {
             fi
             ;;
     esac
+}
+
+validate_profiles_at_final_publication_fence() {
+    local validation_epoch
+
+    validation_epoch="$(/bin/date -u '+%s')" || return $?
+    validate_provisioning_profile_validity_window \
+        "$work_dir/ios-profile.plist" ios "$validation_epoch" || return $?
+    validate_provisioning_profile_validity_window \
+        "$work_dir/watch-profile.plist" watch "$validation_epoch"
 }
 
 verify_distribution_signature "$ios_app" "iOS app"
@@ -443,13 +462,6 @@ verify_distribution_entitlements \
     "com.jimboha.agentlimits.ios.watchkitapp" \
     "Watch app"
 
-# Profiles can expire while a long export is being validated. Recheck them at
-# the final publication fence instead of relying only on the first decode.
-validate_provisioning_profile_validity_window \
-    "$work_dir/ios-profile.plist" ios || exit $?
-validate_provisioning_profile_validity_window \
-    "$work_dir/watch-profile.plist" watch || exit $?
-
 ipa_name="AgentLimitsForked-$version-$build-$distribution_method.ipa"
 mv "$ipa" "$output_dir/$ipa_name"
 rm -rf "$export_dir"
@@ -478,6 +490,8 @@ Provisioning profile validity windows: passed
 EOF
 
 verify_source_unchanged
+# Both profiles use one timestamp, after every other fallible release check.
+validate_profiles_at_final_publication_fence || exit $?
 publish_staged_release_directory \
     "$staging_dir" \
     "$staging_dir_identity" \

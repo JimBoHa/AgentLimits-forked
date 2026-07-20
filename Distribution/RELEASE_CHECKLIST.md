@@ -43,7 +43,8 @@
       identifier, and no `get-task-allow`.
 - [ ] Sparkle has exactly the audited nested-code and symlink inventory.
 - [ ] App Group entitlement and provisioning profiles match the fork IDs; each
-      profile is within its typed creation/expiration validity window.
+      embedded profile is a single-link regular file whose CMS decode is stable,
+      with typed dates valid at the final publication fence.
 - [ ] No executable has `get-task-allow`.
 - [ ] Archive/export each contain exactly one expected app and widget product.
 - [ ] App and widget are exactly universal `arm64` + `x86_64`; dSYMs match the
@@ -65,7 +66,8 @@
 - [ ] Export produces exactly one IPA, one Payload app, and one embedded Watch
       app; no duplicate product can be selected implicitly.
 - [ ] Exported IPA signatures and embedded profiles match all bundle IDs; each
-      profile is within its typed creation/expiration validity window.
+      embedded profile is a single-link regular file whose CMS decode is stable,
+      with typed dates valid at the final publication fence.
 - [ ] No executable has `get-task-allow`.
 - [ ] iOS app is `arm64`; embedded Watch app is `arm64_32` + `arm64`.
 - [ ] iOS and Watch dSYMs match complete binary UUID-and-architecture inventories.

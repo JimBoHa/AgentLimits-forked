@@ -108,6 +108,10 @@ final class DistributionScriptTests: XCTestCase {
                 script.contains("validate_provisioning_profile_validity_window"),
                 name
             )
+            XCTAssertTrue(
+                script.contains("validate_unlinked_regular_file_artifact"),
+                name
+            )
         }
         XCTAssertTrue(
             try releaseScript(named: "package-macos.sh")
@@ -323,7 +327,48 @@ final class DistributionScriptTests: XCTestCase {
         XCTAssertNotEqual(result.status, 0, result.output)
     }
 
-    func testSignedReleaseScriptsPublishOnlyAfterFinalSourceFence() throws {
+    func testProfileFileGuardRejectsLinksAndDetectsMutation() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let profile = directory.appendingPathComponent("profile.plist")
+        let symlink = directory.appendingPathComponent("profile-link.plist")
+        let hardlink = directory.appendingPathComponent("profile-hardlink.plist")
+        try Data("profile".utf8).write(to: profile)
+        try FileManager.default.createSymbolicLink(
+            at: symlink,
+            withDestinationURL: profile
+        )
+        let validate = #"source "$1"; validate_unlinked_regular_file_artifact "$2" profile"#
+
+        var result = try runArtifactValidationHelper(
+            command: validate,
+            arguments: [profile.path]
+        )
+        XCTAssertEqual(result.status, 0, result.output)
+
+        result = try runArtifactValidationHelper(
+            command: validate,
+            arguments: [symlink.path]
+        )
+        XCTAssertNotEqual(result.status, 0, result.output)
+
+        try FileManager.default.linkItem(at: profile, to: hardlink)
+        result = try runArtifactValidationHelper(
+            command: validate,
+            arguments: [profile.path]
+        )
+        XCTAssertNotEqual(result.status, 0, result.output)
+        try FileManager.default.removeItem(at: hardlink)
+
+        let mutate = #"source "$1"; validate_unlinked_regular_file_artifact "$2" profile || exit $?; identity="$validated_regular_artifact_identity"; digest="$validated_regular_artifact_hash"; printf 'changed\n' >"$2"; verify_unlinked_regular_file_artifact_unchanged "$2" "$identity" "$digest" profile"#
+        result = try runArtifactValidationHelper(
+            command: mutate,
+            arguments: [profile.path]
+        )
+        XCTAssertNotEqual(result.status, 0, result.output)
+    }
+
+    func testSignedReleaseScriptsPublishOnlyAfterFinalFences() throws {
         for name in ["package-macos.sh", "export-ios.sh"] {
             let script = try releaseScript(named: name)
             let dirtyRejection = try offset(of: "Refusing a signed", in: script)
@@ -336,8 +381,18 @@ final class DistributionScriptTests: XCTestCase {
             XCTAssertLessThan(stage, publish, name)
             XCTAssertTrue(
                 script.contains(
-                    "verify_source_unchanged\npublish_staged_release_directory"
+                    "verify_source_unchanged\n" +
+                        "# Both profiles use one timestamp, after every other " +
+                        "fallible release check.\n" +
+                        "validate_profiles_at_final_publication_fence || exit $?\n" +
+                        "publish_staged_release_directory"
                 ),
+                name
+            )
+            XCTAssertTrue(script.contains("local validation_epoch"), name)
+            XCTAssertEqual(
+                script.components(separatedBy: #""$validation_epoch""#).count - 1,
+                2,
                 name
             )
             XCTAssertTrue(script.contains("output_dir=\"$staging_dir\""), name)
