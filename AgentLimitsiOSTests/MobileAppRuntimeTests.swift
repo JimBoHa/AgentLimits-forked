@@ -45,11 +45,25 @@ final class MobileAppRuntimeTests: XCTestCase {
 
     @MainActor
     func testUITestRuntimeResetClearsOnlyIsolatedState() throws {
-        let standardSentinelKey =
-            "MobileAppRuntimeTests.standard-sentinel.\(UUID().uuidString)"
-        UserDefaults.standard.set(true, forKey: standardSentinelKey)
+        let standardDefaults = UserDefaults.standard
+        let productionKey = MobileAccountStore.persistenceKey
+        let originalProductionValue = standardDefaults.object(
+            forKey: productionKey
+        )
+        let productionSentinel = Data(
+            "MobileAppRuntimeTests.production-account-sentinel"
+                .utf8
+        )
+        standardDefaults.set(productionSentinel, forKey: productionKey)
         defer {
-            UserDefaults.standard.removeObject(forKey: standardSentinelKey)
+            if let originalProductionValue {
+                standardDefaults.set(
+                    originalProductionValue,
+                    forKey: productionKey
+                )
+            } else {
+                standardDefaults.removeObject(forKey: productionKey)
+            }
         }
         let arguments = ["AgentLimits", "-ui-testing-reset"]
         let firstRuntime = MobileAppRuntime.make(arguments: arguments)
@@ -65,6 +79,9 @@ final class MobileAppRuntimeTests: XCTestCase {
             resetRuntime.model.accountStore.accounts(for: .copilot).count,
             1
         )
-        XCTAssertTrue(UserDefaults.standard.bool(forKey: standardSentinelKey))
+        XCTAssertEqual(
+            standardDefaults.data(forKey: productionKey),
+            productionSentinel
+        )
     }
 }
