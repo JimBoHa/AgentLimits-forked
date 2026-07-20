@@ -49,7 +49,9 @@ struct MobileRootView: View {
                 } else if accountStore.didRecoverCorruptData {
                     Section {
                         Label(
-                            "Damaged account data was repaired. Saved session credentials were cleared to prevent unreachable secrets.",
+                            accountStore.didClearCredentialsDuringRecovery
+                                ? "Damaged account data was repaired. Saved session credentials were cleared to prevent unreachable secrets."
+                                : "Damaged account data was repaired. Saved session credentials remain available.",
                             systemImage: "checkmark.shield.fill"
                         )
                         .foregroundStyle(.orange)

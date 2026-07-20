@@ -55,6 +55,7 @@
 "settings.hideMenuBarIcon" = "Сховати іконку рядка меню";
 "settings.hideMenuBarIcon.hint" = "Поки приховано, двічі клацніть іконку програми для тимчасового відображення.";
 "settings.menuBar.sectionTitle" = "Рядок меню";
+"accessibility.menuBar.noProviders" = "У смузі меню не відображається жоден постачальник.";
 
 /* Display Mode */
 "displayMode.used" = "Рівень використання";
@@ -257,6 +258,7 @@
 "activity.observed" = "Зафіксовано";
 "activity.refresh" = "Оновити сеанси";
 "activity.credentialTitle" = "Облікові дані сеансу GitHub";
+"activity.manageCredential" = "Керувати обліковими даними сеансу GitHub";
 "activity.credentialPlaceholder" = "Вставте облікові дані";
 "activity.credentialHelp" = "Використовуйте деталізований PAT або токен доступу користувача GitHub App лише з дозволом на читання «Agent tasks» у репозиторіях. Він залишається у в’язці ключів цього пристрою. API перебуває в загальнодоступній попередній версії.";
 "activity.credentialStored" = "Для цього облікового запису збережено облікові дані.";

@@ -55,6 +55,7 @@
 "settings.hideMenuBarIcon" = "隐藏菜单栏图标";
 "settings.hideMenuBarIcon.hint" = "隐藏后，双击应用图标即可临时显示。";
 "settings.menuBar.sectionTitle" = "菜单栏";
+"accessibility.menuBar.noProviders" = "菜单栏中未显示任何提供商。";
 
 /* Display Mode */
 "displayMode.used" = "使用率";
@@ -257,6 +258,7 @@
 "activity.observed" = "观测于";
 "activity.refresh" = "刷新会话";
 "activity.credentialTitle" = "GitHub 会话凭据";
+"activity.manageCredential" = "管理 GitHub 会话凭据";
 "activity.credentialPlaceholder" = "粘贴凭据";
 "activity.credentialHelp" = "请使用仅有仓库“Agent tasks”读取权限的细粒度 PAT 或 GitHub App 用户访问令牌。它只保留在此设备的钥匙串中。此 API 处于公开预览阶段。";
 "activity.credentialStored" = "已为此账户存储凭据。";

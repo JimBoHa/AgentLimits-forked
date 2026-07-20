@@ -55,6 +55,7 @@
 "settings.hideMenuBarIcon" = "Menubalkicoon verbergen";
 "settings.hideMenuBarIcon.hint" = "Terwijl het verborgen is, dubbelklik op het app-icoon om het tijdelijk weer te tonen.";
 "settings.menuBar.sectionTitle" = "Menubalk";
+"accessibility.menuBar.noProviders" = "Er worden geen providers in de menubalk weergegeven.";
 
 /* Display Mode */
 "displayMode.used" = "Gebruikspercentage";
@@ -257,6 +258,7 @@
 "activity.observed" = "Waargenomen";
 "activity.refresh" = "Sessies vernieuwen";
 "activity.credentialTitle" = "GitHub-sessiereferentie";
+"activity.manageCredential" = "GitHub-sessiereferentie beheren";
 "activity.credentialPlaceholder" = "Referentie plakken";
 "activity.credentialHelp" = "Gebruik een fijnmazig PAT of gebruikerstoegangstoken van een GitHub-app met uitsluitend leesrechten voor ‘Agent tasks’ in opslagplaatsen. Het blijft in de sleutelhanger van dit apparaat. De API is een openbare preview.";
 "activity.credentialStored" = "Voor dit account is een referentie opgeslagen.";

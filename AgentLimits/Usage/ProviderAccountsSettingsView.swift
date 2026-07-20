@@ -252,6 +252,9 @@ struct ProviderAccountsSettingsView: View {
                 }
                 .disabled(isBusy)
                 .help("activity.credentialTitle".localized())
+                .accessibilityLabel(
+                    "\("activity.manageCredential".localized()) — \(account.label)"
+                )
             }
 
             Toggle(

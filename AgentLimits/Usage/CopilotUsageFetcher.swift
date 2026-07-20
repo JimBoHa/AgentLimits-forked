@@ -31,6 +31,10 @@ struct CopilotUsageResponse: Codable {
     let quotas: Quotas?
 }
 
+enum CopilotUsageResponseError: Error, Equatable {
+    case invalidQuota
+}
+
 extension CopilotUsageResponse {
     /// Copilot reset dates are date-only UTC billing boundaries.
     private static let billingCalendar: Calendar = {
@@ -49,8 +53,8 @@ extension CopilotUsageResponse {
         return formatter
     }()
 
-    func toSnapshot(fetchedAt: Date) -> UsageSnapshot {
-        let primary = makePrimaryWindow()
+    func toSnapshot(fetchedAt: Date) throws -> UsageSnapshot {
+        let primary = try makePrimaryWindow()
         return UsageSnapshot(
             provider: .githubCopilot,
             fetchedAt: fetchedAt,
@@ -59,24 +63,53 @@ extension CopilotUsageResponse {
         )
     }
 
-    private func makePrimaryWindow() -> UsageWindow? {
-        guard let quotas = quotas,
-              let remaining = quotas.remaining,
-              let remainingPercentage = remaining.premiumInteractionsPercentage else {
+    private func makePrimaryWindow() throws -> UsageWindow? {
+        guard let quotas else {
             return nil
+        }
+
+        let limitCount = quotas.limits?.premiumInteractions
+        if let limitCount, limitCount < 0 {
+            throw CopilotUsageResponseError.invalidQuota
+        }
+
+        let remainingCount = quotas.remaining?.premiumInteractions
+        if let remainingCount,
+           remainingCount < 0,
+           quotas.overagesEnabled != true {
+            // GitHub permits consumption past the included allowance only when
+            // paid overages are enabled. A negative remainder otherwise cannot
+            // describe a coherent entitlement.
+            throw CopilotUsageResponseError.invalidQuota
+        }
+
+        let usedCount: Int?
+        if let limit = limitCount, let remainder = remainingCount {
+            let (difference, overflow) = limit.subtractingReportingOverflow(
+                remainder
+            )
+            guard !overflow else {
+                throw CopilotUsageResponseError.invalidQuota
+            }
+            // A remainder above the nominal allowance can occur after an
+            // entitlement increase. Preserve the existing zero-used behavior.
+            // A negative remainder with overages enabled reports usage beyond
+            // the included allowance.
+            usedCount = max(0, difference)
+        } else {
+            usedCount = nil
+        }
+
+        guard let remainingPercentage = quotas.remaining?.premiumInteractionsPercentage else {
+            return nil
+        }
+        guard remainingPercentage.isFinite else {
+            throw CopilotUsageResponseError.invalidQuota
         }
 
         let usedPercent = max(0, min(100, 100.0 - remainingPercentage))
         let resetAt = quotas.resetDate.flatMap { Self.resetDateFormatter.date(from: $0) }
         let limitWindowSeconds = computeLimitWindowSeconds(resetAt: resetAt)
-
-        let limitCount = quotas.limits?.premiumInteractions
-        let usedCount: Int?
-        if let limit = limitCount, let rem = remaining.premiumInteractions {
-            usedCount = max(0, limit - rem)
-        } else {
-            usedCount = nil
-        }
 
         return UsageWindow(
             kind: .primary,
@@ -153,17 +186,18 @@ final class CopilotUsageFetcher {
     /// Fetches current usage snapshot by executing JavaScript in the WebView
     @MainActor
     func fetchUsageSnapshot(using webView: WKWebView) async throws -> UsageSnapshot {
-        let response: CopilotUsageResponse
         do {
-            response = try await scriptRunner.decodeJSONScript(
+            let response = try await scriptRunner.decodeJSONScript(
                 CopilotUsageResponse.self,
                 script: Self.usageScript,
                 webView: webView
             )
+            return try response.toSnapshot(fetchedAt: Date())
         } catch let error as WebViewScriptRunnerError {
             throw mapScriptError(error)
+        } catch is CopilotUsageResponseError {
+            throw CopilotUsageFetcherError.invalidResponse
         }
-        return response.toSnapshot(fetchedAt: Date())
     }
 
     /// Checks if user is logged in by verifying the GitHub session cookie
