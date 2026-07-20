@@ -2705,11 +2705,20 @@ final class DistributionScriptTests: XCTestCase {
             "TAR_WRITER_OPTIONS": "zip:compression=store",
             "COPYFILE_DISABLE": "1"
         ]
-        let command = #"source "$1"; sanitize_release_tool_environment; /usr/bin/env"#
+        let command = #"""
+        export DYLD_INSERT_LIBRARIES=/private/tmp/hostile.dylib
+        export DYLD_LIBRARY_PATH=/private/tmp/hostile-library
+        export DYLD_FUTURE_OVERRIDE=hostile
+        source "$1"
+        sanitize_release_tool_environment
+        /usr/bin/env
+        """#
 
         let result = try runSigningConfigHelper(
             command: command,
-            environment: hostileEnvironment
+            environment: hostileEnvironment.filter {
+                !$0.key.hasPrefix("DYLD_")
+            }
         )
 
         XCTAssertEqual(result.status, 0, result.output)
@@ -2769,12 +2778,20 @@ final class DistributionScriptTests: XCTestCase {
             "xcrun_verbose": "1",
             "xcrun_log": "/private/tmp/hostile-xcrun.log"
         ]
-        let command = #"source "$1"; prepare_xcode_signing_environment "$2"; /usr/bin/env"#
+        let command = #"""
+        export DYLD_INSERT_LIBRARIES=/private/tmp/hostile.dylib
+        export DYLD_FRAMEWORK_PATH=/private/tmp/hostile-frameworks
+        source "$1"
+        prepare_xcode_signing_environment "$2"
+        /usr/bin/env
+        """#
 
         let result = try runSigningConfigValidator(
             config: config,
             command: command,
-            environment: hostileEnvironment
+            environment: hostileEnvironment.filter {
+                !$0.key.hasPrefix("DYLD_")
+            }
         )
 
         XCTAssertEqual(result.status, 0, result.output)
@@ -2799,11 +2816,18 @@ final class DistributionScriptTests: XCTestCase {
             "xcrun_verbose": "1",
             "xcrun_log": "/private/tmp/hostile-xcrun.log"
         ]
-        let command = #"source "$1"; apple_run_selected_tool /private/tmp/FixtureXcode.app/Contents/Developer /usr/bin/env"#
+        let command = #"""
+        export DYLD_INSERT_LIBRARIES=/private/tmp/hostile.dylib
+        source "$1"
+        apple_run_selected_tool \
+            /private/tmp/FixtureXcode.app/Contents/Developer /usr/bin/env
+        """#
 
         let result = try runAppleToolchainHelper(
             command: command,
-            environment: hostileEnvironment
+            environment: hostileEnvironment.filter {
+                !$0.key.hasPrefix("DYLD_")
+            }
         )
 
         XCTAssertEqual(result.status, 0, result.output)
