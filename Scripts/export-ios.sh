@@ -1,12 +1,14 @@
 #!/bin/bash
+# shellcheck disable=SC2154
 
 set -euo pipefail
 
 PATH="/usr/bin:/bin:/usr/sbin:/sbin"
 export PATH
+unset CDPATH
 
 usage() {
-    echo "Usage: $0 OUTPUT_DIRECTORY {app-store-connect|release-testing}" >&2
+    echo "Usage: $0 /ABSOLUTE/OUTPUT_DIRECTORY {app-store-connect|release-testing}" >&2
     echo "Archives iOS with its embedded Watch app, then exports a signed IPA." >&2
 }
 
@@ -15,7 +17,7 @@ if [[ $# -ne 2 ]]; then
     exit 64
 fi
 
-output_dir="$1"
+requested_output="$1"
 distribution_method="$2"
 
 case "$distribution_method" in
@@ -31,14 +33,22 @@ case "$distribution_method" in
         ;;
 esac
 
-script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-project_root="$(cd "$script_dir/.." && pwd)"
+invoked_script="${BASH_SOURCE[0]}"
+if [[ -L "$invoked_script" ]]; then
+    echo "Refusing to run a signed release through a script symlink" >&2
+    exit 64
+fi
+script_dir="$(cd "$(dirname "$invoked_script")" >/dev/null && pwd -P)"
+project_root="$(cd "$script_dir/.." >/dev/null && pwd -P)"
 developer_dir="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}"
 local_config="$project_root/Configurations/DevelopmentTeam.local.xcconfig"
 validated_development_team=""
 validated_development_team_config_hash=""
 # shellcheck disable=SC1091
 source "$script_dir/signing-config.sh"
+sanitize_release_git_environment
+# shellcheck disable=SC1091
+source "$script_dir/release-output.sh"
 # shellcheck disable=SC1091
 source "$script_dir/app-store-product-validation.sh"
 
@@ -54,16 +64,17 @@ fi
 validate_development_team_config "$local_config" || exit $?
 team_id="$validated_development_team"
 local_config_hash="$validated_development_team_config_hash"
-if [[ -e "$output_dir" ]]; then
-    echo "Refusing to overwrite existing path: $output_dir" >&2
-    exit 73
-fi
+validate_release_output_request "$requested_output" "$project_root" || exit $?
+output_parent="$validated_release_output_parent"
+output_parent_identity="$validated_release_output_parent_identity"
+output_name="$validated_release_output_name"
+release_output_dir="$validated_release_output_directory"
+source_commit="$(git -C "$project_root" rev-parse HEAD)"
 if [[ -n "$(git -C "$project_root" status --porcelain \
         --untracked-files=normal)" ]]; then
     echo "Refusing a signed export from a dirty Git working tree" >&2
     exit 65
 fi
-source_commit="$(git -C "$project_root" rev-parse HEAD)"
 
 verify_source_unchanged() {
     verify_development_team_config_unchanged \
@@ -76,17 +87,70 @@ verify_source_unchanged() {
     fi
 }
 
-mkdir -p "$output_dir"
-output_dir="$(cd "$output_dir" && pwd)"
-work_dir="$(mktemp -d "${TMPDIR:-/tmp}/AgentLimits-ios-export.XXXXXX")"
+work_dir=""
+work_dir_identity=""
+staging_parent=""
+staging_parent_identity=""
+staging_dir=""
+staging_dir_identity=""
+publication_lock=""
+publication_lock_identity=""
+atomic_publisher=""
+atomic_publisher_identity=""
+atomic_publisher_hash=""
+derived_data=""
 
 cleanup() {
-    if [[ -n "${work_dir:-}" && -d "$work_dir" \
-        && "$work_dir" == *"/AgentLimits-ios-export."* ]]; then
-        rm -rf "$work_dir"
+    local exit_status=$?
+
+    set +e
+    cleanup_private_release_directory \
+        "${staging_parent:-}" \
+        "${staging_parent_identity:-}" \
+        "$output_parent" \
+        '^\.AgentLimits-ios-export-stage\.[A-Za-z0-9]{6}$' \
+        || true
+    cleanup_private_release_directory \
+        "${work_dir:-}" \
+        "${work_dir_identity:-}" \
+        /private/tmp \
+        '^AgentLimits-ios-export\.[A-Za-z0-9]{6}$' \
+        || true
+    if [[ -n "${publication_lock:-}" ]]; then
+        release_release_publication_lock \
+            "$publication_lock" \
+            "$publication_lock_identity" \
+            "$output_parent" \
+            "$output_name" \
+            || true
     fi
+    return "$exit_status"
 }
 trap cleanup EXIT
+
+acquire_release_publication_lock \
+    "$output_parent" "$output_name" "$output_parent_identity" || exit $?
+publication_lock="$validated_release_publication_lock"
+publication_lock_identity="$validated_release_publication_lock_identity"
+create_release_staging_directory \
+    "$output_parent" \
+    "$output_name" \
+    "$output_parent_identity" \
+    ios-export \
+    || exit $?
+staging_parent="$validated_release_staging_parent"
+staging_parent_identity="$validated_release_staging_parent_identity"
+staging_dir="$validated_release_staging_directory"
+staging_dir_identity="$validated_release_staging_directory_identity"
+output_dir="$staging_dir"
+create_private_release_work_directory AgentLimits-ios-export || exit $?
+work_dir="$validated_release_work_directory"
+work_dir_identity="$validated_release_work_directory_identity"
+configure_private_release_temporary_directory "$work_dir" || exit $?
+derived_data="$work_dir/DerivedData"
+mkdir -m 700 "$derived_data"
+make_release_directory_private "$derived_data" || exit $?
+verify_source_unchanged
 
 export DEVELOPER_DIR="$developer_dir"
 
@@ -99,6 +163,14 @@ printf 'DEVELOPMENT_TEAM = %s\n' "$team_id" >"$snapshot_config"
 chmod 600 "$snapshot_config"
 prepare_xcode_signing_environment "$snapshot_config"
 verify_source_unchanged
+build_atomic_release_publisher \
+    "$build_root/Scripts/atomic-release-publish.c" \
+    "$work_dir/atomic-release-publish" \
+    || exit $?
+atomic_publisher="$validated_release_atomic_publisher"
+atomic_publisher_identity="$validated_release_atomic_publisher_identity"
+atomic_publisher_hash="$validated_release_atomic_publisher_hash"
+verify_source_unchanged
 
 settings="$(xcodebuild \
     -project "$build_root/AgentLimits.xcodeproj" \
@@ -106,6 +178,7 @@ settings="$(xcodebuild \
     -configuration Release \
     -sdk iphoneos \
     -onlyUsePackageVersionsFromResolvedFile \
+    -derivedDataPath "$derived_data" \
     -showBuildSettings 2>/dev/null)"
 resolved_team_id="$(printf '%s\n' "$settings" \
     | sed -n 's/^[[:space:]]*DEVELOPMENT_TEAM = //p' \
@@ -145,6 +218,7 @@ if ! xcodebuild archive \
     -configuration Release \
     -destination 'generic/platform=iOS' \
     -onlyUsePackageVersionsFromResolvedFile \
+    -derivedDataPath "$derived_data" \
     -archivePath "$archive" \
     SWIFT_TREAT_WARNINGS_AS_ERRORS=YES \
     GCC_TREAT_WARNINGS_AS_ERRORS=YES \
@@ -387,5 +461,27 @@ watchOS architectures: $watch_archs
 Signing verification: passed
 EOF
 
-echo "Signed IPA created: $output_dir/$ipa_name"
+verify_source_unchanged
+publish_staged_release_directory \
+    "$staging_dir" \
+    "$staging_dir_identity" \
+    "$output_parent" \
+    "$output_parent_identity" \
+    "$output_name" \
+    "$atomic_publisher" \
+    "$atomic_publisher_identity" \
+    "$atomic_publisher_hash" \
+    || exit $?
+staging_dir=""
+rmdir "$staging_parent"
+staging_parent=""
+release_release_publication_lock \
+    "$publication_lock" \
+    "$publication_lock_identity" \
+    "$output_parent" \
+    "$output_name" \
+    || exit $?
+publication_lock=""
+
+echo "Signed IPA created: $release_output_dir/$ipa_name"
 echo "The Apple Watch installer is embedded in that IPA."

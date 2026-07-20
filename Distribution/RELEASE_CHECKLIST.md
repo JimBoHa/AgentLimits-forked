@@ -74,6 +74,8 @@
       unexpected framework, service, extension, bundle, library, or raw Mach-O.
 - [ ] Both privacy manifests declare no tracking, no collected-data types, no
       tracking domains, and only UserDefaults reason `CA92.1`.
+- [ ] Only the iOS companion scheme is archivable; the standalone Watch scheme
+      remains non-archivable.
 - [ ] Xcode/App Store validation passes without warning.
 - [ ] TestFlight install and full smoke test pass.
 
