@@ -121,6 +121,306 @@ app_store_require_regular_file() {
     fi
 }
 
+validated_app_store_ipa=""
+validated_app_store_ios_app=""
+
+app_store_select_single_ipa() {
+    if [[ $# -ne 2 ]]; then
+        app_store_validation_error \
+            "usage: app_store_select_single_ipa EXPORT_DIR SCRATCH_FILE"
+        return 64
+    fi
+
+    local export_dir="$1"
+    local scratch_file="$2"
+    local candidate
+    local candidate_count=0
+
+    validated_app_store_ipa=""
+    if [[ ! -d "$export_dir" || -L "$export_dir" ]]; then
+        app_store_validation_error "IPA export directory is missing or is a symlink"
+        return 1
+    fi
+    if ! /usr/bin/find "$export_dir" -mindepth 1 -maxdepth 1 \
+            -type l -print0 >"$scratch_file-symlinks"; then
+        app_store_validation_error "IPA export directory could not be inspected"
+        return 1
+    fi
+    if [[ -s "$scratch_file-symlinks" ]]; then
+        app_store_validation_error "IPA export directory contains a symlink"
+        return 1
+    fi
+    if ! /usr/bin/find "$export_dir" -mindepth 1 -maxdepth 1 \
+            -type f -iname '*.ipa' -print0 >"$scratch_file-candidates"; then
+        app_store_validation_error "IPA export directory could not be inspected"
+        return 1
+    fi
+    while IFS= read -r -d '' candidate; do
+        ((candidate_count += 1))
+        validated_app_store_ipa="$candidate"
+    done <"$scratch_file-candidates"
+    if [[ "$candidate_count" != "1" ]]; then
+        app_store_validation_error \
+            "IPA export must contain exactly one regular IPA"
+        # Read by callers after sourcing this helper.
+        # shellcheck disable=SC2034
+        validated_app_store_ipa=""
+        return 1
+    fi
+}
+
+app_store_select_single_payload_app() {
+    if [[ $# -ne 2 ]]; then
+        app_store_validation_error \
+            "usage: app_store_select_single_payload_app IPA_ROOT SCRATCH_FILE"
+        return 64
+    fi
+
+    local ipa_root="$1"
+    local scratch_file="$2"
+    local payload="$ipa_root/Payload"
+    local candidate
+    local candidate_count=0
+
+    validated_app_store_ios_app=""
+    if [[ ! -d "$ipa_root" || -L "$ipa_root" \
+        || ! -d "$payload" || -L "$payload" ]]; then
+        app_store_validation_error \
+            "extracted IPA or Payload is missing or is a symlink"
+        return 1
+    fi
+    if ! /usr/bin/find "$ipa_root" -mindepth 1 -type l \
+            -print0 >"$scratch_file-symlinks"; then
+        app_store_validation_error "extracted IPA could not be inspected"
+        return 1
+    fi
+    if [[ -s "$scratch_file-symlinks" ]]; then
+        app_store_validation_error "extracted IPA contains a symlink"
+        return 1
+    fi
+    if ! /usr/bin/find "$payload" -mindepth 1 -maxdepth 1 \
+            -type d -iname '*.app' -print0 >"$scratch_file-candidates"; then
+        app_store_validation_error "IPA Payload could not be inspected"
+        return 1
+    fi
+    while IFS= read -r -d '' candidate; do
+        ((candidate_count += 1))
+        validated_app_store_ios_app="$candidate"
+    done <"$scratch_file-candidates"
+    if [[ "$candidate_count" != "1" ]]; then
+        app_store_validation_error \
+            "IPA Payload must contain exactly one regular app"
+        # Read by callers after sourcing this helper.
+        # shellcheck disable=SC2034
+        validated_app_store_ios_app=""
+        return 1
+    fi
+}
+
+app_store_validate_executable_bundle_topology() {
+    if [[ $# -ne 4 ]]; then
+        app_store_validation_error \
+            "usage: app_store_validate_executable_bundle_topology ROOT IOS_APP WATCH_APP SCRATCH_FILE"
+        return 64
+    fi
+
+    local search_root="$1"
+    local ios_app="$2"
+    local watch_app="$3"
+    local scratch_file="$4"
+    local candidate
+    local ios_count=0
+    local watch_count=0
+
+    if [[ ! -d "$search_root" || -L "$search_root" ]]; then
+        app_store_validation_error \
+            "executable-bundle search root is missing or is a symlink"
+        return 1
+    fi
+    if ! /usr/bin/find "$search_root" -mindepth 1 -type l \
+            -print0 >"$scratch_file-symlinks"; then
+        app_store_validation_error "product symlinks could not be inspected"
+        return 1
+    fi
+    if [[ -s "$scratch_file-symlinks" ]]; then
+        app_store_validation_error "product contains an unexpected symlink"
+        return 1
+    fi
+    if ! /usr/bin/find "$search_root" -mindepth 1 \
+            \( -iname '*.app' -o -iname '*.appex' \) \
+            -print0 >"$scratch_file-bundles"; then
+        app_store_validation_error "executable bundles could not be inspected"
+        return 1
+    fi
+    while IFS= read -r -d '' candidate; do
+        if [[ "$candidate" == "$ios_app" ]]; then
+            ((ios_count += 1))
+        elif [[ "$candidate" == "$watch_app" ]]; then
+            ((watch_count += 1))
+        else
+            app_store_validation_error \
+                "product contains unexpected app or app-extension bundle"
+            return 1
+        fi
+    done <"$scratch_file-bundles"
+    if [[ "$watch_count" != "1" ]]; then
+        app_store_validation_error \
+            "product must contain exactly one dependent Watch app"
+        return 1
+    fi
+    if [[ "$search_root" != "$ios_app" && "$ios_count" != "1" ]]; then
+        app_store_validation_error \
+            "IPA must contain exactly one expected iOS app"
+        return 1
+    fi
+}
+
+app_store_validate_png() {
+    local path="$1"
+    local expected_width="$2"
+    local expected_height="$3"
+    local label="$4"
+    local details
+    local format
+    local width
+    local height
+
+    app_store_require_regular_file "$path" "$label" || return 1
+    if [[ ! -s "$path" ]]; then
+        app_store_validation_error "$label is empty"
+        return 1
+    fi
+    if ! details="$(/usr/bin/sips -g format -g pixelWidth -g pixelHeight \
+            "$path" 2>/dev/null)"; then
+        app_store_validation_error "$label is not a readable image"
+        return 1
+    fi
+    format="$(printf '%s\n' "$details" \
+        | /usr/bin/sed -n 's/^[[:space:]]*format: //p')"
+    width="$(printf '%s\n' "$details" \
+        | /usr/bin/sed -n 's/^[[:space:]]*pixelWidth: //p')"
+    height="$(printf '%s\n' "$details" \
+        | /usr/bin/sed -n 's/^[[:space:]]*pixelHeight: //p')"
+    if [[ "$format" != "png" || "$width" != "$expected_width" \
+        || "$height" != "$expected_height" ]]; then
+        app_store_validation_error \
+            "$label must be a ${expected_width}x${expected_height} PNG"
+        return 1
+    fi
+}
+
+app_store_write_asset_catalog_info() {
+    local catalog="$1"
+    local label="$2"
+    local expected_platform="$3"
+    local info="$4"
+    local assetutil="$5"
+    local raw_info="$info.raw.json"
+    local rendition_count
+    local index
+    local platform
+    local platform_count=0
+
+    app_store_require_regular_file "$catalog" "$label" || return 1
+    if [[ ! -s "$catalog" ]]; then
+        app_store_validation_error "$label is empty"
+        return 1
+    fi
+    if [[ ! -x "$assetutil" || ! -f "$assetutil" || -L "$assetutil" ]]; then
+        app_store_validation_error "assetutil is unavailable or unsafe"
+        return 1
+    fi
+    printf '{"renditions":' >"$raw_info"
+    if ! "$assetutil" --info "$catalog" >>"$raw_info" 2>/dev/null; then
+        app_store_validation_error "$label could not be inspected by assetutil"
+        return 1
+    fi
+    printf '}\n' >>"$raw_info"
+    if ! /usr/bin/plutil -convert xml1 -o "$info" \
+            "$raw_info" >/dev/null 2>&1 \
+        || ! /usr/bin/plutil -lint "$info" >/dev/null 2>&1; then
+        app_store_validation_error "$label produced invalid asset metadata"
+        return 1
+    fi
+    if ! rendition_count="$(/usr/bin/plutil -extract renditions raw \
+            -expect array "$info" 2>/dev/null)" \
+        || [[ ! "$rendition_count" =~ ^[0-9]+$ \
+            || "$rendition_count" -lt 1 \
+            || "$rendition_count" -gt 10000 ]]; then
+        app_store_validation_error "$label has an invalid rendition count"
+        return 1
+    fi
+    for ((index = 0; index < rendition_count; index += 1)); do
+        platform="$(/usr/bin/plutil -extract \
+            "renditions.$index.Platform" raw -expect string \
+            "$info" 2>/dev/null || true)"
+        if [[ -n "$platform" ]]; then
+            ((platform_count += 1))
+            if [[ "$platform" != "$expected_platform" ]]; then
+                app_store_validation_error \
+                    "$label has unexpected platform metadata: $platform"
+                return 1
+            fi
+        fi
+    done
+    if [[ "$platform_count" != "1" ]]; then
+        app_store_validation_error \
+            "$label must contain exactly one $expected_platform platform record"
+        return 1
+    fi
+}
+
+app_store_asset_catalog_expect_named_icon() {
+    local info="$1"
+    local expected_idiom="$2"
+    local label="$3"
+    local rendition_count
+    local index
+    local asset_type
+    local name
+    local idiom
+    local width
+    local height
+    local opaque
+    local match_count=0
+
+    rendition_count="$(/usr/bin/plutil -extract renditions raw \
+        -expect array "$info")" || return 1
+    for ((index = 0; index < rendition_count; index += 1)); do
+        asset_type="$(/usr/bin/plutil -extract \
+            "renditions.$index.AssetType" raw -expect string \
+            "$info" 2>/dev/null || true)"
+        if [[ "$asset_type" != "Icon Image" ]]; then
+            continue
+        fi
+        name="$(/usr/bin/plutil -extract "renditions.$index.Name" raw \
+            -expect string "$info" 2>/dev/null || true)"
+        idiom="$(/usr/bin/plutil -extract "renditions.$index.Idiom" raw \
+            -expect string "$info" 2>/dev/null || true)"
+        if [[ "$name" != "agentlimits" || "$idiom" != "$expected_idiom" ]]; then
+            continue
+        fi
+        width="$(/usr/bin/plutil -extract \
+            "renditions.$index.PixelWidth" raw -expect integer \
+            "$info" 2>/dev/null || true)"
+        height="$(/usr/bin/plutil -extract \
+            "renditions.$index.PixelHeight" raw -expect integer \
+            "$info" 2>/dev/null || true)"
+        opaque="$(/usr/bin/plutil -extract \
+            "renditions.$index.Opaque" raw -expect bool \
+            "$info" 2>/dev/null || true)"
+        if [[ "$width" == "1024" && "$height" == "1024" \
+            && "$opaque" == "true" ]]; then
+            ((match_count += 1))
+        fi
+    done
+    if [[ "$match_count" -lt 1 ]]; then
+        app_store_validation_error \
+            "$label lacks an opaque 1024x1024 agentlimits icon for $expected_idiom"
+        return 1
+    fi
+}
+
 app_store_validate_privacy_manifest() {
     local manifest="$1"
     local label="$2"
@@ -173,10 +473,10 @@ app_store_validate_privacy_manifest() {
         NSPrivacyTrackingDomains || return 1
 }
 
-validate_app_store_product() {
-    if [[ $# -ne 4 ]]; then
+app_store_validate_product_with_assetutil() {
+    if [[ $# -ne 5 ]]; then
         app_store_validation_error \
-            "usage: validate_app_store_product IOS_APP VERSION BUILD SCRATCH_DIR"
+            "usage: app_store_validate_product_with_assetutil IOS_APP VERSION BUILD SCRATCH_DIR ASSETUTIL"
         return 64
     fi
 
@@ -184,6 +484,7 @@ validate_app_store_product() {
     local expected_version="$2"
     local expected_build="$3"
     local scratch_dir="$4"
+    local assetutil="$5"
     local ios_info="$ios_app/Info.plist"
     local watch_root="$ios_app/Watch"
     local watch_app="$watch_root/AgentLimitsWatch.app"
@@ -209,6 +510,10 @@ validate_app_store_product() {
         app_store_validation_error "validation scratch directory could not be created"
         return 1
     fi
+
+    app_store_validate_executable_bundle_topology \
+        "$ios_app" "$ios_app" "$watch_app" \
+        "$scratch_dir/product-topology" || return 1
 
     app_store_require_regular_file "$ios_info" "iOS Info.plist" || return 1
     app_store_require_regular_file "$watch_info" "Watch Info.plist" || return 1
@@ -307,12 +612,21 @@ validate_app_store_product() {
         "$ios_info" 'CFBundleIcons~ipad.CFBundlePrimaryIcon.CFBundleIconFiles.1' \
         string agentlimits76x76 "iPad product" || return 1
 
-    app_store_require_regular_file \
-        "$ios_app/Assets.car" "iOS compiled assets" || return 1
-    app_store_require_regular_file \
-        "$ios_app/agentlimits60x60@2x.png" "iPhone App Store icon" || return 1
-    app_store_require_regular_file \
-        "$ios_app/agentlimits76x76@2x~ipad.png" "iPad App Store icon" || return 1
+    app_store_validate_png \
+        "$ios_app/agentlimits60x60@2x.png" 120 120 \
+        "iPhone compiled icon" || return 1
+    app_store_validate_png \
+        "$ios_app/agentlimits76x76@2x~ipad.png" 152 152 \
+        "iPad compiled icon" || return 1
+    app_store_write_asset_catalog_info \
+        "$ios_app/Assets.car" "iOS compiled assets" ios \
+        "$scratch_dir/ios-assets.plist" "$assetutil" || return 1
+    app_store_asset_catalog_expect_named_icon \
+        "$scratch_dir/ios-assets.plist" phone \
+        "iOS compiled assets" || return 1
+    app_store_asset_catalog_expect_named_icon \
+        "$scratch_dir/ios-assets.plist" pad \
+        "iOS compiled assets" || return 1
 
     app_store_plist_expect_value \
         "$watch_info" CFBundleName string AgentLimitsWatch \
@@ -343,8 +657,12 @@ validate_app_store_product() {
     app_store_plist_expect_value \
         "$watch_info" CFBundleIcons.CFBundlePrimaryIcon.CFBundleIconName \
         string agentlimits "Watch product" || return 1
-    app_store_require_regular_file \
-        "$watch_app/Assets.car" "Watch compiled assets" || return 1
+    app_store_write_asset_catalog_info \
+        "$watch_app/Assets.car" "Watch compiled assets" watch \
+        "$scratch_dir/watch-assets.plist" "$assetutil" || return 1
+    app_store_asset_catalog_expect_named_icon \
+        "$scratch_dir/watch-assets.plist" watch \
+        "Watch compiled assets" || return 1
 
     app_store_validate_privacy_manifest \
         "$ios_app/PrivacyInfo.xcprivacy" "iOS privacy manifest" ios \
@@ -352,4 +670,14 @@ validate_app_store_product() {
     app_store_validate_privacy_manifest \
         "$watch_app/PrivacyInfo.xcprivacy" "Watch privacy manifest" watch \
         "$scratch_dir" || return 1
+}
+
+validate_app_store_product() {
+    if [[ $# -ne 4 ]]; then
+        app_store_validation_error \
+            "usage: validate_app_store_product IOS_APP VERSION BUILD SCRATCH_DIR"
+        return 64
+    fi
+    app_store_validate_product_with_assetutil "$1" "$2" "$3" "$4" \
+        /usr/bin/assetutil
 }

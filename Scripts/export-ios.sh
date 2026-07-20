@@ -102,8 +102,9 @@ verify_source_unchanged
 
 settings="$(xcodebuild \
     -project "$build_root/AgentLimits.xcodeproj" \
-    -scheme AgentLimitsiOS \
+    -target AgentLimitsiOS \
     -configuration Release \
+    -sdk iphoneos \
     -onlyUsePackageVersionsFromResolvedFile \
     -showBuildSettings 2>/dev/null)"
 resolved_team_id="$(printf '%s\n' "$settings" \
@@ -175,16 +176,20 @@ if ! xcodebuild -exportArchive \
 fi
 verify_source_unchanged
 
-ipa="$(find "$export_dir" -maxdepth 1 -type f -name '*.ipa' -print -quit)"
-if [[ -z "$ipa" ]]; then
-    echo "Xcode export produced no IPA" >&2
-    exit 1
-fi
+app_store_select_single_ipa \
+    "$export_dir" "$work_dir/ipa-export" || exit $?
+# Assigned by the sourced product-validation helper.
+# shellcheck disable=SC2154
+ipa="$validated_app_store_ipa"
 
 verification_root="$work_dir/ipa"
 mkdir -p "$verification_root"
-unzip -q "$ipa" -d "$verification_root"
-ios_app="$(find "$verification_root/Payload" -maxdepth 1 -type d -name '*.app' -print -quit)"
+/usr/bin/ditto -x -k "$ipa" "$verification_root"
+app_store_select_single_payload_app \
+    "$verification_root" "$work_dir/ipa-payload" || exit $?
+# Assigned by the sourced product-validation helper.
+# shellcheck disable=SC2154
+ios_app="$validated_app_store_ios_app"
 watch_app="$ios_app/Watch/AgentLimitsWatch.app"
 
 if [[ ! -d "$watch_app" ]]; then
@@ -294,6 +299,9 @@ watch_archs="$(lipo -archs "$watch_app/$watch_executable")"
 validate_app_store_product \
     "$ios_app" "$expected_version" "$expected_build" \
     "$work_dir/app-store-product-validation"
+app_store_validate_executable_bundle_topology \
+    "$verification_root" "$ios_app" "$watch_app" \
+    "$work_dir/ipa-product-topology" || exit $?
 if [[ " $ios_archs " != *" arm64 "* ]]; then
     echo "Exported iOS app lacks arm64: $ios_archs" >&2
     exit 1

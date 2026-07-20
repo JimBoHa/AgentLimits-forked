@@ -10,6 +10,8 @@
 - [ ] `LICENSE` and complete Sparkle notices are present in source and product.
 - [ ] Privacy policy, privacy manifests, App Store privacy answers, and review
       notes describe the shipping behavior.
+- [ ] A source/API audit confirms every shipping required-reason API category
+      and approved reason is represented accurately in each privacy manifest.
 - [ ] No credentials, profiles, private keys, or local signing config are
       tracked by Git.
 

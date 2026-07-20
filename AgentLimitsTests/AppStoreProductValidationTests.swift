@@ -1,4 +1,7 @@
+import CoreGraphics
 import Foundation
+import ImageIO
+import UniformTypeIdentifiers
 import XCTest
 
 final class AppStoreProductValidationTests: XCTestCase {
@@ -31,6 +34,18 @@ final class AppStoreProductValidationTests: XCTestCase {
             )
             XCTAssertTrue(script.contains("validate_app_store_product"), name)
         }
+
+        let exportScript = try String(
+            contentsOf: repositoryRoot.appendingPathComponent(
+                "Scripts/export-ios.sh"
+            ),
+            encoding: .utf8
+        )
+        XCTAssertTrue(
+            exportScript.contains("-target AgentLimitsiOS"),
+            exportScript
+        )
+        XCTAssertTrue(exportScript.contains("-sdk iphoneos"), exportScript)
     }
 
     func testValidAppStoreProductPassesSemanticValidation() throws {
@@ -144,12 +159,180 @@ final class AppStoreProductValidationTests: XCTestCase {
         }
     }
 
+    func testUnexpectedProductTopologyFailsSemanticValidation() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let mutations: [(String, (ProductFixture) throws -> Void)] = [
+            ("second-watch-app", { fixture in
+                try FileManager.default.createDirectory(
+                    at: fixture.iosApp.appendingPathComponent(
+                        "Watch/Unexpected.app"
+                    ),
+                    withIntermediateDirectories: false
+                )
+            }),
+            ("unexpected-extension", { fixture in
+                try FileManager.default.createDirectory(
+                    at: fixture.iosApp.appendingPathComponent(
+                        "PlugIns/Unexpected.appex"
+                    ),
+                    withIntermediateDirectories: true
+                )
+            }),
+            ("product-symlink", { fixture in
+                try FileManager.default.createSymbolicLink(
+                    at: fixture.iosApp.appendingPathComponent("UnexpectedLink"),
+                    withDestinationURL: fixture.iosInfo
+                )
+            })
+        ]
+
+        for (name, mutate) in mutations {
+            let caseDirectory = directory.appendingPathComponent(name)
+            let fixture = try createProductFixture(at: caseDirectory)
+            try mutate(fixture)
+
+            let result = try runValidator(
+                fixture: fixture,
+                scratch: caseDirectory.appendingPathComponent("validation")
+            )
+            XCTAssertNotEqual(result.status, 0, "\(name): \(result.output)")
+        }
+    }
+
+    func testHostileIconArtifactsFailSemanticValidation() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let mutations: [(String, (ProductFixture) throws -> Void)] = [
+            ("empty-png", { fixture in
+                try Data().write(
+                    to: fixture.iosApp.appendingPathComponent(
+                        "agentlimits60x60@2x.png"
+                    )
+                )
+            }),
+            ("wrong-png-dimensions", { fixture in
+                try self.writePNG(
+                    width: 1,
+                    height: 1,
+                    to: fixture.iosApp.appendingPathComponent(
+                        "agentlimits76x76@2x~ipad.png"
+                    )
+                )
+            }),
+            ("missing-phone-rendition", { fixture in
+                try self.writeAssetCatalogInfo(
+                    platform: "ios",
+                    idioms: ["pad"],
+                    to: fixture.iosAssetInfo
+                )
+            }),
+            ("wrong-watch-platform", { fixture in
+                try self.writeAssetCatalogInfo(
+                    platform: "ios",
+                    idioms: ["watch"],
+                    to: fixture.watchAssetInfo
+                )
+            }),
+            ("empty-assets", { fixture in
+                try Data().write(
+                    to: fixture.iosApp.appendingPathComponent("Assets.car")
+                )
+            }),
+            ("assetutil-symlink", { fixture in
+                try FileManager.default.removeItem(at: fixture.assetutil)
+                try FileManager.default.createSymbolicLink(
+                    at: fixture.assetutil,
+                    withDestinationURL: URL(fileURLWithPath: "/bin/cat")
+                )
+            })
+        ]
+
+        for (name, mutate) in mutations {
+            let caseDirectory = directory.appendingPathComponent(name)
+            let fixture = try createProductFixture(at: caseDirectory)
+            try mutate(fixture)
+
+            let result = try runValidator(
+                fixture: fixture,
+                scratch: caseDirectory.appendingPathComponent("validation")
+            )
+            XCTAssertNotEqual(result.status, 0, "\(name): \(result.output)")
+        }
+    }
+
+    func testIPAAndPayloadSelectionRejectCardinalityAndSymlinks() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let export = directory.appendingPathComponent("export")
+        try FileManager.default.createDirectory(
+            at: export,
+            withIntermediateDirectories: false
+        )
+        let firstIPA = export.appendingPathComponent("AgentLimits.ipa")
+        try Data([1]).write(to: firstIPA)
+        var result = try runValidationHelper(
+            "app_store_select_single_ipa",
+            arguments: [export.path, directory.appendingPathComponent("ipa").path]
+        )
+        XCTAssertEqual(result.status, 0, result.output)
+
+        let secondIPA = export.appendingPathComponent("Unexpected.IPA")
+        try Data([2]).write(to: secondIPA)
+        result = try runValidationHelper(
+            "app_store_select_single_ipa",
+            arguments: [export.path, directory.appendingPathComponent("ipa-two").path]
+        )
+        XCTAssertNotEqual(result.status, 0, result.output)
+        try FileManager.default.removeItem(at: secondIPA)
+        try FileManager.default.createSymbolicLink(
+            at: export.appendingPathComponent("alias"),
+            withDestinationURL: firstIPA
+        )
+        result = try runValidationHelper(
+            "app_store_select_single_ipa",
+            arguments: [export.path, directory.appendingPathComponent("ipa-link").path]
+        )
+        XCTAssertNotEqual(result.status, 0, result.output)
+
+        let ipaRoot = directory.appendingPathComponent("expanded")
+        let payload = ipaRoot.appendingPathComponent("Payload")
+        try FileManager.default.createDirectory(
+            at: payload.appendingPathComponent("AgentLimits.app"),
+            withIntermediateDirectories: true
+        )
+        result = try runValidationHelper(
+            "app_store_select_single_payload_app",
+            arguments: [
+                ipaRoot.path,
+                directory.appendingPathComponent("payload").path
+            ]
+        )
+        XCTAssertEqual(result.status, 0, result.output)
+        try FileManager.default.createDirectory(
+            at: payload.appendingPathComponent("Unexpected.app"),
+            withIntermediateDirectories: false
+        )
+        result = try runValidationHelper(
+            "app_store_select_single_payload_app",
+            arguments: [
+                ipaRoot.path,
+                directory.appendingPathComponent("payload-two").path
+            ]
+        )
+        XCTAssertNotEqual(result.status, 0, result.output)
+    }
+
     private struct ProductFixture {
         let iosApp: URL
         let iosInfo: URL
         let watchInfo: URL
         let iosPrivacy: URL
         let watchPrivacy: URL
+        let iosAssetInfo: URL
+        let watchAssetInfo: URL
+        let assetutil: URL
     }
 
     private var repositoryRoot: URL {
@@ -247,22 +430,118 @@ final class AppStoreProductValidationTests: XCTestCase {
         try writePropertyList(privacy, to: iosPrivacy)
         try writePropertyList(privacy, to: watchPrivacy)
 
-        for file in [
-            iosApp.appendingPathComponent("Assets.car"),
-            iosApp.appendingPathComponent("agentlimits60x60@2x.png"),
-            iosApp.appendingPathComponent("agentlimits76x76@2x~ipad.png"),
-            watchApp.appendingPathComponent("Assets.car")
-        ] {
-            try Data().write(to: file)
-        }
+        let iosAssets = iosApp.appendingPathComponent("Assets.car")
+        let watchAssets = watchApp.appendingPathComponent("Assets.car")
+        try Data([1]).write(to: iosAssets)
+        try Data([2]).write(to: watchAssets)
+        try writePNG(
+            width: 120,
+            height: 120,
+            to: iosApp.appendingPathComponent("agentlimits60x60@2x.png")
+        )
+        try writePNG(
+            width: 152,
+            height: 152,
+            to: iosApp.appendingPathComponent("agentlimits76x76@2x~ipad.png")
+        )
+
+        let iosAssetInfo = URL(
+            fileURLWithPath: iosAssets.path + ".assetinfo.json"
+        )
+        let watchAssetInfo = URL(
+            fileURLWithPath: watchAssets.path + ".assetinfo.json"
+        )
+        try writeAssetCatalogInfo(
+            platform: "ios",
+            idioms: ["phone", "pad"],
+            to: iosAssetInfo
+        )
+        try writeAssetCatalogInfo(
+            platform: "watch",
+            idioms: ["watch"],
+            to: watchAssetInfo
+        )
+
+        let assetutil = directory.appendingPathComponent("assetutil")
+        try """
+        #!/bin/bash
+        set -euo pipefail
+        if [[ $# -ne 2 || "$1" != "--info" ]]; then
+            exit 64
+        fi
+        /bin/cat "$2.assetinfo.json"
+        """.write(to: assetutil, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o700],
+            ofItemAtPath: assetutil.path
+        )
 
         return ProductFixture(
             iosApp: iosApp,
             iosInfo: iosInfo,
             watchInfo: watchInfo,
             iosPrivacy: iosPrivacy,
-            watchPrivacy: watchPrivacy
+            watchPrivacy: watchPrivacy,
+            iosAssetInfo: iosAssetInfo,
+            watchAssetInfo: watchAssetInfo,
+            assetutil: assetutil
         )
+    }
+
+    private func writePNG(width: Int, height: Int, to url: URL) throws {
+        let context = try XCTUnwrap(
+            CGContext(
+                data: nil,
+                width: width,
+                height: height,
+                bitsPerComponent: 8,
+                bytesPerRow: width * 4,
+                space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
+            )
+        )
+        context.setFillColor(gray: 1, alpha: 1)
+        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        let image = try XCTUnwrap(context.makeImage())
+        let destination = try XCTUnwrap(
+            CGImageDestinationCreateWithURL(
+                url as CFURL,
+                UTType.png.identifier as CFString,
+                1,
+                nil
+            )
+        )
+        CGImageDestinationAddImage(destination, image, nil)
+        guard CGImageDestinationFinalize(destination) else {
+            throw NSError(
+                domain: "AppStoreProductValidationTests",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "Could not write PNG fixture"]
+            )
+        }
+    }
+
+    private func writeAssetCatalogInfo(
+        platform: String,
+        idioms: [String],
+        to url: URL
+    ) throws {
+        var entries: [[String: Any]] = [["Platform": platform]]
+        entries.append(contentsOf: idioms.map { idiom in
+            [
+                "AssetType": "Icon Image",
+                "Name": "agentlimits",
+                "Idiom": idiom,
+                "PixelWidth": 1024,
+                "PixelHeight": 1024,
+                "Opaque": true
+            ]
+        })
+        let data = try JSONSerialization.data(
+            withJSONObject: entries,
+            options: [.prettyPrinted, .sortedKeys]
+        )
+        try data.write(to: url)
     }
 
     private func writePropertyList(_ object: [String: Any], to url: URL) throws {
@@ -298,7 +577,7 @@ final class AppStoreProductValidationTests: XCTestCase {
         process.executableURL = URL(fileURLWithPath: "/bin/bash")
         process.arguments = [
             "-c",
-            #"set -euo pipefail; source "$1"; validate_app_store_product "$2" "$3" "$4" "$5""#,
+            #"set -euo pipefail; source "$1"; app_store_validate_product_with_assetutil "$2" "$3" "$4" "$5" "$6""#,
             "app-store-product-validation-test",
             repositoryRoot.appendingPathComponent(
                 "Scripts/app-store-product-validation.sh"
@@ -306,8 +585,36 @@ final class AppStoreProductValidationTests: XCTestCase {
             fixture.iosApp.path,
             "1.1.6",
             "16",
-            scratch.path
+            scratch.path,
+            fixture.assetutil.path
         ]
+        let output = Pipe()
+        process.standardOutput = output
+        process.standardError = output
+        try process.run()
+        process.waitUntilExit()
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        return (
+            process.terminationStatus,
+            String(decoding: data, as: UTF8.self)
+        )
+    }
+
+    private func runValidationHelper(
+        _ helper: String,
+        arguments: [String]
+    ) throws -> (status: Int32, output: String) {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/bash")
+        process.arguments = [
+            "-c",
+            #"set -euo pipefail; source "$1"; helper="$2"; shift 2; "$helper" "$@""#,
+            "app-store-product-validation-helper-test",
+            repositoryRoot.appendingPathComponent(
+                "Scripts/app-store-product-validation.sh"
+            ).path,
+            helper
+        ] + arguments
         let output = Pipe()
         process.standardOutput = output
         process.standardError = output

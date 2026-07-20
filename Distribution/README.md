@@ -87,8 +87,10 @@ A final release must be rebuilt by the signed workflows below so Xcode records
 the Team, signing identity, and provisioning metadata.
 The preflight also runs the same fail-closed product/privacy gate as signed IPA
 export. It rejects changed identifiers, versions, encryption declarations,
-privacy claims, required-reason APIs, app icons, launch metadata, or the
-dependent Watch relationship.
+privacy-manifest claims and required-reason declarations, launch/icon metadata,
+invalid compiled icon renditions, or the dependent Watch relationship. Changes
+to API usage still require a source audit because a manifest validator cannot
+prove which required-reason APIs compiled code calls.
 
 ## Signed iOS and watchOS export
 
@@ -114,7 +116,8 @@ then compares the exported products with the audited App Store contract:
 - non-exempt encryption declarations set to `false` in both products;
 - no tracking or maintainer-collected data, no tracking domains, and only the
   audited UserDefaults required-reason declaration (`CA92.1`);
-- generated iPhone/iPad launch and icon metadata plus compiled icon assets; and
+- generated iPhone/iPad launch and icon metadata, correctly sized PNGs, and
+  opaque named icon renditions in the compiled asset catalogs; and
 - one dependent Watch product bound to the iOS companion identifier and not
   declared independently distributable.
 
