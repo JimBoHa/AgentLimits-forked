@@ -328,6 +328,10 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Lock selected Xcode parent against replacement
+        run: |
+          sudo chmod 0755 /Applications
+
       - name: Build and inspect unsigned release artifacts
         run: |
           Scripts/build-unsigned-artifacts.sh "$RUNNER_TEMP/preflight"

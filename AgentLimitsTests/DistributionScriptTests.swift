@@ -213,6 +213,12 @@ final class DistributionScriptTests: XCTestCase {
             arguments: [canonicalDeveloperDirectory]
         )
 
+        if result.status == 69,
+           result.output.contains("ancestor directories must be root-owned and non-writable") {
+            throw XCTSkip(
+                "Selected Xcode is installed below an account-writable directory"
+            )
+        }
         XCTAssertEqual(result.status, 0, result.output)
     }
 
@@ -266,6 +272,29 @@ final class DistributionScriptTests: XCTestCase {
         XCTAssertTrue(helper.contains("'!' -uid 0"))
         XCTAssertTrue(helper.contains("-o -perm -0002"))
         XCTAssertTrue(helper.contains("-o -acl"))
+    }
+
+    func testAppleToolchainRejectsWritableAncestorBeforeSignatureCheck() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let developerDirectory = try createAppleToolchainFixture(
+            at: directory,
+            dtxcode: "2610"
+        ).resolvingSymlinksInPath()
+        let command = #"source "$1"; apple_validate_xcode_bundle_trust "$2"; exit $?"#
+
+        let result = try runAppleToolchainHelper(
+            command: command,
+            arguments: [developerDirectory.path]
+        )
+
+        XCTAssertEqual(result.status, 69, result.output)
+        XCTAssertTrue(
+            result.output.contains(
+                "ancestor directories must be root-owned and non-writable"
+            ),
+            result.output
+        )
     }
 
     func testAppleProductMetadataMustExactlyMatchPreflight() throws {

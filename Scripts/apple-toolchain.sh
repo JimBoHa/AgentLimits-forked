@@ -129,6 +129,7 @@ apple_validate_xcode_bundle_trust() {
     local path_metadata
     local path_owner
     local path_mode
+    local path_acl
     local user_id
     local user_groups
     local group_id
@@ -161,6 +162,42 @@ apple_validate_xcode_bundle_trust() {
         echo "Apple distribution requires a canonical Xcode app bundle" >&2
         return 69
     fi
+
+    # A valid bundle is not stable when the caller can replace one of its
+    # ancestor directory entries after validation. Require every ancestor,
+    # including /Applications and /, to be root-owned and immutable to this
+    # account before any selected-tool path is used.
+    trusted_path="${xcode_bundle%/*}"
+    [[ -n "$trusted_path" ]] || trusted_path="/"
+    while :; do
+        if [[ -L "$trusted_path" || ! -d "$trusted_path" ]] \
+            || ! path_metadata="$(/usr/bin/stat -f '%u %Lp' "$trusted_path" 2>/dev/null)" \
+            || [[ "$path_metadata" == *$'\n'* ]]; then
+            echo "Could not validate selected Xcode ancestor directory" >&2
+            return 69
+        fi
+        path_owner="${path_metadata%% *}"
+        path_mode="${path_metadata#* }"
+        if [[ "$path_owner" != 0 || ! "$path_mode" =~ ^[0-7]{3,4}$ ]] \
+            || (( (8#$path_mode & 022) != 0 )) \
+            || [[ -w "$trusted_path" ]]; then
+            echo "Selected Xcode ancestor directories must be root-owned and non-writable" >&2
+            return 69
+        fi
+        if ! path_acl="$(
+                /usr/bin/find -x "$trusted_path" -prune -acl -print -quit 2>&1
+            )"; then
+            echo "Could not validate selected Xcode ancestor access controls" >&2
+            return 69
+        fi
+        if [[ -n "$path_acl" ]]; then
+            echo "Selected Xcode ancestor directories must not have access-control lists" >&2
+            return 69
+        fi
+        [[ "$trusted_path" == "/" ]] && break
+        trusted_path="${trusted_path%/*}"
+        [[ -n "$trusted_path" ]] || trusted_path="/"
+    done
 
     for trusted_path in \
         "$xcode_bundle" \
