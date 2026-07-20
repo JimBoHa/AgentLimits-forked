@@ -31,6 +31,22 @@ final class AgentLimitsUITests: XCTestCase {
         let app = launchIsolatedApp()
         let workAccountLabel = "Mac UI Work"
 
+        let claudeProvider = element(
+            "mac.usage.provider.claudeCode",
+            in: app
+        )
+        XCTAssertTrue(
+            waitForHittable(claudeProvider, timeout: 5),
+            "Claude provider segment is missing or off-screen"
+        )
+        claudeProvider.click()
+
+        let accountPicker = element("mac.usage.accountPicker", in: app)
+        XCTAssertTrue(
+            waitForValue("Claude Code", of: accountPicker, timeout: 5),
+            "Claude account did not become selected"
+        )
+
         let copilotProvider = element(
             "mac.usage.provider.githubCopilot",
             in: app
@@ -41,7 +57,6 @@ final class AgentLimitsUITests: XCTestCase {
         )
         copilotProvider.click()
 
-        let accountPicker = element("mac.usage.accountPicker", in: app)
         XCTAssertTrue(
             waitForValue("Copilot", of: accountPicker, timeout: 5),
             "Copilot account did not become selected"
@@ -81,29 +96,29 @@ final class AgentLimitsUITests: XCTestCase {
             "New account was not added and selected"
         )
 
-        let selectDefaultAccount = accountButton(
-            identifierPrefix: "mac.accounts.select.",
-            label: "Select Copilot",
-            in: app
-        )
-        XCTAssertTrue(selectDefaultAccount.waitForExistence(timeout: 5))
-        selectDefaultAccount.click()
+        element("mac.accounts.close", in: app).click()
         XCTAssertTrue(
-            accountSelectedMarker("Copilot", in: app)
-                .waitForExistence(timeout: 5),
-            "Default account could not be selected"
+            element("mac.accounts.root", in: app)
+                .waitForNonExistence(timeout: 5),
+            "Account manager did not close"
+        )
+        XCTAssertTrue(
+            waitForValue(workAccountLabel, of: accountPicker, timeout: 5),
+            "New account did not reach Usage settings"
         )
 
-        let selectWorkAccount = accountButton(
-            identifierPrefix: "mac.accounts.select.",
-            label: "Select \(workAccountLabel)",
-            in: app
+        selectAccount("Copilot", from: accountPicker, in: app)
+        selectAccount(workAccountLabel, from: accountPicker, in: app)
+
+        element("mac.usage.manageAccounts", in: app).click()
+        XCTAssertTrue(
+            element("mac.accounts.root", in: app)
+                .waitForExistence(timeout: 5),
+            "Account manager did not reopen"
         )
-        XCTAssertTrue(selectWorkAccount.waitForExistence(timeout: 5))
-        selectWorkAccount.click()
         XCTAssertTrue(
             selectedWorkAccount.waitForExistence(timeout: 5),
-            "Second account could not be reselected"
+            "Picker selection did not reach account manager"
         )
 
         let removeWorkAccount = accountButton(
@@ -278,6 +293,25 @@ final class AgentLimitsUITests: XCTestCase {
                 selectedLabel
             )
         ).firstMatch
+    }
+
+    @MainActor
+    private func selectAccount(
+        _ accountLabel: String,
+        from picker: XCUIElement,
+        in app: XCUIApplication
+    ) {
+        picker.click()
+        let menuItem = app.menuItems[accountLabel]
+        XCTAssertTrue(
+            waitForHittable(menuItem, timeout: 5),
+            "Account picker option is missing: \(accountLabel)"
+        )
+        menuItem.click()
+        XCTAssertTrue(
+            waitForValue(accountLabel, of: picker, timeout: 5),
+            "Account picker did not select: \(accountLabel)"
+        )
     }
 
     @MainActor
