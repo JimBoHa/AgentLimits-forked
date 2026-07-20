@@ -150,7 +150,7 @@ private struct WatchAccountDetailView: View {
         TimelineView(.periodic(from: .now, by: 30)) { context in
             if let account = store.account(id: accountID, at: context.date) {
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 8) {
                         Text(account.status.provider.displayName)
                             .font(.caption)
                             .foregroundStyle(.secondary)

@@ -1016,6 +1016,125 @@ final class DistributionScriptTests: XCTestCase {
         )
     }
 
+    func testDependentWatchSchemeCannotArchiveStandaloneInstaller() throws {
+        let scheme = try schemeDocument(named: "AgentLimitsWatch")
+        let watchEntries = try scheme.nodes(
+            forXPath: "//BuildActionEntry[BuildableReference[@BlueprintIdentifier='D30000000000000000000008']]"
+        )
+        let watchEntry = try XCTUnwrap(watchEntries.first as? XMLElement)
+
+        XCTAssertEqual(watchEntries.count, 1)
+        XCTAssertEqual(
+            watchEntry.attribute(forName: "buildForArchiving")?.stringValue,
+            "NO"
+        )
+        XCTAssertEqual(
+            try scheme.nodes(forXPath: "//ArchiveAction").count,
+            0,
+            "A dependent Watch app must not expose a standalone Archive action"
+        )
+
+        for supportedAction in [
+            "buildForTesting",
+            "buildForRunning",
+            "buildForProfiling",
+            "buildForAnalyzing"
+        ] {
+            XCTAssertEqual(
+                watchEntry.attribute(forName: supportedAction)?.stringValue,
+                "YES",
+                supportedAction
+            )
+        }
+    }
+
+    func testIOSReleaseArchiveEmbedsDependentWatchApp() throws {
+        let scheme = try schemeDocument(named: "AgentLimitsiOS")
+        let iosEntries = try scheme.nodes(
+            forXPath: "//BuildActionEntry[BuildableReference[@BlueprintIdentifier='B20000000000000000000016']]"
+        )
+        let iosEntry = try XCTUnwrap(iosEntries.first as? XMLElement)
+        XCTAssertEqual(iosEntries.count, 1)
+        XCTAssertEqual(
+            iosEntry.attribute(forName: "buildForArchiving")?.stringValue,
+            "YES"
+        )
+        let archiveAction = try XCTUnwrap(
+            try scheme.nodes(forXPath: "//ArchiveAction").first as? XMLElement
+        )
+        XCTAssertEqual(
+            archiveAction.attribute(forName: "buildConfiguration")?.stringValue,
+            "Release"
+        )
+
+        let project = try repositoryText("AgentLimits.xcodeproj/project.pbxproj")
+        let iosTarget = try projectObject(
+            "B20000000000000000000016 /* AgentLimitsiOS */",
+            in: project
+        )
+        XCTAssertTrue(
+            iosTarget.contains(
+                "D30000000000000000000015 /* Embed Watch Content */"
+            )
+        )
+        XCTAssertTrue(
+            iosTarget.contains("D30000000000000000000018 /* PBXTargetDependency */")
+        )
+
+        let embedPhase = try projectObject(
+            "D30000000000000000000015 /* Embed Watch Content */",
+            in: project
+        )
+        XCTAssertTrue(embedPhase.contains("dstSubfolderSpec = 16;"))
+        XCTAssertTrue(
+            embedPhase.contains(
+                "D30000000000000000000014 /* AgentLimitsWatch.app in Embed Watch Content */"
+            )
+        )
+
+        let watchDependency = try projectObject(
+            "D30000000000000000000018 /* PBXTargetDependency */",
+            in: project
+        )
+        XCTAssertTrue(
+            watchDependency.contains(
+                "target = D30000000000000000000008 /* AgentLimitsWatch */;"
+            )
+        )
+
+        let watchRelease = try projectObject(
+            "D3000000000000000000001E /* Release */",
+            in: project
+        )
+        XCTAssertTrue(watchRelease.contains("SKIP_INSTALL = YES;"))
+        XCTAssertTrue(
+            watchRelease.contains(
+                "INFOPLIST_KEY_WKCompanionAppBundleIdentifier = com.jimboha.agentlimits.ios;"
+            )
+        )
+        XCTAssertTrue(
+            watchRelease.contains(
+                "INFOPLIST_KEY_WKRunsIndependentlyOfCompanionApp = NO;"
+            )
+        )
+
+        let infoData = try Data(
+            contentsOf: repositoryRoot.appendingPathComponent("AgentLimitsWatch/Info.plist")
+        )
+        let info = try XCTUnwrap(
+            PropertyListSerialization.propertyList(
+                from: infoData,
+                options: [],
+                format: nil
+            ) as? [String: Any]
+        )
+        XCTAssertEqual(
+            info["WKCompanionAppBundleIdentifier"] as? String,
+            "com.jimboha.agentlimits.ios"
+        )
+        XCTAssertEqual(info["WKRunsIndependentlyOfCompanionApp"] as? Bool, false)
+    }
+
     func testUnsignedContainersReopenBeforePublication() throws {
         let script = try releaseScript(named: "build-unsigned-artifacts.sh")
         let zipCreate = try offset(
@@ -1065,10 +1184,46 @@ final class DistributionScriptTests: XCTestCase {
     }
 
     private func releaseScript(named name: String) throws -> String {
+        try repositoryText("Scripts/\(name)")
+    }
+
+    private func repositoryText(_ path: String) throws -> String {
         try String(
-            contentsOf: repositoryRoot.appendingPathComponent("Scripts/\(name)"),
+            contentsOf: repositoryRoot.appendingPathComponent(path),
             encoding: .utf8
         )
+    }
+
+    private func schemeDocument(named name: String) throws -> XMLDocument {
+        let path = "AgentLimits.xcodeproj/xcshareddata/xcschemes/\(name).xcscheme"
+        return try XMLDocument(
+            data: Data(contentsOf: repositoryRoot.appendingPathComponent(path)),
+            options: []
+        )
+    }
+
+    private func projectObject(_ declaration: String, in project: String) throws -> String {
+        let marker = "\n\t\t\(declaration) = {"
+        let start = try XCTUnwrap(project.range(of: marker)?.lowerBound)
+        let openingBrace = try XCTUnwrap(project[start...].firstIndex(of: "{"))
+        var depth = 0
+
+        for index in project[openingBrace...].indices {
+            switch project[index] {
+            case "{":
+                depth += 1
+            case "}":
+                depth -= 1
+                if depth == 0 {
+                    return String(project[start...index])
+                }
+            default:
+                break
+            }
+        }
+
+        XCTFail("Unterminated project object: \(declaration)")
+        return ""
     }
 
     private func xcodebuildCommands(in script: String) -> [String] {
