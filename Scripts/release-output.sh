@@ -827,15 +827,18 @@ publish_staged_release_directory() {
             "$profile_validity_headroom_seconds" \
             || return $?
     fi
-    "$atomic_publisher" \
-        "$staging_parent" \
-        "$expected_name" \
-        "$expected_staging_parent_identity" \
-        "$expected_staged_identity" \
-        "$output_parent" \
-        "$expected_name" \
-        "$expected_parent_identity" \
-        || publish_status=$?
+    (
+        exec 8< "$staging_parent" || exit 73
+        exec 9< "$output_parent" || exit 73
+        "$atomic_publisher" \
+            8 \
+            "$expected_name" \
+            "$expected_staging_parent_identity" \
+            "$expected_staged_identity" \
+            9 \
+            "$expected_name" \
+            "$expected_parent_identity"
+    ) || publish_status=$?
     if [[ "$publish_status" != "0" ]]; then
         echo "Could not atomically publish the staged output directory" >&2
         return 73

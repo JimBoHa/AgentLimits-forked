@@ -1589,7 +1589,9 @@ final class DistributionScriptTests: XCTestCase {
         XCTAssertTrue(publisher.contains("RENAME_EXCL"))
         XCTAssertTrue(publisher.contains("RENAME_NOFOLLOW_ANY"))
         XCTAssertTrue(publisher.contains("RENAME_RESOLVE_BENEATH"))
-        XCTAssertTrue(publisher.contains("O_DIRECTORY | O_NOFOLLOW"))
+        XCTAssertTrue(publisher.contains("F_DUPFD_CLOEXEC"))
+        XCTAssertTrue(publisher.contains("duplicate_directory_fd"))
+        XCTAssertFalse(publisher.contains("open("))
         XCTAssertTrue(publisher.contains("fstatat"))
         XCTAssertTrue(
             helper.contains("/usr/bin/xcrun --no-cache --sdk macosx clang")
@@ -1783,17 +1785,15 @@ final class DistributionScriptTests: XCTestCase {
         let sourceIdentity = try fileIdentity(at: source)
         let destinationIdentity = try fileIdentity(at: destination)
 
-        let result = try runProcess(
+        let result = try runAtomicPublisher(
             executable: publisher.path,
-            arguments: [
-                directory.path,
-                source.lastPathComponent,
-                try fileIdentity(at: directory),
-                sourceIdentity,
-                directory.path,
-                destination.lastPathComponent,
-                try fileIdentity(at: directory)
-            ]
+            sourceParent: directory.path,
+            sourceName: source.lastPathComponent,
+            sourceParentIdentity: try fileIdentity(at: directory),
+            sourceIdentity: sourceIdentity,
+            destinationParent: directory.path,
+            destinationName: destination.lastPathComponent,
+            destinationParentIdentity: try fileIdentity(at: directory)
         )
 
         XCTAssertEqual(result.status, 73, result.output)
@@ -1848,17 +1848,15 @@ final class DistributionScriptTests: XCTestCase {
             withIntermediateDirectories: true
         )
 
-        let result = try runProcess(
+        let result = try runAtomicPublisher(
             executable: publisher.path,
-            arguments: [
-                sourceParent.path,
-                "result",
-                sourceParentIdentity,
-                sourceIdentity,
-                destinationParent.path,
-                "result",
-                destinationParentIdentity
-            ]
+            sourceParent: sourceParent.path,
+            sourceName: "result",
+            sourceParentIdentity: sourceParentIdentity,
+            sourceIdentity: sourceIdentity,
+            destinationParent: destinationParent.path,
+            destinationName: "result",
+            destinationParentIdentity: destinationParentIdentity
         )
 
         XCTAssertEqual(result.status, 73, result.output)
@@ -3616,6 +3614,39 @@ final class DistributionScriptTests: XCTestCase {
         return (
             process.terminationStatus,
             String(decoding: data, as: UTF8.self)
+        )
+    }
+
+    private func runAtomicPublisher(
+        executable: String,
+        sourceParent: String,
+        sourceName: String,
+        sourceParentIdentity: String,
+        sourceIdentity: String,
+        destinationParent: String,
+        destinationName: String,
+        destinationParentIdentity: String
+    ) throws -> (status: Int32, output: String) {
+        let command = #"""
+        exec 8< "$1" || exit 73
+        exec 9< "$5" || exit 73
+        exec "$8" 8 "$2" "$3" "$4" 9 "$6" "$7"
+        """#
+        return try runProcess(
+            executable: "/bin/bash",
+            arguments: [
+                "--noprofile", "--norc", "-c", command,
+                "atomic-publisher-test",
+                sourceParent,
+                sourceName,
+                sourceParentIdentity,
+                sourceIdentity,
+                destinationParent,
+                destinationName,
+                destinationParentIdentity,
+                executable
+            ],
+            inheritEnvironment: false
         )
     }
 

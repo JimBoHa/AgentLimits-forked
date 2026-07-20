@@ -1,5 +1,6 @@
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -55,9 +56,32 @@ static int is_safe_name(const char *name) {
         && strchr(name, '/') == NULL;
 }
 
+static int duplicate_directory_fd(const char *text) {
+    char *end;
+    long inherited_fd;
+    int directory_fd;
+    struct stat details;
+
+    errno = 0;
+    inherited_fd = strtol(text, &end, 10);
+    if (errno != 0 || end == text || *end != '\0'
+        || inherited_fd < 3 || inherited_fd > INT_MAX) {
+        return -1;
+    }
+    directory_fd = fcntl((int)inherited_fd, F_DUPFD_CLOEXEC, 3);
+    if (directory_fd < 0 || fstat(directory_fd, &details) != 0
+        || !S_ISDIR(details.st_mode)) {
+        if (directory_fd >= 0) {
+            close(directory_fd);
+        }
+        return -1;
+    }
+    return directory_fd;
+}
+
 int main(int argc, char *argv[]) {
-    int source_parent;
-    int destination_parent;
+    int source_parent = -1;
+    int destination_parent = -1;
     struct stat source_parent_details;
     struct stat destination_parent_details;
     struct stat source_details;
@@ -66,8 +90,8 @@ int main(int argc, char *argv[]) {
     if (argc != 8) {
         fprintf(
             stderr,
-            "Usage: atomic-release-publish SOURCE_PARENT SOURCE_NAME "
-            "SOURCE_PARENT_ID SOURCE_ID DESTINATION_PARENT "
+            "Usage: atomic-release-publish SOURCE_PARENT_FD SOURCE_NAME "
+            "SOURCE_PARENT_ID SOURCE_ID DESTINATION_PARENT_FD "
             "DESTINATION_NAME DESTINATION_PARENT_ID\n"
         );
         return EX_USAGE;
@@ -77,14 +101,8 @@ int main(int argc, char *argv[]) {
         return EX_USAGE;
     }
 
-    source_parent = open(
-        argv[1],
-        O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
-    );
-    destination_parent = open(
-        argv[5],
-        O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
-    );
+    source_parent = duplicate_directory_fd(argv[1]);
+    destination_parent = duplicate_directory_fd(argv[5]);
     if (source_parent < 0 || destination_parent < 0
         || fstat(source_parent, &source_parent_details) != 0
         || fstat(destination_parent, &destination_parent_details) != 0
