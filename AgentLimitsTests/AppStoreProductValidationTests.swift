@@ -75,6 +75,43 @@ final class AppStoreProductValidationTests: XCTestCase {
         XCTAssertEqual(result.status, 0, result.output)
     }
 
+    func testHostileMagicEnvironmentCannotOverrideCodeInventory() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let fixture = try createProductFixture(at: directory)
+        let hostileMagic = directory.appendingPathComponent("hostile.magic")
+        try Data().write(to: hostileMagic)
+
+        let validResult = try runValidator(
+            fixture: fixture,
+            scratch: directory.appendingPathComponent("valid-validation"),
+            environment: ["MAGIC": hostileMagic.path]
+        )
+        XCTAssertEqual(validResult.status, 0, validResult.output)
+
+        let unexpectedCode = fixture.iosApp.appendingPathComponent(
+            "UnexpectedCode"
+        )
+        try FileManager.default.copyItem(
+            at: URL(fileURLWithPath: "/usr/bin/true"),
+            to: unexpectedCode
+        )
+        try setPermissions(0o600, for: unexpectedCode)
+
+        let rejectedResult = try runValidator(
+            fixture: fixture,
+            scratch: directory.appendingPathComponent("rejected-validation"),
+            environment: ["MAGIC": hostileMagic.path]
+        )
+        XCTAssertNotEqual(rejectedResult.status, 0, rejectedResult.output)
+        XCTAssertTrue(
+            rejectedResult.output.contains(
+                "product contains an unaudited Mach-O code object"
+            ),
+            rejectedResult.output
+        )
+    }
+
     func testProductMetadataMutationsFailSemanticValidation() throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -701,7 +738,8 @@ final class AppStoreProductValidationTests: XCTestCase {
 
     private func runValidator(
         fixture: ProductFixture,
-        scratch: URL
+        scratch: URL,
+        environment: [String: String] = [:]
     ) throws -> (status: Int32, output: String) {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/bash")
@@ -718,6 +756,10 @@ final class AppStoreProductValidationTests: XCTestCase {
             scratch.path,
             fixture.assetutil.path
         ]
+        process.environment = ProcessInfo.processInfo.environment.merging(
+            environment,
+            uniquingKeysWith: { _, override in override }
+        )
         let output = Pipe()
         process.standardOutput = output
         process.standardError = output

@@ -382,7 +382,8 @@ app_store_validate_executable_code_inventory() {
         return 1
     fi
     while IFS= read -r -d '' candidate; do
-        if ! kind="$(LC_ALL=C /usr/bin/file -b "$candidate" 2>/dev/null)"; then
+        if ! kind="$(/usr/bin/env -u MAGIC LC_ALL=C \
+                /usr/bin/file -b "$candidate" 2>/dev/null)"; then
             app_store_validation_error "product file type could not be inspected"
             return 1
         fi
