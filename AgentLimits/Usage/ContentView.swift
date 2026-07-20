@@ -302,7 +302,7 @@ struct ContentView: View {
     // MARK: - Provider Picker
 
     private var providerPicker: some View {
-        Picker("", selection: $viewModel.selectedProvider) {
+        Picker("", selection: providerSelection) {
             ForEach(UsageProvider.allCases) { provider in
                 Text(provider.displayName)
                     .tag(provider)
@@ -318,6 +318,19 @@ struct ContentView: View {
         .accessibilityIdentifier("mac.usage.providerPicker")
     }
 
+    private var providerSelection: Binding<UsageProvider> {
+        Binding(
+            get: { viewModel.selectedProvider },
+            set: { provider in
+                // AppKit can invoke Picker setters while SwiftUI is updating.
+                // Queue every @Published mutation for the next actor turn.
+                Task { @MainActor [weak viewModel] in
+                    viewModel?.selectProvider(provider)
+                }
+            }
+        )
+    }
+
     private var selectedAccount: ProviderAccount {
         viewModel.selectedAccount(for: viewModel.selectedProvider)
     }
@@ -329,10 +342,15 @@ struct ContentView: View {
                 selection: Binding(
                     get: { selectedAccount.id },
                     set: { accountID in
-                        do {
-                            _ = try viewModel.selectAccount(id: accountID)
-                        } catch {
-                            accountErrorMessage = error.localizedDescription
+                        // Account selection also publishes catalog and projection
+                        // state, so keep it outside the active Picker update.
+                        Task { @MainActor [weak viewModel] in
+                            guard let viewModel else { return }
+                            do {
+                                _ = try viewModel.selectAccount(id: accountID)
+                            } catch {
+                                accountErrorMessage = error.localizedDescription
+                            }
                         }
                     }
                 )

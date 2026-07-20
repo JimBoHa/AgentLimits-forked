@@ -429,6 +429,32 @@ final class UsageViewModelAccountIsolationTests: XCTestCase {
         XCTAssertEqual(fixture.viewModel.selectedProvider, .chatgptCodex)
     }
 
+    func testSelectProviderUpdatesSelectedAccountProjection() throws {
+        let fixture = try makeFixture(
+            additionalUsageSnapshots: { accountStore in
+                let claude = accountStore.selectedAccount(for: .claudeCode)
+                return [
+                    claude.id: self.makeSnapshot(
+                        .claudeCode,
+                        timestamp: 725
+                    )
+                ]
+            }
+        )
+
+        fixture.viewModel.selectProvider(.claudeCode)
+
+        XCTAssertEqual(fixture.viewModel.selectedProvider, .claudeCode)
+        XCTAssertEqual(
+            fixture.viewModel.snapshot?.provider,
+            .claudeCode
+        )
+        XCTAssertEqual(
+            fixture.viewModel.snapshot?.fetchedAt,
+            Date(timeIntervalSince1970: 725)
+        )
+    }
+
     func testAddAndSelectFailsBeforeCreatingWhenProjectionCannotHide() throws {
         let fixture = try makeFixture()
         let originalAccountIDs = Set(fixture.accountStore.loadAccounts().map(\.id))
