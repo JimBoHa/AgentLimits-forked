@@ -46,20 +46,27 @@ struct ProviderAccountsSettingsView: View {
                 }
                 .settingsButtonStyle(.primary)
                 .disabled(isBusy || !viewModel.webSessionsCanBeManaged)
+                .accessibilityIdentifier("mac.accounts.add")
 
                 Button("content.popupClose".localized()) {
                     dismiss()
                 }
                 .keyboardShortcut(.cancelAction)
                 .disabled(isBusy)
+                .accessibilityIdentifier("mac.accounts.close")
             }
 
             Picker("content.provider".localized(), selection: $selectedProvider) {
                 ForEach(UsageProvider.allCases) { provider in
-                    Text(provider.displayName).tag(provider)
+                    Text(provider.displayName)
+                        .tag(provider)
+                        .accessibilityIdentifier(
+                            "mac.accounts.provider.\(provider.rawValue)"
+                        )
                 }
             }
             .pickerStyle(.segmented)
+            .accessibilityIdentifier("mac.accounts.providerPicker")
 
             List {
                 ForEach(accounts) { account in
@@ -81,6 +88,7 @@ struct ProviderAccountsSettingsView: View {
         .padding(DesignTokens.Spacing.large)
         .frame(minWidth: 760, minHeight: 430)
         .interactiveDismissDisabled(isBusy)
+        .accessibilityIdentifier("mac.accounts.root")
         .sheet(item: $editorConfiguration) { configuration in
             ProviderAccountEditorView(configuration: configuration) {
                 label, isEnabled, cliDataRoot in
@@ -122,6 +130,7 @@ struct ProviderAccountsSettingsView: View {
                 removalCandidate = nil
                 startRemoval(account)
             }
+            .accessibilityIdentifier("mac.accounts.confirmRemove")
             Button("accounts.cancel".localized(), role: .cancel) {
                 removalCandidate = nil
             }
@@ -177,6 +186,9 @@ struct ProviderAccountsSettingsView: View {
             .accessibilityLabel(
                 Text("accounts.selectFormat".localized(account.label))
             )
+            .accessibilityIdentifier(
+                "mac.accounts.select.\(account.id.uuidString.lowercased())"
+            )
 
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
@@ -186,6 +198,16 @@ struct ProviderAccountsSettingsView: View {
                         Text("accounts.selected".localized())
                             .font(.caption)
                             .foregroundStyle(.secondary)
+                            .accessibilityLabel(
+                                Text(
+                                    "\("accounts.selected".localized()) — "
+                                        + account.label
+                                )
+                            )
+                            .accessibilityIdentifier(
+                                "mac.accounts.selected."
+                                    + account.id.uuidString.lowercased()
+                            )
                     }
                 }
                 Text(sessionDescription(for: account))
@@ -303,8 +325,19 @@ struct ProviderAccountsSettingsView: View {
                     ? "accounts.lastRequired".localized()
                     : "accounts.remove".localized()
             )
+            .accessibilityLabel(
+                Text(
+                    "\("accounts.remove".localized()) — \(account.label)"
+                )
+            )
+            .accessibilityIdentifier(
+                "mac.accounts.remove.\(account.id.uuidString.lowercased())"
+            )
         }
         .padding(.vertical, 4)
+        .accessibilityIdentifier(
+            "mac.accounts.row.\(account.id.uuidString.lowercased())"
+        )
     }
 
     private func isSelected(_ account: ProviderAccount) -> Bool {
@@ -409,6 +442,7 @@ private struct ProviderAccountEditorView: View {
                 }
                 TextField("accounts.label".localized(), text: $label)
                     .textFieldStyle(.roundedBorder)
+                    .accessibilityIdentifier("mac.accounts.editor.label")
                 if usesCLIDataRoot {
                     LabeledContent("accounts.cliDataRoot".localized()) {
                         HStack {
@@ -441,6 +475,7 @@ private struct ProviderAccountEditorView: View {
                     dismiss()
                 }
                 .keyboardShortcut(.cancelAction)
+                .accessibilityIdentifier("mac.accounts.editor.cancel")
                 Button("accounts.save".localized()) {
                     do {
                         let trimmedRoot = cliDataRoot.trimmingCharacters(
@@ -468,6 +503,7 @@ private struct ProviderAccountEditorView: View {
                 }
                 .keyboardShortcut(.defaultAction)
                 .settingsButtonStyle(.primary)
+                .accessibilityIdentifier("mac.accounts.editor.save")
                 .disabled(
                     label.trimmingCharacters(
                         in: .whitespacesAndNewlines
@@ -477,6 +513,7 @@ private struct ProviderAccountEditorView: View {
         }
         .padding(DesignTokens.Spacing.large)
         .frame(width: 430)
+        .accessibilityIdentifier("mac.accounts.editor.root")
         .alert(
             "accounts.title".localized(),
             isPresented: Binding(

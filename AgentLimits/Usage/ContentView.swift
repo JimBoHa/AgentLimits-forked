@@ -58,6 +58,9 @@ struct ContentView: View {
     @State private var isShowingAccountManager = false
     @State private var activityCredentialAccount: ProviderAccount?
     @State private var accountErrorMessage: String?
+#if DEBUG
+    @State private var uiTestingClearDataCompletionCount = 0
+#endif
 
     init(
         viewModel: UsageViewModel,
@@ -201,11 +204,17 @@ struct ContentView: View {
                     defer { isClearingData = false }
                     do {
                         try await viewModel.clearData()
+#if DEBUG
+                        if AppRuntimeEnvironment.isUITesting {
+                            uiTestingClearDataCompletionCount &+= 1
+                        }
+#endif
                     } catch {
                         clearDataErrorMessage = error.localizedDescription
                     }
                 }
             }
+            .accessibilityIdentifier("mac.usage.confirmClearData")
             Button("content.clearDataCancel".localized(), role: .cancel) {}
         } message: {
             Text("content.clearDataConfirmMessage".localized())
@@ -297,6 +306,9 @@ struct ContentView: View {
             ForEach(UsageProvider.allCases) { provider in
                 Text(provider.displayName)
                     .tag(provider)
+                    .accessibilityIdentifier(
+                        "mac.usage.provider.\(provider.rawValue)"
+                    )
             }
         }
         .pickerStyle(.segmented)
@@ -364,12 +376,7 @@ struct ContentView: View {
                         .controlSize(.small)
                 }
 
-                Button("content.clearData".localized(), role: .destructive) {
-                    isShowingClearDataConfirm = true
-                }
-                .disabled(isClearingData)
-                .settingsButtonStyle(.destructive)
-                .accessibilityIdentifier("mac.usage.clearData")
+                clearDataButton
 
                 if isClearingData {
                     ProgressView()
@@ -383,6 +390,30 @@ struct ContentView: View {
                     .foregroundStyle(.secondary)
             }
         }
+    }
+
+    private var clearDataButton: some View {
+        let button = Button(
+            "content.clearData".localized(),
+            role: .destructive
+        ) {
+            isShowingClearDataConfirm = true
+        }
+        .disabled(isClearingData)
+        .settingsButtonStyle(.destructive)
+        .accessibilityIdentifier("mac.usage.clearData")
+
+#if DEBUG
+        return button.accessibilityValue(
+            Text(
+                AppRuntimeEnvironment.isUITesting
+                    ? "completed-\(uiTestingClearDataCompletionCount)"
+                    : ""
+            )
+        )
+#else
+        return button
+#endif
     }
 
     private var menuBarToggleRow: some View {

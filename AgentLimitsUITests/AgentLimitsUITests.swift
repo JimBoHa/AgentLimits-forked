@@ -27,6 +27,146 @@ final class AgentLimitsUITests: XCTestCase {
     }
 
     @MainActor
+    func testCanAddSelectAndRemoveSecondProviderAccount() {
+        let app = launchIsolatedApp()
+        let workAccountLabel = "Mac UI Work"
+
+        let copilotProvider = element(
+            "mac.usage.provider.githubCopilot",
+            in: app
+        )
+        XCTAssertTrue(
+            copilotProvider.waitForExistence(timeout: 5),
+            "Missing Copilot provider segment"
+        )
+        copilotProvider.click()
+
+        let accountPicker = element("mac.usage.accountPicker", in: app)
+        XCTAssertTrue(
+            waitForValue("Copilot", of: accountPicker, timeout: 5),
+            "Copilot account did not become selected"
+        )
+
+        element("mac.usage.manageAccounts", in: app).click()
+        XCTAssertTrue(
+            element("mac.accounts.root", in: app)
+                .waitForExistence(timeout: 5),
+            "Account manager did not open"
+        )
+
+        element("mac.accounts.add", in: app).click()
+        XCTAssertTrue(
+            element("mac.accounts.editor.root", in: app)
+                .waitForExistence(timeout: 5),
+            "Account editor did not open"
+        )
+
+        let labelField = element("mac.accounts.editor.label", in: app)
+        XCTAssertTrue(labelField.waitForExistence(timeout: 5))
+        labelField.click()
+        labelField.typeText(workAccountLabel)
+        element("mac.accounts.editor.save", in: app).click()
+
+        let selectedWorkAccount = accountSelectedMarker(
+            workAccountLabel,
+            in: app
+        )
+        XCTAssertTrue(
+            selectedWorkAccount.waitForExistence(timeout: 5),
+            "New account was not added and selected"
+        )
+
+        let selectDefaultAccount = accountButton(
+            identifierPrefix: "mac.accounts.select.",
+            label: "Select Copilot",
+            in: app
+        )
+        XCTAssertTrue(selectDefaultAccount.waitForExistence(timeout: 5))
+        selectDefaultAccount.click()
+        XCTAssertTrue(
+            accountSelectedMarker("Copilot", in: app)
+                .waitForExistence(timeout: 5),
+            "Default account could not be selected"
+        )
+
+        let selectWorkAccount = accountButton(
+            identifierPrefix: "mac.accounts.select.",
+            label: "Select \(workAccountLabel)",
+            in: app
+        )
+        XCTAssertTrue(selectWorkAccount.waitForExistence(timeout: 5))
+        selectWorkAccount.click()
+        XCTAssertTrue(
+            selectedWorkAccount.waitForExistence(timeout: 5),
+            "Second account could not be reselected"
+        )
+
+        let removeWorkAccount = accountButton(
+            identifierPrefix: "mac.accounts.remove.",
+            label: "Remove Account — \(workAccountLabel)",
+            in: app
+        )
+        XCTAssertTrue(removeWorkAccount.waitForExistence(timeout: 5))
+        removeWorkAccount.click()
+
+        let confirmRemoval = element("mac.accounts.confirmRemove", in: app)
+        XCTAssertTrue(
+            confirmRemoval.waitForExistence(timeout: 5),
+            "Account removal confirmation did not appear"
+        )
+        confirmRemoval.click()
+
+        XCTAssertTrue(
+            app.staticTexts[workAccountLabel]
+                .waitForNonExistence(timeout: 15),
+            "Removed account remained visible"
+        )
+        XCTAssertTrue(
+            accountSelectedMarker("Copilot", in: app)
+                .waitForExistence(timeout: 5),
+            "Selection did not return to the remaining account"
+        )
+
+        element("mac.accounts.close", in: app).click()
+        XCTAssertTrue(
+            element("mac.accounts.root", in: app)
+                .waitForNonExistence(timeout: 5),
+            "Account manager did not close"
+        )
+        XCTAssertTrue(
+            waitForValue("Copilot", of: accountPicker, timeout: 5),
+            "Removed account remained selected in Usage settings"
+        )
+    }
+
+    @MainActor
+    func testClearDataCompletesWithoutError() {
+        let app = launchIsolatedApp()
+        let clearData = element("mac.usage.clearData", in: app)
+
+        XCTAssertTrue(clearData.waitForExistence(timeout: 5))
+        XCTAssertTrue(
+            waitForValue("completed-0", of: clearData, timeout: 5),
+            "Clear Data test state was not initialized"
+        )
+        clearData.click()
+
+        let confirmClear = element("mac.usage.confirmClearData", in: app)
+        XCTAssertTrue(
+            confirmClear.waitForExistence(timeout: 5),
+            "Clear Data confirmation did not appear"
+        )
+        confirmClear.click()
+
+        XCTAssertTrue(
+            waitForValue("completed-1", of: clearData, timeout: 20),
+            "Clear Data did not finish successfully"
+        )
+        XCTAssertTrue(clearData.isEnabled)
+        XCTAssertFalse(app.alerts["Clear Data"].exists)
+    }
+
+    @MainActor
     func testEverySettingsTabShowsItsCoreContent() {
         let app = launchIsolatedApp()
         let destinations = [
@@ -102,5 +242,48 @@ final class AgentLimitsUITests: XCTestCase {
         in app: XCUIApplication
     ) -> XCUIElement {
         app.descendants(matching: .any)[identifier]
+    }
+
+    @MainActor
+    private func accountButton(
+        identifierPrefix: String,
+        label: String,
+        in app: XCUIApplication
+    ) -> XCUIElement {
+        app.buttons.matching(
+            NSPredicate(
+                format: "identifier BEGINSWITH %@ AND label == %@",
+                identifierPrefix,
+                label
+            )
+        ).firstMatch
+    }
+
+    @MainActor
+    private func accountSelectedMarker(
+        _ accountLabel: String,
+        in app: XCUIApplication
+    ) -> XCUIElement {
+        app.staticTexts.matching(
+            NSPredicate(
+                format: "identifier BEGINSWITH %@ AND label == %@",
+                "mac.accounts.selected.",
+                "Selected — \(accountLabel)"
+            )
+        ).firstMatch
+    }
+
+    @MainActor
+    private func waitForValue(
+        _ value: String,
+        of element: XCUIElement,
+        timeout: TimeInterval
+    ) -> Bool {
+        let expectation = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "value == %@", value),
+            object: element
+        )
+        return XCTWaiter().wait(for: [expectation], timeout: timeout)
+            == .completed
     }
 }
