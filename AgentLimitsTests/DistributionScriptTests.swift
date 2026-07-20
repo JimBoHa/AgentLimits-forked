@@ -2,6 +2,39 @@ import Foundation
 import XCTest
 
 final class DistributionScriptTests: XCTestCase {
+    func testAppleToolchainVersionComparisonIsNumericAndFailClosed() throws {
+        let command = #"source "$1"; apple_version_is_at_least 26.10 26.9 || exit 1; older=0; apple_version_is_at_least 26.9 26.10 || older=$?; malformed=0; apple_version_is_at_least 26.beta 26 || malformed=$?; oversized=0; apple_version_is_at_least 1234567890.1 26 || oversized=$?; [[ "$older" == 1 && "$malformed" == 2 && "$oversized" == 2 ]]"#
+
+        let result = try runAppleToolchainHelper(command: command)
+
+        XCTAssertEqual(result.status, 0, result.output)
+    }
+
+    func testAppleToolchainPreflightUsesHermeticXcodeAndSDKFixtures() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let developerDirectory = try createAppleToolchainFixture(
+            at: directory,
+            dtxcode: "2610"
+        )
+
+        let result = try runAppleToolchainFixture(
+            developerDirectory: developerDirectory,
+            xcodeVersion: "26.1",
+            xcodeBuild: "17A1",
+            sdkVersion: "26.2",
+            sdkBuild: "23A1",
+            platforms: ["macosx", "iphoneos", "watchos"]
+        )
+
+        XCTAssertEqual(result.status, 0, result.output)
+        XCTAssertEqual(
+            result.output.split(separator: "\n").map(String.init),
+            ["26", "26", "26.1", "26.2", "26.2", "26.2"],
+            result.output
+        )
+    }
+
     func testDependencySecurityConfigurationStaysEnforced() throws {
         let configResult = try runDependencySecurityConfigValidator(
             workflow: repositoryRoot.appendingPathComponent(
@@ -40,6 +73,69 @@ final class DistributionScriptTests: XCTestCase {
             result.output.contains("dependency-review inputs changed"),
             result.output
         )
+    }
+
+    func testAppleToolchainPreflightRejectsBelowFloorAndMalformedFixtures() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let currentDeveloperDirectory = try createAppleToolchainFixture(
+            at: directory.appendingPathComponent("current"),
+            dtxcode: "2610"
+        )
+        let oldDeveloperDirectory = try createAppleToolchainFixture(
+            at: directory.appendingPathComponent("old"),
+            dtxcode: "2550"
+        )
+        let fixtures: [(
+            name: String,
+            developerDirectory: URL,
+            xcodeVersion: String,
+            xcodeBuild: String,
+            sdkVersion: String,
+            sdkBuild: String,
+            expected: String
+        )] = [
+            (
+                "old Xcode", oldDeveloperDirectory, "25.5", "16F1",
+                "26.2", "23A1", "Xcode 25.5 is below required version 26"
+            ),
+            (
+                "malformed Xcode", currentDeveloperDirectory, "26.beta", "17A1",
+                "26.2", "23A1", "malformed version metadata"
+            ),
+            (
+                "malformed Xcode build", currentDeveloperDirectory, "26.1", "17-A1",
+                "26.2", "23A1", "malformed build metadata"
+            ),
+            (
+                "old SDK", currentDeveloperDirectory, "26.1", "17A1",
+                "25.9", "22A1", "SDK 25.9 is below required version 26"
+            ),
+            (
+                "malformed SDK", currentDeveloperDirectory, "26.1", "17A1",
+                "26.beta", "23A1", "SDK version could not be validated"
+            ),
+            (
+                "malformed SDK build", currentDeveloperDirectory, "26.1", "17A1",
+                "26.2", "23-A1", "Could not read selected macosx SDK build"
+            )
+        ]
+
+        for fixture in fixtures {
+            let result = try runAppleToolchainFixture(
+                developerDirectory: fixture.developerDirectory,
+                xcodeVersion: fixture.xcodeVersion,
+                xcodeBuild: fixture.xcodeBuild,
+                sdkVersion: fixture.sdkVersion,
+                sdkBuild: fixture.sdkBuild,
+                platforms: ["macosx"]
+            )
+            XCTAssertEqual(result.status, 69, fixture.name + ": " + result.output)
+            XCTAssertTrue(
+                result.output.contains(fixture.expected),
+                fixture.name + ": " + result.output
+            )
+        }
     }
 
     func testDependencyWorkflowRejectsSeverityWeakening() throws {
@@ -94,6 +190,288 @@ final class DistributionScriptTests: XCTestCase {
                     || result.output.contains("references secrets or github.token"),
                 result.output
             )
+        }
+    }
+
+    func testAppleToolchainTrustAcceptsInstalledAppleXcode() throws {
+        let selectedDeveloperDirectory = ProcessInfo.processInfo.environment[
+            "DEVELOPER_DIR"
+        ] ?? "/Applications/Xcode.app/Contents/Developer"
+        let canonicalDeveloperDirectory = URL(
+            fileURLWithPath: selectedDeveloperDirectory,
+            isDirectory: true
+        ).resolvingSymlinksInPath().path
+        guard FileManager.default.fileExists(
+            atPath: canonicalDeveloperDirectory + "/usr/bin/xcodebuild"
+        ) else {
+            throw XCTSkip("A selected Xcode installation is required")
+        }
+        let command = #"source "$1"; apple_validate_xcode_bundle_trust "$2"; exit $?"#
+
+        let result = try runAppleToolchainHelper(
+            command: command,
+            arguments: [canonicalDeveloperDirectory]
+        )
+
+        if result.status == 69,
+           result.output.contains("ancestor directories must be root-owned and non-writable") {
+            throw XCTSkip(
+                "Selected Xcode is installed below an account-writable directory"
+            )
+        }
+        XCTAssertEqual(result.status, 0, result.output)
+    }
+
+    func testAppleToolchainRejectsUntrustedBundleBeforeToolExecution() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let developerDirectory = try createAppleToolchainFixture(
+            at: directory,
+            dtxcode: "2610"
+        )
+        let marker = directory.appendingPathComponent("selected-tool-ran")
+        let command = #"""
+        source "$1"
+        selected_tool_marker="$3"
+        apple_run_selected_tool() {
+            /usr/bin/touch "$selected_tool_marker"
+            return 97
+        }
+        validate_apple_distribution_toolchain "$2" macosx
+        result=$?
+        [[ ! -e "$selected_tool_marker" ]] || exit 98
+        exit "$result"
+        """#
+
+        let result = try runAppleToolchainHelper(
+            command: command,
+            arguments: [developerDirectory.path, marker.path]
+        )
+
+        XCTAssertEqual(result.status, 69, result.output)
+        XCTAssertTrue(
+            result.output.contains("canonical Xcode Developer directory"),
+            result.output
+        )
+        XCTAssertFalse(FileManager.default.fileExists(atPath: marker.path))
+        let helper = try releaseScript(named: "apple-toolchain.sh")
+        XCTAssertTrue(
+            helper.contains("/usr/bin/codesign --verify --deep --strict")
+        )
+        XCTAssertTrue(
+            helper.contains(
+                #"certificate leaf[field.1.2.840.113635.100.6.1.9] exists"#
+            )
+        )
+        XCTAssertTrue(
+            helper.contains(
+                #"certificate leaf[subject.OU] = "59GAB85EFG""#
+            )
+        )
+        XCTAssertTrue(helper.contains(#"identifier "com.apple.dt.Xcode""#))
+        XCTAssertTrue(helper.contains("'!' -uid 0"))
+        XCTAssertTrue(helper.contains("-o -perm -0002"))
+        XCTAssertTrue(helper.contains("-o -acl"))
+    }
+
+    func testAppleToolchainRejectsWritableAncestorBeforeSignatureCheck() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let developerDirectory = try createAppleToolchainFixture(
+            at: directory,
+            dtxcode: "2610"
+        ).resolvingSymlinksInPath()
+        let command = #"source "$1"; canonical="$(cd "$2" && pwd -P)" || exit 1; apple_validate_xcode_bundle_trust "$canonical"; exit $?"#
+
+        let result = try runAppleToolchainHelper(
+            command: command,
+            arguments: [developerDirectory.path]
+        )
+
+        XCTAssertEqual(result.status, 69, result.output)
+        XCTAssertTrue(
+            result.output.contains(
+                "ancestor directories must be root-owned and non-writable"
+            ),
+            result.output
+        )
+    }
+
+    func testAppleProductMetadataMustExactlyMatchPreflight() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let info = directory.appendingPathComponent("Info.plist")
+        let validMetadata: [String: Any] = [
+            "DTXcode": "2660",
+            "DTXcodeBuild": "17F113",
+            "DTSDKName": "iphoneos26.5",
+            "DTSDKBuild": "23F81a",
+            "DTPlatformName": "iphoneos",
+            "DTPlatformVersion": "26.5"
+        ]
+        let command = #"source "$1"; validated_apple_toolchain_ready=1; validated_apple_xcode_version=26.6; validated_apple_xcode_build=17F113; validated_apple_dtxcode=2660; validated_apple_iphoneos_sdk_version=26.5; validated_apple_iphoneos_sdk_name=iphoneos26.5; validated_apple_iphoneos_sdk_build=23F81a; verify_apple_product_toolchain_metadata "$2" iphoneos fixture; exit $?"#
+
+        try PropertyListSerialization.data(
+            fromPropertyList: validMetadata,
+            format: .xml,
+            options: 0
+        ).write(to: info)
+        var result = try runAppleToolchainHelper(
+            command: command,
+            arguments: [info.path]
+        )
+        XCTAssertEqual(result.status, 0, result.output)
+
+        let unequalWellFormedValues: [String: String] = [
+            "DTXcode": "2670",
+            "DTXcodeBuild": "17F114",
+            "DTSDKName": "iphoneos26.6",
+            "DTSDKBuild": "23F82",
+            "DTPlatformName": "iphonesimulator",
+            "DTPlatformVersion": "26.6"
+        ]
+        for (key, unequalValue) in unequalWellFormedValues {
+            var invalidMetadata = validMetadata
+            invalidMetadata[key] = unequalValue
+            try PropertyListSerialization.data(
+                fromPropertyList: invalidMetadata,
+                format: .xml,
+                options: 0
+            ).write(to: info)
+            result = try runAppleToolchainHelper(
+                command: command,
+                arguments: [info.path]
+            )
+            XCTAssertNotEqual(result.status, 0, "\(key): \(result.output)")
+        }
+    }
+
+    func testReleasePathsEnforcePreflightAndPostBuildMetadata() throws {
+        let unsigned = try releaseScript(named: "build-unsigned-artifacts.sh")
+        assertOrderedSnippets(
+            [
+                #"source "$script_dir/apple-toolchain.sh""#,
+                #"""
+                validate_apple_distribution_toolchain \
+                    "$developer_dir" macosx iphoneos watchos || exit $?
+                """#,
+                #"""
+                verify_apple_product_toolchain_metadata \
+                    "$mac_info" macosx "Unsigned macOS app" || exit $?
+                """#,
+                #"""
+                verify_apple_product_toolchain_metadata \
+                    "$widget_info" macosx "Unsigned macOS widget" || exit $?
+                """#,
+                #"""
+                verify_apple_product_toolchain_metadata \
+                    "$ios_info" iphoneos "Unsigned iOS app" || exit $?
+                """#,
+                #"""
+                verify_apple_product_toolchain_metadata \
+                    "$watch_info" watchos "Unsigned Watch app" || exit $?
+                """#
+            ],
+            in: unsigned,
+            context: "build-unsigned-artifacts.sh"
+        )
+        XCTAssertEqual(
+            occurrenceCount(
+                of: "verify_apple_product_toolchain_metadata",
+                in: unsigned
+            ),
+            4
+        )
+
+        let ios = try releaseScript(named: "export-ios.sh")
+        assertOrderedSnippets(
+            [
+                #"source "$script_dir/apple-toolchain.sh""#,
+                #"""
+                validate_apple_distribution_toolchain \
+                    "$developer_dir" iphoneos watchos || exit $?
+                """#,
+                #"""
+                verify_apple_product_toolchain_metadata \
+                    "$archive_ios_info" iphoneos "Archived iOS app" || exit $?
+                """#,
+                #"""
+                verify_apple_product_toolchain_metadata \
+                    "$archive_watch_info" watchos "Archived Watch app" || exit $?
+                """#,
+                #"""
+                verify_apple_product_toolchain_metadata \
+                    "$ios_info" iphoneos "Exported iOS app" || exit $?
+                """#,
+                #"""
+                verify_apple_product_toolchain_metadata \
+                    "$watch_info" watchos "Exported Watch app" || exit $?
+                """#
+            ],
+            in: ios,
+            context: "export-ios.sh"
+        )
+        XCTAssertEqual(
+            occurrenceCount(of: "verify_apple_product_toolchain_metadata", in: ios),
+            4
+        )
+
+        let mac = try releaseScript(named: "package-macos.sh")
+        assertOrderedSnippets(
+            [
+                #"source "$script_dir/apple-toolchain.sh""#,
+                #"validate_apple_distribution_toolchain "$developer_dir" macosx || exit $?"#,
+                #"""
+                verify_apple_product_toolchain_metadata \
+                    "$archive_app/Contents/Info.plist" macosx "Archived macOS app" || exit $?
+                """#,
+                #"""
+                verify_apple_product_toolchain_metadata \
+                    "$archive_widget/Contents/Info.plist" macosx "Archived macOS widget" \
+                    || exit $?
+                """#,
+                #"""
+                verify_apple_product_toolchain_metadata \
+                    "$app_info" macosx "Developer ID app" || exit $?
+                """#,
+                #"""
+                verify_apple_product_toolchain_metadata \
+                    "$widget_info" macosx "Developer ID widget" || exit $?
+                """#,
+                #"""
+                    verify_apple_product_toolchain_metadata \
+                        "$candidate_info" macosx "$label" || exit $?
+                """#,
+                #"""
+                    verify_apple_product_toolchain_metadata \
+                        "$candidate_widget_info" macosx "$label widget" || exit $?
+                """#,
+                #"verify_packaged_app "$zip_app" "ZIP app""#,
+                #"verify_packaged_app "$pkg_app" "PKG payload app""#,
+                #"verify_packaged_app "$mounted_app" "DMG app""#
+            ],
+            in: mac,
+            context: "package-macos.sh"
+        )
+        XCTAssertEqual(
+            occurrenceCount(of: "verify_apple_product_toolchain_metadata", in: mac),
+            6
+        )
+
+        for (name, script) in [
+            ("build-unsigned-artifacts.sh", unsigned),
+            ("export-ios.sh", ios),
+            ("package-macos.sh", mac)
+        ] {
+            XCTAssertEqual(
+                occurrenceCount(
+                    of: "validate_apple_distribution_toolchain",
+                    in: script
+                ),
+                1,
+                name
+            )
+            XCTAssertFalse(script.contains("sort -V"), name)
         }
     }
 
@@ -791,6 +1169,361 @@ final class DistributionScriptTests: XCTestCase {
         )
     }
 
+    func testReleaseEntrypointsResetForgedFixedEnvironmentValues() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let bashEnvironment = directory.appendingPathComponent("hostile-bash-env")
+        let contents = #"""
+        if [[ "${BASH_ENV_PARENT_ONLY:-}" == "1" ]]; then
+            echo() {
+                /usr/bin/printf 'HOSTILE_EXPORTED_ECHO\n' >&2
+                return 97
+            }
+            export -f echo
+        else
+            /usr/bin/printf 'HOSTILE_BASH_ENV\n' >&2
+        fi
+        """#
+        try Data(contents.utf8).write(to: bashEnvironment)
+        try setPermissions(0o600, for: bashEnvironment)
+
+        for name in [
+            "build-unsigned-artifacts.sh",
+            "export-ios.sh",
+            "package-macos.sh"
+        ] {
+            let script = repositoryRoot.appendingPathComponent("Scripts/\(name)")
+            let scriptText = try releaseScript(named: name)
+            XCTAssertTrue(scriptText.hasPrefix("#!/bin/bash -p\n"), name)
+            XCTAssertEqual(
+                occurrenceCount(of: "exec /usr/bin/env -i", in: scriptText),
+                1,
+                name
+            )
+            XCTAssertTrue(
+                scriptText.contains(
+                    #"${AGENTLIMITS_RELEASE_ENV_PID:-}" != "$$""#
+                ),
+                name
+            )
+            XCTAssertTrue(scriptText.contains("/usr/bin/env -0"), name)
+            XCTAssertTrue(scriptText.contains("release_environment_needs_reset"), name)
+            let result = try runProcess(
+                executable: "/bin/bash",
+                arguments: [
+                    "-c",
+                    #"unset BASH_ENV_PARENT_ONLY; exec "$1""#,
+                    "release-entrypoint-test",
+                    script.path
+                ],
+                environment: [
+                    "BASH_ENV": bashEnvironment.path,
+                    "BASH_ENV_PARENT_ONLY": "1",
+                    "HOME": directory.path
+                ]
+            )
+
+            XCTAssertEqual(result.status, 64, name + ": " + result.output)
+            XCTAssertTrue(
+                result.output.contains("Usage:"),
+                name + ": " + result.output
+            )
+            XCTAssertFalse(
+                result.output.contains("HOSTILE_"),
+                name + ": " + result.output
+            )
+            XCTAssertFalse(
+                result.output.contains("Release environment was not sanitized"),
+                name + ": " + result.output
+            )
+
+            let forgedSentinel = try runProcess(
+                executable: "/bin/bash",
+                arguments: [
+                    "-c",
+                    #"exec /usr/bin/env -i AGENTLIMITS_RELEASE_ENV_PID="$$" DEVELOPER_DIR= HOME=/var/empty LANG=C LC_ALL=C PATH=/private/tmp "$1""#,
+                    "release-entrypoint-forged-sentinel-test",
+                    script.path
+                ]
+            )
+            XCTAssertEqual(
+                forgedSentinel.status,
+                64,
+                name + ": " + forgedSentinel.output
+            )
+            XCTAssertTrue(
+                forgedSentinel.output.contains("Usage:"),
+                name + ": " + forgedSentinel.output
+            )
+
+            let forgedHome = try runProcess(
+                executable: "/bin/bash",
+                arguments: [
+                    "-c",
+                    #"exec /usr/bin/env -i AGENTLIMITS_RELEASE_ENV_PID="$$" DEVELOPER_DIR= HOME=/private/tmp LANG=C LC_ALL=C PATH=/usr/bin:/bin:/usr/sbin:/sbin "$1""#,
+                    "release-entrypoint-forged-home-test",
+                    script.path
+                ]
+            )
+            XCTAssertEqual(
+                forgedHome.status,
+                64,
+                name + ": " + forgedHome.output
+            )
+            XCTAssertTrue(
+                forgedHome.output.contains("Usage:"),
+                name + ": " + forgedHome.output
+            )
+        }
+    }
+
+    func testReleaseEnvironmentDropsHostileToolOverrides() throws {
+        let command = #"source "$1"; sanitize_release_git_environment; printf '%s\n' "${CCC_OVERRIDE_OPTIONS-unset}" "${CCC_ADD_ARGS-unset}" "${GREP_OPTIONS-unset}" "${TAR_OPTIONS-unset}" "${PERL5OPT-unset}" "${PERL5LIB-unset}" "${PERLLIB-unset}" "${xcrun_verbose-unset}" "${xcrun_log-unset}" "${xcrun_cache_path-unset}" "${DYLD_FAKE_OVERRIDE-unset}" "$COPYFILE_DISABLE" "$COPY_EXTENDED_ATTRIBUTES_DISABLE" "$LC_ALL""#
+        let result = try runSigningConfigHelper(
+            command: command,
+            environment: [
+                "CCC_OVERRIDE_OPTIONS": "hostile",
+                "CCC_ADD_ARGS": "hostile",
+                "GREP_OPTIONS": "--exclude=*",
+                "TAR_OPTIONS": "--exclude=*",
+                "PERL5OPT": "-Mhostile",
+                "PERL5LIB": "/private/tmp/hostile",
+                "PERLLIB": "/private/tmp/hostile",
+                "xcrun_verbose": "1",
+                "xcrun_log": "/private/tmp/xcrun.log",
+                "xcrun_cache_path": "/private/tmp/xcrun-cache",
+                "DYLD_FAKE_OVERRIDE": "hostile"
+            ]
+        )
+
+        XCTAssertEqual(result.status, 0, result.output)
+        XCTAssertEqual(
+            result.output.split(separator: "\n").map(String.init),
+            Array(repeating: "unset", count: 11) + ["1", "1", "C"]
+        )
+    }
+
+    func testReleaseSourcePinPropagatesGitStatusFailure() throws {
+        let repository = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: repository) }
+        _ = try initializeGitRepository(at: repository, fileName: "trusted.txt")
+        try Data("corrupt-index".utf8).write(
+            to: repository.appendingPathComponent(".git/index")
+        )
+        let command = #"source "$1"; sanitize_release_git_environment; pin_clean_release_source "$2""#
+
+        let result = try runSigningConfigHelper(
+            command: command,
+            arguments: [repository.path]
+        )
+
+        XCTAssertEqual(result.status, 65, result.output)
+        XCTAssertTrue(result.output.contains("release source"), result.output)
+    }
+
+    func testReleaseSourcePinRejectsHiddenIndexFlagsAndContent() throws {
+        for flag in ["--assume-unchanged", "--skip-worktree"] {
+            let repository = try temporaryDirectory()
+            defer { try? FileManager.default.removeItem(at: repository) }
+            _ = try initializeGitRepository(
+                at: repository,
+                fileName: "trusted.txt"
+            )
+            _ = try git(
+                ["update-index", flag, "trusted.txt"],
+                at: repository
+            )
+            try Data("hidden mutation".utf8).write(
+                to: repository.appendingPathComponent("trusted.txt")
+            )
+            let command = #"source "$1"; sanitize_release_git_environment; pin_clean_release_source "$2""#
+
+            let result = try runSigningConfigHelper(
+                command: command,
+                arguments: [repository.path]
+            )
+
+            XCTAssertEqual(result.status, 65, "\(flag): \(result.output)")
+            XCTAssertTrue(
+                result.output.contains("hidden worktree flags"),
+                "\(flag): \(result.output)"
+            )
+        }
+    }
+
+    func testReleaseSourceRecheckPropagatesGitStatusFailure() throws {
+        let repository = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: repository) }
+        _ = try initializeGitRepository(at: repository, fileName: "trusted.txt")
+        let command = #"source "$1"; sanitize_release_git_environment; pin_clean_release_source "$2" || exit $?; commit="$validated_release_source_commit"; tree="$validated_release_source_tree"; printf corrupt-index >"$2/.git/index"; verify_pinned_release_source_unchanged "$2" "$commit" "$tree""#
+
+        let result = try runSigningConfigHelper(
+            command: command,
+            arguments: [repository.path]
+        )
+
+        XCTAssertEqual(result.status, 65, result.output)
+        XCTAssertTrue(result.output.contains("recheck"), result.output)
+    }
+
+    func testReleaseSourcePinRejectsExecutableRepositoryConfiguration() throws {
+        let repository = try temporaryDirectory()
+        let marker = repository.appendingPathComponent("executed-marker")
+        let hook = repository.appendingPathComponent("hostile-hook")
+        defer { try? FileManager.default.removeItem(at: repository) }
+        _ = try initializeGitRepository(at: repository, fileName: "trusted.txt")
+        try Data(
+            "#!/bin/sh\n/usr/bin/touch \"$AGENTLIMITS_HOOK_MARKER\"\n".utf8
+        ).write(to: hook)
+        try setPermissions(0o700, for: hook)
+        let command = #"source "$1"; sanitize_release_git_environment; pin_clean_release_source "$2""#
+
+        for key in ["core.fsmonitor", "filter.hostile.clean", "filter.hostile.process"] {
+            _ = try git(["config", key, hook.path], at: repository)
+            let result = try runSigningConfigHelper(
+                command: command,
+                arguments: [repository.path],
+                environment: ["AGENTLIMITS_HOOK_MARKER": marker.path]
+            )
+
+            XCTAssertEqual(result.status, 65, "\(key): \(result.output)")
+            XCTAssertTrue(
+                result.output.contains("Repository Git configuration"),
+                "\(key): \(result.output)"
+            )
+            XCTAssertFalse(FileManager.default.fileExists(atPath: marker.path))
+            _ = try git(["config", "--unset-all", key], at: repository)
+        }
+
+        _ = try git(
+            ["config", "extensions.worktreeConfig", "true"],
+            at: repository
+        )
+        _ = try git(
+            ["config", "--worktree", "core.fsmonitor", hook.path],
+            at: repository
+        )
+        let worktreeResult = try runSigningConfigHelper(
+            command: command,
+            arguments: [repository.path],
+            environment: ["AGENTLIMITS_HOOK_MARKER": marker.path]
+        )
+        XCTAssertEqual(worktreeResult.status, 65, worktreeResult.output)
+        XCTAssertTrue(
+            worktreeResult.output.contains("Repository Git configuration"),
+            worktreeResult.output
+        )
+        XCTAssertFalse(FileManager.default.fileExists(atPath: marker.path))
+    }
+
+    func testReleaseSourceSnapshotExactlyMatchesPinnedTree() throws {
+        let repository = try temporaryDirectory()
+        let work = try releaseTemporaryDirectory()
+        defer {
+            try? FileManager.default.removeItem(at: repository)
+            try? FileManager.default.removeItem(at: work)
+        }
+        _ = try initializeGitRepository(at: repository, fileName: "trusted.txt")
+        let command = #"umask 077; source "$1"; source "$2"; sanitize_release_git_environment; pin_clean_release_source "$3" || exit $?; tree="$validated_release_source_tree"; create_immutable_release_source_snapshot "$3" "$validated_release_source_commit" "$tree" "$4" || exit $?; snapshot="$validated_release_source_snapshot"; identity="$validated_release_source_snapshot_identity"; verify_immutable_release_source_snapshot "$snapshot" "$identity" || exit $?; unlock_immutable_release_source_snapshot_for_cleanup "$snapshot" "$identity" "$4" "$3" "$tree" || exit $?; rm -rf "$snapshot""#
+
+        let result = try runReleaseOutputHelper(
+            command: command,
+            arguments: [
+                repositoryRoot.appendingPathComponent("Scripts/signing-config.sh").path,
+                repository.path,
+                work.path
+            ]
+        )
+
+        XCTAssertEqual(result.status, 0, result.output)
+    }
+
+    func testReleaseSourceSnapshotRejectsInfoAttributesExportIgnore() throws {
+        let repository = try temporaryDirectory()
+        let work = try releaseTemporaryDirectory()
+        defer {
+            try? FileManager.default.removeItem(at: repository)
+            try? FileManager.default.removeItem(at: work)
+        }
+        _ = try initializeGitRepository(at: repository, fileName: "trusted.txt")
+        try Data("trusted.txt export-ignore\n".utf8).write(
+            to: repository.appendingPathComponent(".git/info/attributes")
+        )
+        let command = #"source "$1"; source "$2"; sanitize_release_git_environment; pin_clean_release_source "$3" || exit $?; create_immutable_release_source_snapshot "$3" "$validated_release_source_commit" "$validated_release_source_tree" "$4""#
+
+        let result = try runReleaseOutputHelper(
+            command: command,
+            arguments: [
+                repositoryRoot.appendingPathComponent("Scripts/signing-config.sh").path,
+                repository.path,
+                work.path
+            ]
+        )
+
+        XCTAssertEqual(result.status, 73, result.output)
+        XCTAssertTrue(result.output.contains("exact release source"), result.output)
+    }
+
+    func testReleaseSourceSnapshotRejectsConfiguredExportSubstitution() throws {
+        let repository = try temporaryDirectory()
+        let work = try releaseTemporaryDirectory()
+        let attributes = work.appendingPathComponent("hostile.attributes")
+        defer {
+            try? FileManager.default.removeItem(at: repository)
+            try? FileManager.default.removeItem(at: work)
+        }
+        _ = try initializeGitRepository(at: repository, fileName: "trusted.txt")
+        try Data("$Format:%H$\n".utf8).write(
+            to: repository.appendingPathComponent("trusted.txt")
+        )
+        _ = try git(["add", "trusted.txt"], at: repository)
+        _ = try git(["commit", "-qm", "add archive placeholder"], at: repository)
+        try Data("trusted.txt export-subst\n".utf8).write(to: attributes)
+        _ = try git(
+            ["config", "core.attributesFile", attributes.path],
+            at: repository
+        )
+        let command = #"source "$1"; source "$2"; sanitize_release_git_environment; pin_clean_release_source "$3" || exit $?; create_immutable_release_source_snapshot "$3" "$validated_release_source_commit" "$validated_release_source_tree" "$4""#
+
+        let result = try runReleaseOutputHelper(
+            command: command,
+            arguments: [
+                repositoryRoot.appendingPathComponent("Scripts/signing-config.sh").path,
+                repository.path,
+                work.path
+            ]
+        )
+
+        XCTAssertEqual(result.status, 65, result.output)
+        XCTAssertTrue(
+            result.output.contains("Repository Git configuration"),
+            result.output
+        )
+    }
+
+    func testReleaseSourceCleanupPreservesTamperedSnapshot() throws {
+        let repository = try temporaryDirectory()
+        let work = try releaseTemporaryDirectory()
+        defer {
+            try? FileManager.default.removeItem(at: repository)
+            try? FileManager.default.removeItem(at: work)
+        }
+        _ = try initializeGitRepository(at: repository, fileName: "trusted.txt")
+        let command = #"source "$1"; source "$2"; sanitize_release_git_environment; pin_clean_release_source "$3" || exit $?; tree="$validated_release_source_tree"; create_immutable_release_source_snapshot "$3" "$validated_release_source_commit" "$tree" "$4" || exit $?; snapshot="$validated_release_source_snapshot"; identity="$validated_release_source_snapshot_identity"; file="$snapshot/trusted.txt"; chflags nouchg "$file"; chmod u+w "$file"; printf tampered >"$file"; refused=0; unlock_immutable_release_source_snapshot_for_cleanup "$snapshot" "$identity" "$4" "$3" "$tree" || refused=$?; preserved=false; [[ "$refused" == 73 && -d "$snapshot" ]] && preserved=true; chflags -R nouchg "$snapshot"; chmod -R u+w "$snapshot"; rm -rf "$snapshot"; [[ "$preserved" == true ]]"#
+
+        let result = try runReleaseOutputHelper(
+            command: command,
+            arguments: [
+                repositoryRoot.appendingPathComponent("Scripts/signing-config.sh").path,
+                repository.path,
+                work.path
+            ]
+        )
+
+        XCTAssertEqual(result.status, 0, result.output)
+        XCTAssertTrue(result.output.contains("not immutable"), result.output)
+    }
+
     func testReleaseScriptsIgnoreHostileCDPATHWithNewlineTrap() throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -894,8 +1627,8 @@ final class DistributionScriptTests: XCTestCase {
                     .appendingPathComponent(invocation.0)
             )
             let result = try runProcess(
-                executable: "/bin/bash",
-                arguments: [link.path] + invocation.1,
+                executable: link.path,
+                arguments: invocation.1,
                 environment: ["AGENTLIMITS_SYMLINK_MARKER": marker.path]
             )
 
@@ -905,10 +1638,87 @@ final class DistributionScriptTests: XCTestCase {
         }
     }
 
+    func testReleaseEntrypointsIgnoreBashEnvAndExportedFunctions() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let bashEnvironment = directory.appendingPathComponent("bash-env")
+        let bashEnvironmentMarker = directory.appendingPathComponent("bash-env-marker")
+        let functionMarker = directory.appendingPathComponent("function-marker")
+        try Data(
+            "#!/bin/sh\n/usr/bin/touch \"$AGENTLIMITS_BASH_ENV_MARKER\"\n".utf8
+        ).write(to: bashEnvironment)
+
+        for name in [
+            "build-unsigned-artifacts.sh",
+            "export-ios.sh",
+            "package-macos.sh"
+        ] {
+            let script = repositoryRoot
+                .appendingPathComponent("Scripts")
+                .appendingPathComponent(name)
+            let contents = try String(contentsOf: script, encoding: .utf8)
+            XCTAssertTrue(contents.hasPrefix("#!/bin/bash -p\n"), name)
+            XCTAssertTrue(contents.contains("exec /usr/bin/env -i"), name)
+            XCTAssertTrue(contents.contains("/usr/bin/env -0"), name)
+            XCTAssertTrue(contents.contains("release_environment_needs_reset"), name)
+            let result = try runProcess(
+                executable: script.path,
+                arguments: [],
+                environment: [
+                    "AGENTLIMITS_BASH_ENV_MARKER": bashEnvironmentMarker.path,
+                    "AGENTLIMITS_FUNCTION_MARKER": functionMarker.path,
+                    "BASH_ENV": bashEnvironment.path,
+                    "BASH_FUNC_echo%%":
+                        "() { /usr/bin/touch \"$AGENTLIMITS_FUNCTION_MARKER\"; }"
+                ]
+            )
+
+            XCTAssertEqual(result.status, 64, "\(name): \(result.output)")
+            XCTAssertFalse(
+                FileManager.default.fileExists(atPath: bashEnvironmentMarker.path),
+                name
+            )
+            XCTAssertFalse(
+                FileManager.default.fileExists(atPath: functionMarker.path),
+                name
+            )
+
+            let spoofedSentinel = try runProcess(
+                executable: "/bin/bash",
+                arguments: [
+                    "-c",
+                    #"AGENTLIMITS_RELEASE_ENV_PID=$$; export AGENTLIMITS_RELEASE_ENV_PID; exec "$1""#,
+                    "release-env-spoof",
+                    script.path
+                ],
+                environment: [
+                    "AGENTLIMITS_FUNCTION_MARKER": functionMarker.path,
+                    "BASH_FUNC_echo%%":
+                        "() { /usr/bin/touch \"$AGENTLIMITS_FUNCTION_MARKER\"; }",
+                    "UNEXPECTED_HOSTILE_RELEASE_VARIABLE": "1"
+                ]
+            )
+            XCTAssertEqual(
+                spoofedSentinel.status,
+                64,
+                "\(name): \(spoofedSentinel.output)"
+            )
+            XCTAssertFalse(
+                FileManager.default.fileExists(atPath: functionMarker.path),
+                name
+            )
+        }
+    }
+
     func testSignedReleaseScriptsUseCleanSnapshotAndRecheckConfig() throws {
         for name in ["package-macos.sh", "export-ios.sh"] {
             let script = try releaseScript(named: name)
-            XCTAssertTrue(script.contains("source \"$script_dir/signing-config.sh\""), name)
+            XCTAssertTrue(script.contains("HEAD:Scripts/signing-config.sh"), name)
+            XCTAssertTrue(script.contains("source \"$trusted_signing_config\""), name)
+            XCTAssertFalse(
+                script.contains("source \"$script_dir/signing-config.sh\""),
+                name
+            )
             XCTAssertTrue(script.contains("sanitize_release_git_environment"), name)
             XCTAssertTrue(script.contains("unset CDPATH"), name)
             XCTAssertTrue(
@@ -916,7 +1726,19 @@ final class DistributionScriptTests: XCTestCase {
                 name
             )
             XCTAssertTrue(script.contains("source \"$script_dir/release-output.sh\""), name)
-            XCTAssertTrue(script.contains("git -C \"$project_root\" archive"), name)
+            XCTAssertTrue(script.contains("pin_clean_release_source"), name)
+            XCTAssertLessThan(
+                try offset(of: "pin_clean_release_source", in: script),
+                try offset(
+                    of: "source \"$script_dir/release-output.sh\"",
+                    in: script
+                ),
+                name
+            )
+            XCTAssertTrue(
+                script.contains("create_immutable_release_source_snapshot"),
+                name
+            )
             XCTAssertTrue(script.contains("$build_root/AgentLimits.xcodeproj"), name)
             XCTAssertTrue(
                 script.contains("prepare_xcode_signing_environment \"$snapshot_config\""),
@@ -930,21 +1752,346 @@ final class DistributionScriptTests: XCTestCase {
         }
     }
 
-    func testSignedReleaseScriptsPublishOnlyAfterFinalSourceFence() throws {
+    func testReleaseScriptsRequireExactProductsProfilesAndDSYMs() throws {
+        for name in [
+            "build-unsigned-artifacts.sh",
+            "package-macos.sh",
+            "export-ios.sh"
+        ] {
+            let script = try releaseScript(named: name)
+            XCTAssertTrue(
+                script.contains(
+                    "source \"$script_dir/release-artifact-validation.sh\""
+                ),
+                name
+            )
+            XCTAssertTrue(script.contains("validate_only_named_directory_entry"), name)
+            XCTAssertTrue(script.contains("validate_dsym_matches_binary"), name)
+        }
+
         for name in ["package-macos.sh", "export-ios.sh"] {
             let script = try releaseScript(named: name)
-            let dirtyRejection = try offset(of: "Refusing a signed", in: script)
+            XCTAssertTrue(
+                script.contains("validate_provisioning_profile_validity_window"),
+                name
+            )
+            XCTAssertTrue(
+                script.contains("validate_unlinked_regular_file_artifact"),
+                name
+            )
+        }
+        XCTAssertTrue(
+            try releaseScript(named: "package-macos.sh")
+                .contains("resolve_exactly_one_directory_with_suffix")
+        )
+        XCTAssertTrue(
+            try releaseScript(named: "export-ios.sh")
+                .contains("resolve_exactly_one_regular_file_with_suffix")
+        )
+    }
+
+    func testArtifactCardinalityRejectsMissingDuplicateAndUnsafeProducts() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let products = directory.appendingPathComponent("Products")
+        try FileManager.default.createDirectory(
+            at: products,
+            withIntermediateDirectories: false
+        )
+        let command = #"source "$1"; validate_only_named_directory_entry "$2" AgentLimits.app products"#
+
+        var result = try runArtifactValidationHelper(
+            command: command,
+            arguments: [products.path]
+        )
+        XCTAssertNotEqual(result.status, 0, result.output)
+
+        let expected = products.appendingPathComponent("AgentLimits.app")
+        try FileManager.default.createDirectory(
+            at: expected,
+            withIntermediateDirectories: false
+        )
+        result = try runArtifactValidationHelper(
+            command: command,
+            arguments: [products.path]
+        )
+        XCTAssertEqual(result.status, 0, result.output)
+
+        try FileManager.default.createDirectory(
+            at: products.appendingPathComponent("Injected.app"),
+            withIntermediateDirectories: false
+        )
+        result = try runArtifactValidationHelper(
+            command: command,
+            arguments: [products.path]
+        )
+        XCTAssertNotEqual(result.status, 0, result.output)
+
+        try FileManager.default.removeItem(at: products)
+        try FileManager.default.createDirectory(
+            at: products,
+            withIntermediateDirectories: false
+        )
+        try FileManager.default.createSymbolicLink(
+            at: expected,
+            withDestinationURL: directory
+        )
+        result = try runArtifactValidationHelper(
+            command: command,
+            arguments: [products.path]
+        )
+        XCTAssertNotEqual(result.status, 0, result.output)
+    }
+
+    func testExportCardinalityRejectsMultipleAndSymlinkArtifacts() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let command = #"source "$1"; resolve_exactly_one_regular_file_with_suffix "$2" .ipa "" export"#
+        let first = directory.appendingPathComponent("AgentLimits.ipa")
+        try Data("one".utf8).write(to: first)
+
+        var result = try runArtifactValidationHelper(
+            command: command,
+            arguments: [directory.path]
+        )
+        XCTAssertEqual(result.status, 0, result.output)
+
+        try Data("two".utf8).write(
+            to: directory.appendingPathComponent("Injected.ipa")
+        )
+        result = try runArtifactValidationHelper(
+            command: command,
+            arguments: [directory.path]
+        )
+        XCTAssertNotEqual(result.status, 0, result.output)
+
+        try FileManager.default.removeItem(at: directory)
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: false
+        )
+        try FileManager.default.createSymbolicLink(
+            at: first,
+            withDestinationURL: repositoryRoot.appendingPathComponent("README.md")
+        )
+        result = try runArtifactValidationHelper(
+            command: command,
+            arguments: [directory.path]
+        )
+        XCTAssertNotEqual(result.status, 0, result.output)
+    }
+
+    func testDSYMInventoryRejectsMalformedMissingExtraAndMismatchedSlices() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let binary = directory.appendingPathComponent("binary.txt")
+        let symbols = directory.appendingPathComponent("symbols.txt")
+        let armUUID = "AAAAAAAA-1111-2222-3333-444444444444"
+        let watchUUID = "BBBBBBBB-1111-2222-3333-444444444444"
+        let validBinary = """
+        UUID: \(armUUID) (arm64) /private/tmp/App
+        UUID: \(watchUUID) (arm64_32) /private/tmp/App
+        """
+        let validSymbols = """
+        UUID: \(watchUUID.lowercased()) (arm64_32) /private/tmp/App.dSYM
+        UUID: \(armUUID.lowercased()) (arm64) /private/tmp/App.dSYM
+        """
+        try Data(validBinary.utf8).write(to: binary)
+        let command = #"source "$1"; binary="$(<"$2")"; symbols="$(<"$3")"; validate_matching_dwarfdump_uuid_inventories "$binary" "$symbols" watch arm64 arm64_32"#
+
+        try Data(validSymbols.utf8).write(to: symbols)
+        var result = try runArtifactValidationHelper(
+            command: command,
+            arguments: [binary.path, symbols.path]
+        )
+        XCTAssertEqual(result.status, 0, result.output)
+
+        let invalidInventories = [
+            "UUID: CCCCCCCC-1111-2222-3333-444444444444 (arm64) /tmp/dSYM\n" +
+                "UUID: \(watchUUID) (arm64_32) /tmp/dSYM\n",
+            "UUID: \(armUUID) (arm64) /tmp/dSYM\n",
+            """
+            UUID: \(watchUUID.lowercased()) (arm64_32) /tmp/dSYM
+            UUID: \(armUUID.lowercased()) (arm64) /tmp/dSYM
+            UUID: CCCCCCCC-1111-2222-3333-444444444444 (x86_64) /tmp/dSYM
+            """,
+            "warning: UUID unavailable\n" + validSymbols,
+            "UUID: \(armUUID) (arm64) /tmp/one\n" +
+                "UUID: \(watchUUID) (arm64) /tmp/two\n"
+        ]
+        for (index, inventory) in invalidInventories.enumerated() {
+            try Data(inventory.utf8).write(to: symbols)
+            result = try runArtifactValidationHelper(
+                command: command,
+                arguments: [binary.path, symbols.path]
+            )
+            XCTAssertNotEqual(result.status, 0, "case \(index): \(result.output)")
+        }
+    }
+
+    func testProvisioningProfileValidityRejectsFutureExpiredAndMalformedWindows() throws {
+        let command = #"source "$1"; validate_profile_validity_values "$2" "$3" "$4" profile"#
+        let creation = "2026-01-01T00:00:00Z"
+        let expiration = "2026-01-03T00:00:00Z"
+
+        var result = try runArtifactValidationHelper(
+            command: command,
+            arguments: [creation, expiration, "1767312000"]
+        )
+        XCTAssertEqual(result.status, 0, result.output)
+
+        let invalidWindows = [
+            (creation, expiration, "1767139200"),
+            (creation, expiration, "1767398400"),
+            (expiration, creation, "1767312000"),
+            ("2026-01-01T00:00:00+00:00", expiration, "1767312000"),
+            ("2026-02-31T00:00:00Z", expiration, "1767312000"),
+            (creation, "not-a-date", "1767312000")
+        ]
+        for (start, end, now) in invalidWindows {
+            result = try runArtifactValidationHelper(
+                command: command,
+                arguments: [start, end, now]
+            )
+            XCTAssertNotEqual(result.status, 0, result.output)
+        }
+    }
+
+    func testProvisioningProfileValidityRequiresTypedDates() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let profile = directory.appendingPathComponent("profile.plist")
+        let command = #"source "$1"; validate_provisioning_profile_validity_window "$2" profile 1767312000"#
+        let valid = try PropertyListSerialization.data(
+            fromPropertyList: [
+                "CreationDate": Date(timeIntervalSince1970: 1_767_225_600),
+                "ExpirationDate": Date(timeIntervalSince1970: 1_767_398_400)
+            ],
+            format: .xml,
+            options: 0
+        )
+        try valid.write(to: profile)
+
+        var result = try runArtifactValidationHelper(
+            command: command,
+            arguments: [profile.path]
+        )
+        XCTAssertEqual(result.status, 0, result.output)
+
+        let invalid = try PropertyListSerialization.data(
+            fromPropertyList: [
+                "CreationDate": "2026-01-01T00:00:00Z",
+                "ExpirationDate": Date(timeIntervalSince1970: 1_767_398_400)
+            ],
+            format: .xml,
+            options: 0
+        )
+        try invalid.write(to: profile)
+        result = try runArtifactValidationHelper(
+            command: command,
+            arguments: [profile.path]
+        )
+        XCTAssertNotEqual(result.status, 0, result.output)
+    }
+
+    func testReleasePublicationRequiresProfileValidityHeadroom() throws {
+        let command = #"source "$1"; validate_release_publication_validity_headroom "$2" "$3" "$4""#
+
+        var result = try runReleaseOutputHelper(
+            command: command,
+            arguments: ["401", "300", "100"]
+        )
+        XCTAssertEqual(result.status, 0, result.output)
+
+        for arguments in [
+            ["400", "300", "100"],
+            ["399", "300", "100"],
+            ["100", "300", "101"],
+            ["not-an-epoch", "300", "100"],
+            ["401", "0", "100"],
+            ["401", "300", "invalid"]
+        ] {
+            result = try runReleaseOutputHelper(
+                command: command,
+                arguments: arguments
+            )
+            XCTAssertNotEqual(result.status, 0, result.output)
+        }
+    }
+
+    func testProfileFileGuardRejectsLinksAndDetectsMutation() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let profile = directory.appendingPathComponent("profile.plist")
+        let symlink = directory.appendingPathComponent("profile-link.plist")
+        let hardlink = directory.appendingPathComponent("profile-hardlink.plist")
+        try Data("profile".utf8).write(to: profile)
+        try FileManager.default.createSymbolicLink(
+            at: symlink,
+            withDestinationURL: profile
+        )
+        let validate = #"source "$1"; validate_unlinked_regular_file_artifact "$2" profile"#
+
+        var result = try runArtifactValidationHelper(
+            command: validate,
+            arguments: [profile.path]
+        )
+        XCTAssertEqual(result.status, 0, result.output)
+
+        result = try runArtifactValidationHelper(
+            command: validate,
+            arguments: [symlink.path]
+        )
+        XCTAssertNotEqual(result.status, 0, result.output)
+
+        try FileManager.default.linkItem(at: profile, to: hardlink)
+        result = try runArtifactValidationHelper(
+            command: validate,
+            arguments: [profile.path]
+        )
+        XCTAssertNotEqual(result.status, 0, result.output)
+        try FileManager.default.removeItem(at: hardlink)
+
+        let mutate = #"source "$1"; validate_unlinked_regular_file_artifact "$2" profile || exit $?; identity="$validated_regular_artifact_identity"; digest="$validated_regular_artifact_hash"; printf 'changed\n' >"$2"; verify_unlinked_regular_file_artifact_unchanged "$2" "$identity" "$digest" profile"#
+        result = try runArtifactValidationHelper(
+            command: mutate,
+            arguments: [profile.path]
+        )
+        XCTAssertNotEqual(result.status, 0, result.output)
+    }
+
+    func testSignedReleaseScriptsPublishOnlyAfterFinalFences() throws {
+        for name in ["package-macos.sh", "export-ios.sh"] {
+            let script = try releaseScript(named: name)
+            let sourcePin = try offset(of: "pin_clean_release_source", in: script)
             let lock = try offset(of: "acquire_release_publication_lock", in: script)
             let stage = try offset(of: "create_release_staging_directory", in: script)
             let publish = try offset(of: "publish_staged_release_directory", in: script)
 
-            XCTAssertLessThan(dirtyRejection, lock, name)
+            XCTAssertLessThan(sourcePin, lock, name)
             XCTAssertLessThan(lock, stage, name)
             XCTAssertLessThan(stage, publish, name)
             XCTAssertTrue(
                 script.contains(
-                    "verify_source_unchanged\npublish_staged_release_directory"
+                    "verify_source_unchanged\n" +
+                        "# Both profiles use one timestamp, after every other " +
+                        "fallible release check.\n" +
+                        "validate_profiles_at_final_publication_fence || exit $?\n" +
+                        "profile_publication_headroom_seconds=300\n" +
+                        "publish_staged_release_directory"
                 ),
+                name
+            )
+            XCTAssertTrue(
+                script.contains(
+                    #""$validated_final_profile_expiration_epoch" \"#
+                ),
+                name
+            )
+            XCTAssertTrue(script.contains("local validation_epoch"), name)
+            XCTAssertEqual(
+                script.components(separatedBy: #""$validation_epoch""#).count - 1,
+                2,
                 name
             )
             XCTAssertTrue(script.contains("output_dir=\"$staging_dir\""), name)
@@ -967,11 +2114,25 @@ final class DistributionScriptTests: XCTestCase {
         let helper = try releaseScript(named: "release-output.sh")
         let publisher = try releaseScript(named: "atomic-release-publish.c")
 
-        XCTAssertTrue(publisher.contains("renamex_np"))
+        XCTAssertTrue(publisher.contains("renameatx_np"))
         XCTAssertTrue(publisher.contains("RENAME_EXCL"))
         XCTAssertTrue(publisher.contains("RENAME_NOFOLLOW_ANY"))
-        XCTAssertTrue(helper.contains("/usr/bin/xcrun --sdk macosx clang"))
+        XCTAssertTrue(publisher.contains("RENAME_RESOLVE_BENEATH"))
+        XCTAssertTrue(publisher.contains("F_DUPFD_CLOEXEC"))
+        XCTAssertTrue(publisher.contains("duplicate_directory_fd"))
+        XCTAssertFalse(publisher.contains("open("))
+        XCTAssertTrue(publisher.contains("fstatat"))
+        XCTAssertTrue(
+            helper.contains("/usr/bin/xcrun --no-cache --sdk macosx clang")
+        )
         XCTAssertTrue(helper.contains("verify_atomic_release_publisher"))
+        XCTAssertTrue(
+            helper.contains(
+                "validate_release_publication_validity_headroom"
+            )
+        )
+        XCTAssertTrue(helper.contains("\"$expected_staging_parent_identity\""))
+        XCTAssertTrue(helper.contains("\"$expected_staged_identity\""))
         XCTAssertFalse(helper.contains("/bin/mv -n"))
         for name in ["package-macos.sh", "export-ios.sh"] {
             let script = try releaseScript(named: name)
@@ -1103,7 +2264,7 @@ final class DistributionScriptTests: XCTestCase {
         let directory = try releaseTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let output = directory.appendingPathComponent("result")
-        let command = #"source "$1"; validate_release_output_request "$2" "$3" || exit $?; parent="$validated_release_output_parent"; parent_id="$validated_release_output_parent_identity"; name="$validated_release_output_name"; build_atomic_release_publisher "$4" "$parent/atomic-release-publish" || exit $?; publisher="$validated_release_atomic_publisher"; publisher_id="$validated_release_atomic_publisher_identity"; publisher_hash="$validated_release_atomic_publisher_hash"; acquire_release_publication_lock "$parent" "$name" "$parent_id" || exit $?; lock="$validated_release_publication_lock"; lock_id="$validated_release_publication_lock_identity"; create_release_staging_directory "$parent" "$name" "$parent_id" race || exit $?; stage_parent="$validated_release_staging_parent"; stage_parent_id="$validated_release_staging_parent_identity"; stage="$validated_release_staging_directory"; stage_id="$validated_release_staging_directory_identity"; touch "$stage/staged"; mkdir "$parent/$name"; competitor_id="$(release_path_identity "$parent/$name")"; publish=0; publish_staged_release_directory "$stage" "$stage_id" "$parent" "$parent_id" "$name" "$publisher" "$publisher_id" "$publisher_hash" || publish=$?; [[ "$publish" == 73 && -f "$stage/staged" && -d "$parent/$name" && "$(release_path_identity "$parent/$name")" == "$competitor_id" && -z "$(find "$parent/$name" -mindepth 1 -print -quit)" ]] || exit 1; rmdir "$parent/$name"; cleanup_private_release_directory "$stage_parent" "$stage_parent_id" "$parent" '^\.AgentLimits-race-stage\.[A-Za-z0-9]{6}$' || exit $?; release_release_publication_lock "$lock" "$lock_id" "$parent" "$name" || exit $?; rm "$publisher""#
+        let command = #"source "$1"; validate_release_output_request "$2" "$3" || exit $?; parent="$validated_release_output_parent"; parent_id="$validated_release_output_parent_identity"; name="$validated_release_output_name"; build_atomic_release_publisher "$4" "$parent/atomic-release-publish" || exit $?; publisher="$validated_release_atomic_publisher"; publisher_id="$validated_release_atomic_publisher_identity"; publisher_hash="$validated_release_atomic_publisher_hash"; acquire_release_publication_lock "$parent" "$name" "$parent_id" || exit $?; lock="$validated_release_publication_lock"; lock_id="$validated_release_publication_lock_identity"; create_release_staging_directory "$parent" "$name" "$parent_id" race || exit $?; stage_parent="$validated_release_staging_parent"; stage_parent_id="$validated_release_staging_parent_identity"; stage="$validated_release_staging_directory"; stage_id="$validated_release_staging_directory_identity"; touch "$stage/staged"; mkdir "$parent/$name"; competitor_id="$(release_path_identity "$parent/$name")"; publish=0; publish_staged_release_directory "$stage" "$stage_id" "$parent" "$parent_id" "$name" "$publisher" "$publisher_id" "$publisher_hash" "$stage_parent_id" || publish=$?; [[ "$publish" == 73 && -f "$stage/staged" && -d "$parent/$name" && "$(release_path_identity "$parent/$name")" == "$competitor_id" && -z "$(find "$parent/$name" -mindepth 1 -print -quit)" ]] || exit 1; rmdir "$parent/$name"; cleanup_private_release_directory "$stage_parent" "$stage_parent_id" "$parent" '^\.AgentLimits-race-stage\.[A-Za-z0-9]{6}$' || exit $?; release_release_publication_lock "$lock" "$lock_id" "$parent" "$name" || exit $?; rm "$publisher""#
 
         let result = try runReleaseOutputHelper(
             command: command,
@@ -1153,9 +2314,15 @@ final class DistributionScriptTests: XCTestCase {
         let sourceIdentity = try fileIdentity(at: source)
         let destinationIdentity = try fileIdentity(at: destination)
 
-        let result = try runProcess(
+        let result = try runAtomicPublisher(
             executable: publisher.path,
-            arguments: [source.path, destination.path]
+            sourceParent: directory.path,
+            sourceName: source.lastPathComponent,
+            sourceParentIdentity: try fileIdentity(at: directory),
+            sourceIdentity: sourceIdentity,
+            destinationParent: directory.path,
+            destinationName: destination.lastPathComponent,
+            destinationParentIdentity: try fileIdentity(at: directory)
         )
 
         XCTAssertEqual(result.status, 73, result.output)
@@ -1172,11 +2339,74 @@ final class DistributionScriptTests: XCTestCase {
         )
     }
 
+    func testAtomicPublisherRejectsReplacedSourceParent() throws {
+        let directory = try releaseTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let sourceParent = directory.appendingPathComponent("source-parent")
+        let originalParent = directory.appendingPathComponent("original-parent")
+        let destinationParent = directory.appendingPathComponent("destination-parent")
+        let source = sourceParent.appendingPathComponent("result")
+        let publisher = directory.appendingPathComponent("atomic-release-publish")
+        try FileManager.default.createDirectory(
+            at: source,
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createDirectory(
+            at: destinationParent,
+            withIntermediateDirectories: false
+        )
+        try Data("trusted".utf8).write(
+            to: source.appendingPathComponent("payload")
+        )
+        let build = try runReleaseOutputHelper(
+            command: #"source "$1"; build_atomic_release_publisher "$2" "$3""#,
+            arguments: [
+                repositoryRoot.appendingPathComponent(
+                    "Scripts/atomic-release-publish.c"
+                ).path,
+                publisher.path
+            ]
+        )
+        XCTAssertEqual(build.status, 0, build.output)
+        let sourceParentIdentity = try fileIdentity(at: sourceParent)
+        let sourceIdentity = try fileIdentity(at: source)
+        let destinationParentIdentity = try fileIdentity(at: destinationParent)
+        try FileManager.default.moveItem(at: sourceParent, to: originalParent)
+        try FileManager.default.createDirectory(
+            at: sourceParent.appendingPathComponent("result"),
+            withIntermediateDirectories: true
+        )
+
+        let result = try runAtomicPublisher(
+            executable: publisher.path,
+            sourceParent: sourceParent.path,
+            sourceName: "result",
+            sourceParentIdentity: sourceParentIdentity,
+            sourceIdentity: sourceIdentity,
+            destinationParent: destinationParent.path,
+            destinationName: "result",
+            destinationParentIdentity: destinationParentIdentity
+        )
+
+        XCTAssertEqual(result.status, 73, result.output)
+        XCTAssertTrue(
+            FileManager.default.fileExists(
+                atPath: originalParent
+                    .appendingPathComponent("result/payload").path
+            )
+        )
+        XCTAssertFalse(
+            FileManager.default.fileExists(
+                atPath: destinationParent.appendingPathComponent("result").path
+            )
+        )
+    }
+
     func testReleasePublicationAtomicallyPreservesStagedIdentity() throws {
         let directory = try releaseTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let output = directory.appendingPathComponent("result")
-        let command = #"source "$1"; validate_release_output_request "$2" "$3" || exit $?; parent="$validated_release_output_parent"; parent_id="$validated_release_output_parent_identity"; name="$validated_release_output_name"; build_atomic_release_publisher "$4" "$parent/atomic-release-publish" || exit $?; publisher="$validated_release_atomic_publisher"; publisher_id="$validated_release_atomic_publisher_identity"; publisher_hash="$validated_release_atomic_publisher_hash"; acquire_release_publication_lock "$parent" "$name" "$parent_id" || exit $?; lock="$validated_release_publication_lock"; lock_id="$validated_release_publication_lock_identity"; create_release_staging_directory "$parent" "$name" "$parent_id" atomic || exit $?; stage_parent="$validated_release_staging_parent"; stage="$validated_release_staging_directory"; stage_id="$validated_release_staging_directory_identity"; touch "$stage/payload"; publish_staged_release_directory "$stage" "$stage_id" "$parent" "$parent_id" "$name" "$publisher" "$publisher_id" "$publisher_hash" || exit $?; [[ ! -e "$stage" && -f "$parent/$name/payload" && "$(release_path_identity "$parent/$name")" == "$stage_id" ]] || exit 1; rmdir "$stage_parent"; release_release_publication_lock "$lock" "$lock_id" "$parent" "$name" || exit $?; rm "$publisher""#
+        let command = #"source "$1"; validate_release_output_request "$2" "$3" || exit $?; parent="$validated_release_output_parent"; parent_id="$validated_release_output_parent_identity"; name="$validated_release_output_name"; build_atomic_release_publisher "$4" "$parent/atomic-release-publish" || exit $?; publisher="$validated_release_atomic_publisher"; publisher_id="$validated_release_atomic_publisher_identity"; publisher_hash="$validated_release_atomic_publisher_hash"; acquire_release_publication_lock "$parent" "$name" "$parent_id" || exit $?; lock="$validated_release_publication_lock"; lock_id="$validated_release_publication_lock_identity"; create_release_staging_directory "$parent" "$name" "$parent_id" atomic || exit $?; stage_parent="$validated_release_staging_parent"; stage_parent_id="$validated_release_staging_parent_identity"; stage="$validated_release_staging_directory"; stage_id="$validated_release_staging_directory_identity"; touch "$stage/payload"; publish_staged_release_directory "$stage" "$stage_id" "$parent" "$parent_id" "$name" "$publisher" "$publisher_id" "$publisher_hash" "$stage_parent_id" || exit $?; [[ ! -e "$stage" && -f "$parent/$name/payload" && "$(release_path_identity "$parent/$name")" == "$stage_id" ]] || exit 1; rmdir "$stage_parent"; release_release_publication_lock "$lock" "$lock_id" "$parent" "$name" || exit $?; rm "$publisher""#
 
         let result = try runReleaseOutputHelper(
             command: command,
@@ -1254,35 +2484,36 @@ final class DistributionScriptTests: XCTestCase {
 
     func testUnsignedBuildUsesCleanSnapshotAndAtomicStaging() throws {
         let script = try releaseScript(named: "build-unsigned-artifacts.sh")
-        let containerValidation = try releaseScript(
-            named: "macos-container-validation.sh"
-        )
 
         XCTAssertTrue(script.contains("PATH=\"/usr/bin:/bin:/usr/sbin:/sbin\""))
-        XCTAssertTrue(script.contains("source \"$script_dir/signing-config.sh\""))
+        XCTAssertTrue(script.contains("HEAD:Scripts/signing-config.sh"))
+        XCTAssertTrue(script.contains("source \"$trusted_signing_config\""))
+        XCTAssertFalse(script.contains("source \"$script_dir/signing-config.sh\""))
         XCTAssertTrue(script.contains("sanitize_release_git_environment"))
+        XCTAssertLessThan(
+            try offset(of: "pin_clean_release_source", in: script),
+            try offset(
+                of: "source \"$script_dir/release-output.sh\"",
+                in: script
+            )
+        )
         XCTAssertTrue(script.contains("unset CDPATH"))
         XCTAssertTrue(script.contains("Refusing to run a release build through a script symlink"))
-        XCTAssertTrue(script.contains("git -C \"$project_root\" archive"))
+        XCTAssertTrue(script.contains("pin_clean_release_source"))
+        XCTAssertTrue(script.contains("create_immutable_release_source_snapshot"))
         XCTAssertTrue(script.contains("$build_root/AgentLimits.xcodeproj"))
         XCTAssertTrue(
             script.contains("prepare_xcode_signing_environment \"$snapshot_config\"")
         )
         XCTAssertTrue(script.contains("verify_source_unchanged"))
         XCTAssertTrue(script.contains("-derivedDataPath \"$derived_data\""))
-        XCTAssertTrue(script.contains("output_parent_owner"))
-        XCTAssertTrue(script.contains("output_parent_mode"))
-        XCTAssertTrue(script.contains("output_parent_mutating_acl_entries"))
-        XCTAssertTrue(
-            script.contains(
-                "mktemp -d \"$output_parent/.AgentLimits-unsigned-stage.XXXXXX\""
-            )
-        )
-        XCTAssertTrue(script.contains("publication_lock"))
-        XCTAssertTrue(script.contains("publish_staged_directory"))
-        XCTAssertTrue(
-            containerValidation.contains("Output path appeared while building")
-        )
+        XCTAssertTrue(script.contains("validate_release_output_request"))
+        XCTAssertTrue(script.contains("acquire_release_publication_lock"))
+        XCTAssertTrue(script.contains("create_release_staging_directory"))
+        XCTAssertTrue(script.contains("create_private_release_work_directory"))
+        XCTAssertTrue(script.contains("build_atomic_release_publisher"))
+        XCTAssertTrue(script.contains("publish_staged_release_directory"))
+        XCTAssertFalse(script.contains("/bin/mv -n"))
     }
 
     func testUnsignedBuildValidatesEveryBundleIdentityAndVersion() throws {
@@ -1343,19 +2574,133 @@ final class DistributionScriptTests: XCTestCase {
         }
     }
 
+    func testReleaseToolEnvironmentDropsLoaderPerlGrepAndTarOverrides() throws {
+        let hostileEnvironment = [
+            "CCC_ADD_ARGS": "-fplugin=/private/tmp/hostile.dylib",
+            "CCC_FUTURE_OVERRIDE": "hostile",
+            "DYLD_INSERT_LIBRARIES": "/private/tmp/hostile.dylib",
+            "DYLD_LIBRARY_PATH": "/private/tmp/hostile-library",
+            "DYLD_FUTURE_OVERRIDE": "hostile",
+            "BASH_ENV": "/dev/null",
+            "ENV": "/dev/null",
+            "GREP_OPTIONS": "--invert-match",
+            "PERL5OPT": "-Mhostile",
+            "PERL5LIB": "/private/tmp/hostile-perl5",
+            "PERLLIB": "/private/tmp/hostile-perl",
+            "TAR_READER_OPTIONS": "mtree:checkfs",
+            "TAR_WRITER_OPTIONS": "zip:compression=store",
+            "COPYFILE_DISABLE": "1"
+        ]
+        let command = #"source "$1"; sanitize_release_tool_environment; /usr/bin/env"#
+
+        let result = try runSigningConfigHelper(
+            command: command,
+            environment: hostileEnvironment
+        )
+
+        XCTAssertEqual(result.status, 0, result.output)
+        let sanitized = environmentDictionary(from: result.output)
+        for variable in hostileEnvironment.keys {
+            XCTAssertNil(sanitized[variable], variable + ": " + result.output)
+        }
+    }
+
     func testHostileXcodeEnvironmentIsReplaced() throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let config = directory.appendingPathComponent("sanitized.xcconfig")
         try Data("DEVELOPMENT_TEAM = ABCDE12345\n".utf8).write(to: config)
-        let command = #"source "$1"; export XCODE_XCCONFIG_FILE=/private/tmp/hostile.xcconfig; export TOOLCHAINS=hostile; export XCRUN_TOOLCHAIN_NAME=hostile; export SDKROOT=/private/tmp; export CPATH=/private/tmp/include; export LIBRARY_PATH=/private/tmp/lib; prepare_xcode_signing_environment "$2"; printf '%s\n%s\n%s\n%s\n%s\n%s\n' "$XCODE_XCCONFIG_FILE" "${TOOLCHAINS-unset}" "${XCRUN_TOOLCHAIN_NAME-unset}" "${SDKROOT-unset}" "${CPATH-unset}" "${LIBRARY_PATH-unset}""#
+        let hostileEnvironment = [
+            "XCODE_XCCONFIG_FILE": "/private/tmp/hostile.xcconfig",
+            "TOOLCHAINS": "hostile",
+            "XCRUN_TOOLCHAIN_NAME": "hostile",
+            "SDKROOT": "/private/tmp/hostile-sdk",
+            "CCC_ADD_ARGS": "-fplugin=/private/tmp/hostile.dylib",
+            "CCC_OVERRIDE_OPTIONS": "^--driver-mode=g++",
+            "CCC_PRINT_OPTIONS": "1",
+            "CCC_PRINT_OPTIONS_FILE": "/private/tmp/hostile-options",
+            "ADDITIONAL_SWIFT_DRIVER_FLAGS": "-load-plugin-library /private/tmp/hostile.dylib",
+            "OTHER_CFLAGS": "-fplugin=/private/tmp/hostile.dylib",
+            "OTHER_CPLUSPLUSFLAGS": "-I/private/tmp/hostile-include",
+            "OTHER_LDFLAGS": "-L/private/tmp/hostile-library",
+            "OTHER_SWIFT_FLAGS": "-load-plugin-library /private/tmp/hostile.dylib",
+            "CLANG_FUTURE_OVERRIDE": "/private/tmp/hostile-clang",
+            "RC_FUTURE_OVERRIDE": "/private/tmp/hostile-rc",
+            "GCC_FUTURE_OVERRIDE": "/private/tmp/hostile-gcc",
+            "COMPILER_PATH": "/private/tmp/hostile-bin",
+            "GCC_EXEC_PREFIX": "/private/tmp/hostile-prefix",
+            "CPATH": "/private/tmp/hostile-include",
+            "C_INCLUDE_PATH": "/private/tmp/hostile-c",
+            "CPLUS_INCLUDE_PATH": "/private/tmp/hostile-cxx",
+            "OBJC_INCLUDE_PATH": "/private/tmp/hostile-objc",
+            "OBJCPLUS_INCLUDE_PATH": "/private/tmp/hostile-objcxx",
+            "LIBRARY_PATH": "/private/tmp/hostile-library",
+            "FRAMEWORK_SEARCH_PATHS": "/private/tmp/hostile-frameworks",
+            "HEADER_SEARCH_PATHS": "/private/tmp/hostile-headers",
+            "LIBRARY_SEARCH_PATHS": "/private/tmp/hostile-library-search",
+            "SWIFT_DRIVER_SWIFT_FRONTEND_EXEC": "/private/tmp/hostile-frontend",
+            "SWIFT_DRIVER_SWIFTSCAN_LIB": "/private/tmp/hostile-swiftscan.dylib",
+            "SWIFT_DRIVER_TOOLCHAIN_CASPLUGIN_LIB": "/private/tmp/hostile-cas.dylib",
+            "SWIFT_PLUGIN_SEARCH_PATHS": "/private/tmp/hostile-plugins",
+            "LD_LIBRARY_PATH": "/private/tmp/hostile-ld",
+            "DYLD_INSERT_LIBRARIES": "/private/tmp/hostile.dylib",
+            "DYLD_FRAMEWORK_PATH": "/private/tmp/hostile-frameworks",
+            "GREP_OPTIONS": "--invert-match",
+            "PERL5OPT": "-Mhostile",
+            "PERL5LIB": "/private/tmp/hostile-perl5",
+            "PERLLIB": "/private/tmp/hostile-perl",
+            "TAR_READER_OPTIONS": "mtree:checkfs",
+            "TAR_WRITER_OPTIONS": "zip:compression=store",
+            "ZERO_AR_DATE": "1",
+            "xcrun_verbose": "1",
+            "xcrun_log": "/private/tmp/hostile-xcrun.log"
+        ]
+        let command = #"source "$1"; prepare_xcode_signing_environment "$2"; /usr/bin/env"#
 
-        let result = try runSigningConfigValidator(config: config, command: command)
+        let result = try runSigningConfigValidator(
+            config: config,
+            command: command,
+            environment: hostileEnvironment
+        )
+
+        XCTAssertEqual(result.status, 0, result.output)
+        let sanitized = environmentDictionary(from: result.output)
+        XCTAssertEqual(sanitized["XCODE_XCCONFIG_FILE"], config.path)
+        for variable in hostileEnvironment.keys
+            where variable != "XCODE_XCCONFIG_FILE" {
+            XCTAssertNil(sanitized[variable], variable + ": " + result.output)
+        }
+    }
+
+    func testAppleToolchainProbeUsesEnvironmentAllowlist() throws {
+        let hostileEnvironment = [
+            "CCC_ADD_ARGS": "-fplugin=/private/tmp/hostile.dylib",
+            "CCC_OVERRIDE_OPTIONS": "^--driver-mode=g++",
+            "ADDITIONAL_SWIFT_DRIVER_FLAGS": "-load-plugin-library hostile",
+            "DYLD_INSERT_LIBRARIES": "/private/tmp/hostile.dylib",
+            "GREP_OPTIONS": "--invert-match",
+            "PERL5OPT": "-Mhostile",
+            "TAR_READER_OPTIONS": "mtree:checkfs",
+            "XCODE_XCCONFIG_FILE": "/private/tmp/hostile.xcconfig",
+            "xcrun_verbose": "1",
+            "xcrun_log": "/private/tmp/hostile-xcrun.log"
+        ]
+        let command = #"source "$1"; apple_run_selected_tool /private/tmp/FixtureXcode.app/Contents/Developer /usr/bin/env"#
+
+        let result = try runAppleToolchainHelper(
+            command: command,
+            environment: hostileEnvironment
+        )
 
         XCTAssertEqual(result.status, 0, result.output)
         XCTAssertEqual(
-            result.output.split(separator: "\n").map(String.init),
-            [config.path, "unset", "unset", "unset", "unset", "unset"]
+            environmentDictionary(from: result.output),
+            [
+                "DEVELOPER_DIR": "/private/tmp/FixtureXcode.app/Contents/Developer",
+                "LC_ALL": "C",
+                "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+                "TMPDIR": "/private/tmp/"
+            ]
         )
     }
 
@@ -1418,10 +2763,60 @@ final class DistributionScriptTests: XCTestCase {
             of: #"validate_accepted_notary_log "$log" "$submission_id""#,
             in: script
         )
-        let staple = try offset(of: #"xcrun stapler staple "$app""#, in: script)
+        let staple = try offset(
+            of: #"/usr/bin/xcrun --no-cache stapler staple "$app""#,
+            in: script
+        )
 
         XCTAssertLessThan(accepted, validate)
         XCTAssertLessThan(validate, staple)
+    }
+
+    func testMacNotaryAndStaplerUseAbsoluteUncachedXcrun() throws {
+        let script = try packageScript()
+
+        XCTAssertEqual(
+            occurrenceCount(
+                of: "/usr/bin/xcrun --no-cache notarytool submit",
+                in: script
+            ),
+            1
+        )
+        XCTAssertEqual(
+            occurrenceCount(
+                of: "/usr/bin/xcrun --no-cache notarytool log",
+                in: script
+            ),
+            1
+        )
+        XCTAssertEqual(
+            occurrenceCount(
+                of: "/usr/bin/xcrun --no-cache stapler staple",
+                in: script
+            ),
+            3
+        )
+        XCTAssertEqual(
+            occurrenceCount(
+                of: "/usr/bin/xcrun --no-cache stapler validate",
+                in: script
+            ),
+            4
+        )
+        let relevantCalls = script.split(separator: "\n").map {
+            $0.trimmingCharacters(in: .whitespaces)
+        }.filter {
+            $0.contains("notarytool") || $0.contains("stapler")
+        }.filter {
+            !$0.hasPrefix("#") && !$0.contains("Notarization and stapling")
+        }
+        XCTAssertEqual(relevantCalls.count, 9, relevantCalls.joined(separator: "\n"))
+        XCTAssertTrue(
+            relevantCalls.allSatisfy {
+                $0.hasPrefix("/usr/bin/xcrun --no-cache ")
+            },
+            relevantCalls.joined(separator: "\n")
+        )
     }
 
     func testMacPackageRequiresUsableDeveloperIDApplicationIdentity() throws {
@@ -1456,7 +2851,10 @@ final class DistributionScriptTests: XCTestCase {
             after: sign
         )
         let notarize = try offset(of: "submit_notary \"$dmg\" dmg", in: script)
-        let staple = try offset(of: "xcrun stapler staple \"$dmg\"", in: script)
+        let staple = try offset(
+            of: "/usr/bin/xcrun --no-cache stapler staple \"$dmg\"",
+            in: script
+        )
         let assess = try offset(
             of: "spctl --assess --type open",
             in: script,
@@ -1998,59 +3396,6 @@ final class DistributionScriptTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: manifest.path))
     }
 
-    func testStagedPublicationNeverNestsIntoExistingDestination() throws {
-        let directory = try temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let stageParent = directory.appendingPathComponent("stage")
-        let outputParent = directory.appendingPathComponent("output")
-        let staged = stageParent.appendingPathComponent("result")
-        let existing = outputParent.appendingPathComponent("result")
-        try FileManager.default.createDirectory(
-            at: staged,
-            withIntermediateDirectories: true
-        )
-        try FileManager.default.createDirectory(
-            at: existing,
-            withIntermediateDirectories: true
-        )
-        try Data("staged".utf8).write(to: staged.appendingPathComponent("file"))
-        try Data("existing".utf8).write(
-            to: existing.appendingPathComponent("competitor")
-        )
-        let command = #"source "$1"; publish_staged_directory "$2" "$3" result"#
-
-        var result = try runMacContainerHelper(
-            command: command,
-            arguments: [staged.path, outputParent.path]
-        )
-        XCTAssertEqual(result.status, 73, result.output)
-        XCTAssertTrue(FileManager.default.fileExists(atPath: staged.path))
-        XCTAssertTrue(
-            FileManager.default.fileExists(
-                atPath: existing.appendingPathComponent("competitor").path
-            )
-        )
-        XCTAssertFalse(
-            FileManager.default.fileExists(
-                atPath: existing.appendingPathComponent("result").path
-            )
-        )
-
-        try FileManager.default.removeItem(at: existing)
-        result = try runMacContainerHelper(
-            command: command,
-            arguments: [staged.path, outputParent.path]
-        )
-        XCTAssertEqual(result.status, 0, result.output)
-        XCTAssertFalse(FileManager.default.fileExists(atPath: staged.path))
-        XCTAssertTrue(
-            FileManager.default.fileExists(
-                atPath: outputParent
-                    .appendingPathComponent("result/file").path
-            )
-        )
-    }
-
     func testExpandedProductPackageLayoutAndMetadataFailClosed() throws {
         let root = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -2158,9 +3503,15 @@ final class DistributionScriptTests: XCTestCase {
             in: script
         )
         let zipExtract = try offset(of: #"ditto -x -k "$zip""#, in: script)
-        let pkgStaple = try offset(of: #"xcrun stapler staple "$pkg""#, in: script)
+        let pkgStaple = try offset(
+            of: #"/usr/bin/xcrun --no-cache stapler staple "$pkg""#,
+            in: script
+        )
         let pkgExpand = try offset(of: #"pkgutil --expand-full "$pkg""#, in: script)
-        let dmgStaple = try offset(of: #"xcrun stapler staple "$dmg""#, in: script)
+        let dmgStaple = try offset(
+            of: #"/usr/bin/xcrun --no-cache stapler staple "$dmg""#,
+            in: script
+        )
         let postStapleVerify = try offset(
             of: #"hdiutil verify "$dmg""#,
             in: script,
@@ -2191,6 +3542,44 @@ final class DistributionScriptTests: XCTestCase {
             outputHelper.contains(
                 "mktemp -d \"/private/tmp/AgentLimits-macos-package.XXXXXX\""
             ) || outputHelper.contains("/private/tmp/$work_label.XXXXXX")
+        )
+    }
+
+    func testSignedBuildMetadataIsIncludedInChecksumsBeforePublication() throws {
+        let ios = try releaseScript(named: "export-ios.sh")
+        let iosMetadata = try offset(
+            of: #"cat >"$output_dir/BUILD-METADATA.txt""#,
+            in: ios
+        )
+        let iosChecksums = try offset(of: "> SHA256SUMS", in: ios)
+        let iosPublish = try offset(
+            of: "publish_staged_release_directory",
+            in: ios
+        )
+        XCTAssertLessThan(iosMetadata, iosChecksums)
+        XCTAssertLessThan(iosChecksums, iosPublish)
+        XCTAssertEqual(occurrenceCount(of: "> SHA256SUMS", in: ios), 1)
+        XCTAssertTrue(
+            ios.contains(
+                #"shasum -a 256 "$ipa_name" BUILD-METADATA.txt > SHA256SUMS"#
+            )
+        )
+
+        let mac = try releaseScript(named: "package-macos.sh")
+        let macMetadata = try offset(
+            of: #"cat >"$output_dir/BUILD-METADATA.txt""#,
+            in: mac
+        )
+        let macChecksums = try offset(of: "> SHA256SUMS", in: mac)
+        let macPublish = try offset(
+            of: "publish_staged_release_directory",
+            in: mac
+        )
+        XCTAssertLessThan(macMetadata, macChecksums)
+        XCTAssertLessThan(macChecksums, macPublish)
+        XCTAssertEqual(occurrenceCount(of: "> SHA256SUMS", in: mac), 1)
+        XCTAssertTrue(
+            mac.contains("BUILD-METADATA.txt \\\n        > SHA256SUMS")
         )
     }
 
@@ -2328,7 +3717,7 @@ final class DistributionScriptTests: XCTestCase {
         let dmgCreate = try offset(of: "hdiutil create", in: script)
         let dmgAttach = try offset(of: "hdiutil attach", in: script)
         let checksums = try offset(of: "> SHA256SUMS", in: script)
-        let publish = try offset(of: "publish_staged_directory", in: script)
+        let publish = try offset(of: "publish_staged_release_directory", in: script)
 
         XCTAssertLessThan(zipCreate, zipExtract)
         XCTAssertLessThan(packageCreate, packageExpand)
@@ -2581,6 +3970,38 @@ final class DistributionScriptTests: XCTestCase {
         return directory
     }
 
+    private func createAppleToolchainFixture(
+        at root: URL,
+        dtxcode: String
+    ) throws -> URL {
+        let contents = root.appendingPathComponent(
+            "FixtureXcode.app/Contents",
+            isDirectory: true
+        )
+        let developerDirectory = contents.appendingPathComponent(
+            "Developer",
+            isDirectory: true
+        )
+        let binaryDirectory = developerDirectory.appendingPathComponent(
+            "usr/bin",
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(
+            at: binaryDirectory,
+            withIntermediateDirectories: true
+        )
+        let xcodebuild = binaryDirectory.appendingPathComponent("xcodebuild")
+        try Data("#!/bin/sh\nexit 99\n".utf8).write(to: xcodebuild)
+        try setPermissions(0o700, for: xcodebuild)
+        let info: [String: Any] = ["DTXcode": dtxcode]
+        try PropertyListSerialization.data(
+            fromPropertyList: info,
+            format: .xml,
+            options: 0
+        ).write(to: contents.appendingPathComponent("Info.plist"))
+        return developerDirectory
+    }
+
     private func releaseTemporaryDirectory() throws -> URL {
         let directory = URL(fileURLWithPath: "/private/tmp", isDirectory: true)
             .appendingPathComponent("AgentLimitsReleaseOutputTests-\(UUID().uuidString)")
@@ -2709,9 +4130,38 @@ final class DistributionScriptTests: XCTestCase {
         environment: [String: String]
     ) throws -> (status: Int32, output: String) {
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/bash")
-        process.arguments = [relativePath] + arguments
+        process.executableURL = repositoryRoot.appendingPathComponent(relativePath)
+        process.arguments = arguments
         process.currentDirectoryURL = repositoryRoot
+        process.environment = ProcessInfo.processInfo.environment.merging(
+            environment,
+            uniquingKeysWith: { _, override in override }
+        )
+        let output = Pipe()
+        process.standardOutput = output
+        process.standardError = output
+        try process.run()
+        process.waitUntilExit()
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        return (
+            process.terminationStatus,
+            String(decoding: data, as: UTF8.self)
+        )
+    }
+
+    private func runAppleToolchainHelper(
+        command: String,
+        arguments: [String] = [],
+        environment: [String: String] = [:]
+    ) throws -> (status: Int32, output: String) {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/bash")
+        process.arguments = [
+            "-c",
+            command,
+            "apple-toolchain-test",
+            repositoryRoot.appendingPathComponent("Scripts/apple-toolchain.sh").path
+        ] + arguments
         process.environment = ProcessInfo.processInfo.environment.merging(
             environment,
             uniquingKeysWith: { _, override in override }
@@ -2752,6 +4202,79 @@ final class DistributionScriptTests: XCTestCase {
         return (
             process.terminationStatus,
             String(decoding: data, as: UTF8.self)
+        )
+    }
+
+    private func runAppleToolchainFixture(
+        developerDirectory: URL,
+        xcodeVersion: String,
+        xcodeBuild: String,
+        sdkVersion: String,
+        sdkBuild: String,
+        platforms: [String]
+    ) throws -> (status: Int32, output: String) {
+        let command = #"""
+        source "$1"
+        fixture_developer_dir="$2"
+        fixture_xcode_version="$3"
+        fixture_xcode_build="$4"
+        fixture_sdk_version="$5"
+        fixture_sdk_build="$6"
+        shift 6
+        apple_validate_xcode_bundle_trust() {
+            return 0
+        }
+        apple_run_selected_tool() {
+            local developer_dir="$1"
+            shift
+            if [[ "$#" == 2 \
+                && "$1" == "$developer_dir/usr/bin/xcodebuild" \
+                && "$2" == "-version" ]]; then
+                printf 'Xcode %s\nBuild version %s\n' \
+                    "$fixture_xcode_version" "$fixture_xcode_build"
+                return 0
+            fi
+            if [[ "$#" == 5 \
+                && "$1" == /usr/bin/xcrun \
+                && "$2" == --no-cache \
+                && "$3" == --sdk ]]; then
+                case "$4" in
+                    macosx|iphoneos|watchos) ;;
+                    *) return 97 ;;
+                esac
+                case "$5" in
+                    --show-sdk-version)
+                        printf '%s\n' "$fixture_sdk_version"
+                        return 0
+                        ;;
+                    --show-sdk-build-version)
+                        printf '%s\n' "$fixture_sdk_build"
+                        return 0
+                        ;;
+                esac
+            fi
+            printf 'Unexpected selected-tool arguments: %s\n' "$*" >&2
+            return 97
+        }
+        validate_apple_distribution_toolchain \
+            "$fixture_developer_dir" "$@" || exit $?
+        printf '%s\n%s\n%s\n%s\n%s\n%s\n' \
+            "$apple_distribution_minimum_xcode_version" \
+            "$apple_distribution_minimum_sdk_version" \
+            "$validated_apple_xcode_version" \
+            "$validated_apple_macosx_sdk_version" \
+            "$validated_apple_iphoneos_sdk_version" \
+            "$validated_apple_watchos_sdk_version"
+        """#
+        return try runAppleToolchainHelper(
+            command: command,
+            arguments: [
+                developerDirectory.path,
+                xcodeVersion,
+                xcodeBuild,
+                sdkVersion,
+                sdkBuild
+            ] + platforms
         )
     }
 
@@ -2867,6 +4390,32 @@ final class DistributionScriptTests: XCTestCase {
         )
     }
 
+    private func runArtifactValidationHelper(
+        command: String,
+        arguments: [String]
+    ) throws -> (status: Int32, output: String) {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/bash")
+        process.arguments = [
+            "-c",
+            command,
+            "artifact-validation-test",
+            repositoryRoot.appendingPathComponent(
+                "Scripts/release-artifact-validation.sh"
+            ).path
+        ] + arguments
+        let output = Pipe()
+        process.standardOutput = output
+        process.standardError = output
+        try process.run()
+        process.waitUntilExit()
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        return (
+            process.terminationStatus,
+            String(decoding: data, as: UTF8.self)
+        )
+    }
+
     private func runMacContainerHelper(
         command: String,
         arguments: [String]
@@ -2951,6 +4500,39 @@ final class DistributionScriptTests: XCTestCase {
         )
     }
 
+    private func runAtomicPublisher(
+        executable: String,
+        sourceParent: String,
+        sourceName: String,
+        sourceParentIdentity: String,
+        sourceIdentity: String,
+        destinationParent: String,
+        destinationName: String,
+        destinationParentIdentity: String
+    ) throws -> (status: Int32, output: String) {
+        let command = #"""
+        exec 8< "$1" || exit 73
+        exec 9< "$5" || exit 73
+        exec "$8" 8 "$2" "$3" "$4" 9 "$6" "$7"
+        """#
+        return try runProcess(
+            executable: "/bin/bash",
+            arguments: [
+                "--noprofile", "--norc", "-c", command,
+                "atomic-publisher-test",
+                sourceParent,
+                sourceName,
+                sourceParentIdentity,
+                sourceIdentity,
+                destinationParent,
+                destinationName,
+                destinationParentIdentity,
+                executable
+            ],
+            inheritEnvironment: false
+        )
+    }
+
     private func initializeGitRepository(
         at directory: URL,
         fileName: String
@@ -3002,6 +4584,43 @@ final class DistributionScriptTests: XCTestCase {
         )
         XCTAssertEqual(result.status, 0, result.output)
         return result.output.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func environmentDictionary(from output: String) -> [String: String] {
+        var environment: [String: String] = [:]
+        for line in output.split(separator: "\n", omittingEmptySubsequences: true) {
+            guard let separator = line.firstIndex(of: "=") else { continue }
+            environment[String(line[..<separator])] = String(line[line.index(after: separator)...])
+        }
+        return environment
+    }
+
+    private func occurrenceCount(of needle: String, in text: String) -> Int {
+        text.components(separatedBy: needle).count - 1
+    }
+
+    private func assertOrderedSnippets(
+        _ snippets: [String],
+        in text: String,
+        context: String,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        var searchStart = text.startIndex
+        for snippet in snippets {
+            guard let range = text.range(
+                of: snippet,
+                range: searchStart..<text.endIndex
+            ) else {
+                XCTFail(
+                    "Missing or out-of-order snippet in \(context):\n\(snippet)",
+                    file: file,
+                    line: line
+                )
+                return
+            }
+            searchStart = range.upperBound
+        }
     }
 
     private func offset(
