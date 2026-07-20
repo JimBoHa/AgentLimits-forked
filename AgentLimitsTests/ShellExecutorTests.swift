@@ -196,15 +196,14 @@ final class ShellExecutorTests: XCTestCase {
             )
         }
 
-        let processStarted = await waitForFile(at: pidFile)
-        XCTAssertTrue(processStarted, "Subprocess did not start")
-        guard processStarted else {
+        let processID = await waitForPID(at: pidFile)
+        XCTAssertNotNil(processID, "Subprocess did not publish its PID")
+        guard let processID else {
             task.cancel()
             _ = try? await task.value
             return
         }
 
-        let processID = try readPID(from: pidFile)
         task.cancel()
 
         do {
@@ -240,15 +239,14 @@ final class ShellExecutorTests: XCTestCase {
             )
         }
 
-        let processStarted = await waitForFile(at: pidFile)
-        XCTAssertTrue(processStarted, "Subprocess did not start")
-        guard processStarted else {
+        let processID = await waitForPID(at: pidFile)
+        XCTAssertNotNil(processID, "Subprocess did not publish its PID")
+        guard let processID else {
             task.cancel()
             _ = try? await task.value
             return
         }
 
-        let processID = try readPID(from: pidFile)
         do {
             _ = try await task.value
             XCTFail("Expected output limit failure")
@@ -387,14 +385,15 @@ final class ShellExecutorTests: XCTestCase {
         return try XCTUnwrap(pid_t(contents))
     }
 
-    private func waitForFile(at url: URL) async -> Bool {
+    private func waitForPID(at url: URL) async -> pid_t? {
         for _ in 0..<200 {
-            if FileManager.default.fileExists(atPath: url.path) {
-                return true
+            if let contents = try? String(contentsOf: url, encoding: .utf8),
+               let processID = pid_t(contents.trimmingCharacters(in: .whitespacesAndNewlines)) {
+                return processID
             }
             try? await Task.sleep(nanoseconds: 10_000_000)
         }
-        return false
+        return nil
     }
 
     private func waitUntilProcessIsGone(_ processID: pid_t) async -> Bool {
