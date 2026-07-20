@@ -57,9 +57,34 @@ Scripts/build-unsigned-artifacts.sh /absolute/output/directory
 ```
 
 The output includes unsigned macOS ZIP/DMG/PKG files and unsigned macOS and
-iOS/watchOS archives. These are non-distributable preflight artifacts. Do not
-re-sign or upload them. A final release must be rebuilt by the signed workflows
-below so Xcode records the Team, signing identity, and provisioning metadata.
+iOS/watchOS archives. The builder requires a clean Git tree, builds from a
+snapshot of the recorded commit, replaces inherited Xcode configuration and
+toolchain overrides, and publishes through a temporary sibling directory only
+after validation succeeds. The output parent must already exist, be owned by
+the current user, and have no group/other write mode or ACL that grants mutation
+access. A per-destination lock plus no-clobber rename prevents concurrent
+builders from racing publication. The builder reopens every ZIP, DMG, and PKG
+and compares the contained app or archive against a canonical file-tree
+manifest.
+
+`SHA256SUMS` covers every portable container, build log, metadata file, and the
+two files in `ARCHIVE-MANIFESTS`. Those canonical manifests cover every regular
+file, directory mode, and symlink in the unpacked `.xcarchive` directories. To
+recheck an unpacked archive after copying it, regenerate its tree manifest with
+`create_tree_manifest` from `Scripts/macos-container-validation.sh` and compare
+the result byte-for-byte with the corresponding recorded manifest.
+
+Here, “unsigned” means the first-party products have no Apple Team, certificate
+identity, provisioning profile, installer signature, or DMG signature. Xcode's
+linker still emits ad-hoc signatures for the native arm64 slices of the two
+macOS Mach-O products; the builder requires those to be linker-generated,
+Team-free, and free of sealed distribution resources. It requires the x86_64
+slices to remain fully unsigned. Bundled third-party code may retain upstream
+signatures.
+
+These are non-distributable preflight artifacts. Do not re-sign or upload them.
+A final release must be rebuilt by the signed workflows below so Xcode records
+the Team, signing identity, and provisioning metadata.
 
 ## Signed iOS and watchOS export
 
