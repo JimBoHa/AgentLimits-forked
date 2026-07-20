@@ -106,36 +106,132 @@ apple_run_selected_tool() (
     local developer_dir="$1"
 
     shift
-    unset \
-        XCODE_XCCONFIG_FILE \
-        TOOLCHAINS \
-        XCRUN_TOOLCHAIN_NAME \
-        SDKROOT \
-        CC \
-        CXX \
-        LD \
-        AR \
-        AS \
-        NM \
-        RANLIB \
-        STRIP \
-        COMPILER_PATH \
-        GCC_EXEC_PREFIX \
-        CPATH \
-        C_INCLUDE_PATH \
-        CPLUS_INCLUDE_PATH \
-        OBJC_INCLUDE_PATH \
-        LIBRARY_PATH \
-        LD_LIBRARY_PATH \
-        DYLD_LIBRARY_PATH \
-        DYLD_FRAMEWORK_PATH \
-        SWIFT_EXEC \
-        SWIFT_FRONTEND_EXEC \
-        SWIFT_DRIVER_SWIFT_FRONTEND_EXEC
-    DEVELOPER_DIR="$developer_dir"
-    export DEVELOPER_DIR
-    "$@"
+    # Toolchain discovery needs no caller-controlled build setting, compiler
+    # path, plugin path, loader path, cache control, or user configuration.
+    # Start from an allowlist so new override variables cannot silently bypass
+    # a denylist. --no-cache is applied by each xcrun caller below.
+    unset xcrun_verbose xcrun_log
+    /usr/bin/env -i \
+        DEVELOPER_DIR="$developer_dir" \
+        LC_ALL=C \
+        PATH=/usr/bin:/bin:/usr/sbin:/sbin \
+        TMPDIR=/private/tmp/ \
+        "$@"
 )
+
+apple_validate_xcode_bundle_trust() {
+    local developer_dir="$1"
+    local canonical_developer_dir
+    local xcode_contents
+    local xcode_bundle
+    local canonical_xcode_bundle
+    local trusted_path
+    local path_metadata
+    local path_owner
+    local path_mode
+    local user_id
+    local user_groups
+    local group_id
+    local untrusted_bundle_entry
+    local xcode_requirement
+    local -a find_arguments
+
+    if [[ "$developer_dir" != /* \
+        || -L "$developer_dir" || ! -d "$developer_dir" ]]; then
+        echo "Apple distribution requires one canonical Xcode Developer directory" >&2
+        return 69
+    fi
+    canonical_developer_dir="$(cd "$developer_dir" && pwd -P)" || return 69
+    if [[ "$developer_dir" != "$canonical_developer_dir" ]]; then
+        echo "Apple distribution requires one canonical Xcode Developer directory" >&2
+        return 69
+    fi
+
+    xcode_contents="${canonical_developer_dir%/Developer}"
+    xcode_bundle="${xcode_contents%/Contents}"
+    if [[ "$xcode_contents" == "$canonical_developer_dir" \
+        || "$xcode_bundle" == "$xcode_contents" \
+        || "$xcode_bundle" != *.app \
+        || -L "$xcode_bundle" || ! -d "$xcode_bundle" ]]; then
+        echo "Apple distribution requires an Xcode app bundle Developer directory" >&2
+        return 69
+    fi
+    canonical_xcode_bundle="$(cd "$xcode_bundle" && pwd -P)" || return 69
+    if [[ "$canonical_xcode_bundle" != "$xcode_bundle" ]]; then
+        echo "Apple distribution requires a canonical Xcode app bundle" >&2
+        return 69
+    fi
+
+    for trusted_path in \
+        "$xcode_bundle" \
+        "$xcode_contents" \
+        "$canonical_developer_dir" \
+        "$canonical_developer_dir/usr" \
+        "$canonical_developer_dir/usr/bin" \
+        "$canonical_developer_dir/usr/bin/xcodebuild"; do
+        if [[ -L "$trusted_path" \
+            || ( ! -d "$trusted_path" \
+                && "$trusted_path" != "$canonical_developer_dir/usr/bin/xcodebuild" ) \
+            || ( "$trusted_path" == "$canonical_developer_dir/usr/bin/xcodebuild" \
+                && ! -f "$trusted_path" ) ]]; then
+            echo "Selected Xcode contains an untrusted tool path" >&2
+            return 69
+        fi
+        if ! path_metadata="$(/usr/bin/stat -f '%u %Lp' "$trusted_path" 2>/dev/null)" \
+            || [[ "$path_metadata" == *$'\n'* ]]; then
+            echo "Could not validate selected Xcode ownership" >&2
+            return 69
+        fi
+        path_owner="${path_metadata%% *}"
+        path_mode="${path_metadata#* }"
+        if [[ "$path_owner" != 0 || ! "$path_mode" =~ ^[0-7]{3,4}$ ]] \
+            || (( (8#$path_mode & 022) != 0 )) \
+            || [[ -w "$trusted_path" ]]; then
+            echo "Selected Xcode must be root-owned and non-writable" >&2
+            return 69
+        fi
+    done
+    if ! user_id="$(/usr/bin/id -u 2>/dev/null)" \
+        || ! user_groups="$(/usr/bin/id -G 2>/dev/null)" \
+        || [[ ! "$user_id" =~ ^[1-9][0-9]*$ \
+            || ! "$user_groups" =~ ^[0-9]+([[:space:]][0-9]+)*$ ]]; then
+        echo "Could not validate selected Xcode access controls" >&2
+        return 69
+    fi
+    find_arguments=(
+        -x "$xcode_bundle" '('
+        '!' -uid 0
+        -o -perm -0002
+        -o -acl
+    )
+    for group_id in $user_groups; do
+        find_arguments+=(
+            -o '(' -gid "$group_id" -perm -0020 ')'
+        )
+    done
+    find_arguments+=(')' -print -quit)
+    if ! untrusted_bundle_entry="$(
+            /usr/bin/find "${find_arguments[@]}" 2>&1
+        )"; then
+        echo "Could not inspect selected Xcode access controls" >&2
+        return 69
+    fi
+    if [[ -n "$untrusted_bundle_entry" ]]; then
+        echo "Selected Xcode bundle is writable or not root-owned" >&2
+        return 69
+    fi
+    if [[ ! -x "$canonical_developer_dir/usr/bin/xcodebuild" ]]; then
+        echo "Apple distribution Xcode path is incomplete" >&2
+        return 69
+    fi
+    xcode_requirement='(anchor apple generic and certificate leaf[field.1.2.840.113635.100.6.1.9] exists or anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and certificate leaf[subject.OU] = "59GAB85EFG") and identifier "com.apple.dt.Xcode"'
+    if ! /usr/bin/codesign --verify --deep --strict --verbose=0 \
+        -R="$xcode_requirement" \
+        "$xcode_bundle" >/dev/null 2>&1; then
+        echo "Selected Xcode does not have a valid Apple signature" >&2
+        return 69
+    fi
+}
 
 apple_read_sdk_metadata() {
     local developer_dir="$1"
@@ -145,7 +241,8 @@ apple_read_sdk_metadata() {
 
     if ! sdk_version="$(apple_run_selected_tool \
             "$developer_dir" \
-            /usr/bin/xcrun --sdk "$platform" --show-sdk-version 2>&1)" \
+            /usr/bin/xcrun --no-cache --sdk "$platform" \
+                --show-sdk-version 2>&1)" \
         || [[ "$sdk_version" == *$'\n'* ]]; then
         echo "Could not read selected $platform SDK version" >&2
         return 69
@@ -157,7 +254,7 @@ apple_read_sdk_metadata() {
         || return $?
     if ! sdk_build="$(apple_run_selected_tool \
             "$developer_dir" \
-            /usr/bin/xcrun --sdk "$platform" \
+            /usr/bin/xcrun --no-cache --sdk "$platform" \
                 --show-sdk-build-version 2>&1)" \
         || [[ "$sdk_build" == *$'\n'* ]] \
         || [[ ! "$sdk_build" =~ ^[A-Za-z0-9]+$ ]]; then
@@ -221,16 +318,12 @@ validate_apple_distribution_toolchain() {
     validated_apple_watchos_sdk_name=""
     validated_apple_watchos_sdk_build=""
 
-    if [[ $# -eq 0 || "$developer_dir" != /* \
-        || -L "$developer_dir" || ! -d "$developer_dir" ]]; then
+    if [[ $# -eq 0 ]]; then
         echo "Apple distribution requires one canonical Xcode Developer directory" >&2
         return 69
     fi
     canonical_developer_dir="$(cd "$developer_dir" && pwd -P)" || return 69
-    if [[ ! -x "$canonical_developer_dir/usr/bin/xcodebuild" ]]; then
-        echo "Apple distribution Xcode path is incomplete" >&2
-        return 69
-    fi
+    apple_validate_xcode_bundle_trust "$developer_dir" || return $?
 
     if ! xcode_output="$(apple_run_selected_tool \
             "$canonical_developer_dir" \

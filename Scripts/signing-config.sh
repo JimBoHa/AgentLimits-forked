@@ -3,9 +3,34 @@
 # Shared validation for the gitignored Apple Team configuration.
 # This file is sourced by signed release scripts.
 
+sanitize_release_tool_environment() {
+    local variable
+
+    # System release tools must not inherit Clang-driver or loader injection,
+    # nor option files that can change grep, Perl, or bsdtar behavior before
+    # Xcode starts. Clear the complete dynamic namespaces, not only names known
+    # by today's toolchain.
+    for variable in "${!CCC_@}" "${!DYLD_@}"; do
+        if [[ -n "$variable" ]]; then
+            unset "$variable"
+        fi
+    done
+    unset \
+        BASH_ENV \
+        ENV \
+        GREP_OPTIONS \
+        PERL5OPT \
+        PERL5LIB \
+        PERLLIB \
+        TAR_READER_OPTIONS \
+        TAR_WRITER_OPTIONS \
+        COPYFILE_DISABLE
+}
+
 sanitize_release_git_environment() {
     local variable
 
+    sanitize_release_tool_environment
     # Repository selectors, command-line config injection, and replacement
     # refs must not redirect or reinterpret the source snapshot being signed.
     for variable in "${!GIT_@}"; do
@@ -91,37 +116,98 @@ verify_development_team_config_unchanged() {
     fi
 }
 
-prepare_xcode_signing_environment() {
-    local sanitized_config="$1"
+sanitize_release_xcode_environment() {
+    local variable
 
-    XCODE_XCCONFIG_FILE="$sanitized_config"
-    export XCODE_XCCONFIG_FILE
+    sanitize_release_tool_environment
+    # Release builds accept build settings only from checked-in project files,
+    # explicit xcodebuild arguments, and the validated Team-only xcconfig.
+    # These namespaces are concrete compiler/driver/loader override surfaces;
+    # clearing each whole namespace also covers new variables in those families.
+    for variable in \
+        "${!CCC_@}" \
+        "${!CLANG_@}" \
+        "${!DYLD_@}" \
+        "${!GCC_@}" \
+        "${!LD_@}" \
+        "${!RC_@}" \
+        "${!SWIFT_@}" \
+        "${!XCODE_@}" \
+        "${!XCRUN_@}" \
+        "${!xcrun_@}"; do
+        if [[ -n "$variable" ]]; then
+            unset "$variable"
+        fi
+    done
+
     unset \
-        TOOLCHAINS \
-        XCRUN_TOOLCHAIN_NAME \
+        ARCHS \
+        EXCLUDED_ARCHS \
+        ONLY_ACTIVE_ARCH \
+        VALID_ARCHS \
         SDKROOT \
+        CCC_ADD_ARGS \
+        CCC_OVERRIDE_OPTIONS \
+        CCC_PRINT_OPTIONS \
+        CCC_PRINT_OPTIONS_FILE \
+        ADDITIONAL_SWIFT_DRIVER_FLAGS \
         CC \
         CXX \
+        CPP \
         LD \
         AR \
         AS \
         NM \
         RANLIB \
         STRIP \
+        LIPO \
+        LIBTOOL \
+        OTOOL \
+        DSYMUTIL \
+        CODESIGN_ALLOCATE \
         COMPILER_PATH \
         GCC_EXEC_PREFIX \
         CPATH \
         C_INCLUDE_PATH \
         CPLUS_INCLUDE_PATH \
         OBJC_INCLUDE_PATH \
+        OBJCPLUS_INCLUDE_PATH \
         LIBRARY_PATH \
-        LD_LIBRARY_PATH \
-        DYLD_LIBRARY_PATH \
-        DYLD_FRAMEWORK_PATH \
+        FRAMEWORK_SEARCH_PATHS \
+        HEADER_SEARCH_PATHS \
+        LIBRARY_SEARCH_PATHS \
+        SYSTEM_FRAMEWORK_SEARCH_PATHS \
+        SYSTEM_HEADER_SEARCH_PATHS \
+        USER_HEADER_SEARCH_PATHS \
+        CLANG_MODULE_CACHE_PATH \
+        MODULE_CACHE_DIR \
+        OTHER_CFLAGS \
+        OTHER_CPLUSPLUSFLAGS \
+        OTHER_LDFLAGS \
+        OTHER_SWIFT_FLAGS \
+        GCC_PREPROCESSOR_DEFINITIONS \
         SWIFT_EXEC \
         SWIFT_FRONTEND_EXEC \
         SWIFT_DRIVER_SWIFT_FRONTEND_EXEC \
+        SWIFT_DRIVER_SWIFTSCAN_LIB \
+        SWIFT_DRIVER_TOOLCHAIN_CASPLUGIN_LIB \
+        SWIFT_INCLUDE_PATHS \
+        SWIFT_PLUGIN_SEARCH_PATHS \
+        TOOLCHAINS \
+        XCRUN_TOOLCHAIN_NAME \
         MACOSX_DEPLOYMENT_TARGET \
         IPHONEOS_DEPLOYMENT_TARGET \
-        WATCHOS_DEPLOYMENT_TARGET
+        WATCHOS_DEPLOYMENT_TARGET \
+        ZERO_AR_DATE \
+        GREP_OPTIONS \
+        xcrun_verbose \
+        xcrun_log
+}
+
+prepare_xcode_signing_environment() {
+    local sanitized_config="$1"
+
+    sanitize_release_xcode_environment
+    XCODE_XCCONFIG_FILE="$sanitized_config"
+    export XCODE_XCCONFIG_FILE
 }

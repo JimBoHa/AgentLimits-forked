@@ -55,17 +55,21 @@ later. iOS and iPadOS uploads must use the iOS 26 SDK or later, and embedded
 watchOS apps must use the watchOS 26 SDK or later.
 
 Every release script fails before building unless the selected Xcode and each
-needed device SDK meet version 26. Version components are parsed and compared
-as bounded decimal integers, so values such as `26.10` are handled correctly
-and malformed output is rejected. The project applies the same Xcode 26 and
-macOS 26 SDK floor to Developer ID and unsigned macOS preflight builds so every
-release unit uses one current toolchain baseline.
+needed device SDK meet version 26. The selected canonical Xcode app must be
+root-owned, not group/other writable, and pass strict Apple-signature
+verification before `xcodebuild` runs. Version components are parsed and
+compared as bounded decimal integers, so values such as `26.10` are handled
+correctly and malformed output is rejected. The project applies the same Xcode
+26 and macOS 26 SDK floor to Developer ID and unsigned macOS preflight builds so
+every release unit uses one current toolchain baseline.
 
 After each archive and export, the scripts require every first-party app and
 extension to record the exact preflight `DTXcode`, `DTXcodeBuild`, `DTSDKName`,
-`DTSDKBuild`, platform name, and platform version. A toolchain or SDK change
-during a build therefore fails closed instead of producing mixed provenance.
-The validated versions and builds are recorded in `BUILD-METADATA.txt`.
+`DTSDKBuild`, platform name, and platform version. Any change visible in those
+recorded values fails closed instead of producing mixed-version provenance.
+This is a metadata-coherence check; it does not pin the Xcode or SDK filesystem
+identity while a build is running. The validated versions and builds are
+recorded in `BUILD-METADATA.txt` and covered by `SHA256SUMS`.
 
 ## Unsigned preflight artifacts
 

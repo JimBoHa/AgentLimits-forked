@@ -369,7 +369,7 @@ build_atomic_release_publisher() {
         return 73
     fi
     verify_private_release_directory "$output_parent" || return $?
-    if ! /usr/bin/xcrun --sdk macosx clang \
+    if ! /usr/bin/xcrun --no-cache --sdk macosx clang \
         -std=c17 \
         -mmacosx-version-min=14.0 \
         -Os \

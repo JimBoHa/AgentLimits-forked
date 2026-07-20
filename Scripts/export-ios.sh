@@ -1,5 +1,62 @@
-#!/bin/bash
+#!/bin/bash -p
 # shellcheck disable=SC2154
+
+agentlimits_release_entrypoint="${BASH_SOURCE[0]}"
+if [[ "$agentlimits_release_entrypoint" != /* ]]; then
+    agentlimits_release_entrypoint="$PWD/$agentlimits_release_entrypoint"
+fi
+if ! agentlimits_release_home="$(
+        builtin unset HOME CDPATH
+        builtin cd ~ 2>/dev/null || exit 1
+        builtin pwd -P
+    )" \
+    || [[ "$agentlimits_release_home" != /* \
+        || "$agentlimits_release_home" == / \
+        || "$agentlimits_release_home" == *$'\n'* \
+        || ! -d "$agentlimits_release_home" ]]; then
+    echo "Could not derive the canonical passwd home directory" >&2
+    exit 70
+fi
+if [[ "${AGENTLIMITS_RELEASE_ENV_PID:-}" != "$$" ]]; then
+    exec /usr/bin/env -i \
+        AGENTLIMITS_RELEASE_ENV_PID="$$" \
+        DEVELOPER_DIR="${DEVELOPER_DIR:-}" \
+        HOME="$agentlimits_release_home" \
+        LANG=C \
+        LC_ALL=C \
+        PATH=/usr/bin:/bin:/usr/sbin:/sbin \
+        /bin/bash -p "$agentlimits_release_entrypoint" "$@"
+fi
+
+agentlimits_release_environment_error=""
+while IFS= read -r agentlimits_release_environment_entry; do
+    agentlimits_release_environment_name="${agentlimits_release_environment_entry%%=*}"
+    case "$agentlimits_release_environment_name" in
+        BASH_FUNC_*)
+            agentlimits_release_environment_error="inherited shell function"
+            break
+            ;;
+        AGENTLIMITS_RELEASE_ENV_PID|DEVELOPER_DIR|HOME|LANG|LC_ALL|PATH|PWD|SHLVL|_)
+            ;;
+        *)
+            agentlimits_release_environment_error="unexpected variable: $agentlimits_release_environment_name"
+            break
+            ;;
+    esac
+done < <(/usr/bin/env)
+if [[ -z "$agentlimits_release_environment_error" ]]; then
+    if [[ "${LANG:-}" != C \
+        || "${LC_ALL:-}" != C \
+        || "${HOME:-}" != "$agentlimits_release_home" \
+        || "${PATH:-}" != /usr/bin:/bin:/usr/sbin:/sbin ]]; then
+        agentlimits_release_environment_error="unexpected fixed variable value"
+    fi
+fi
+if [[ -n "$agentlimits_release_environment_error" ]]; then
+    printf 'Release environment was not sanitized (%s)\n' \
+        "$agentlimits_release_environment_error" >&2
+    exit 70
+fi
 
 set -euo pipefail
 
@@ -446,12 +503,6 @@ ipa_name="AgentLimitsForked-$version-$build-$distribution_method.ipa"
 mv "$ipa" "$output_dir/$ipa_name"
 rm -rf "$export_dir"
 
-(
-    verify_source_unchanged
-    cd "$output_dir"
-    shasum -a 256 "$ipa_name" > SHA256SUMS
-)
-
 cat >"$output_dir/BUILD-METADATA.txt" <<EOF
 AgentLimits Forked $version ($build)
 Distribution method: $distribution_method
@@ -467,6 +518,12 @@ iOS architectures: $ios_archs
 watchOS architectures: $watch_archs
 Signing verification: passed
 EOF
+
+(
+    verify_source_unchanged
+    cd "$output_dir"
+    shasum -a 256 "$ipa_name" BUILD-METADATA.txt > SHA256SUMS
+)
 
 verify_source_unchanged
 publish_staged_release_directory \

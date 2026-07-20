@@ -1,5 +1,62 @@
-#!/bin/bash
+#!/bin/bash -p
 # shellcheck disable=SC2154
+
+agentlimits_release_entrypoint="${BASH_SOURCE[0]}"
+if [[ "$agentlimits_release_entrypoint" != /* ]]; then
+    agentlimits_release_entrypoint="$PWD/$agentlimits_release_entrypoint"
+fi
+if ! agentlimits_release_home="$(
+        builtin unset HOME CDPATH
+        builtin cd ~ 2>/dev/null || exit 1
+        builtin pwd -P
+    )" \
+    || [[ "$agentlimits_release_home" != /* \
+        || "$agentlimits_release_home" == / \
+        || "$agentlimits_release_home" == *$'\n'* \
+        || ! -d "$agentlimits_release_home" ]]; then
+    echo "Could not derive the canonical passwd home directory" >&2
+    exit 70
+fi
+if [[ "${AGENTLIMITS_RELEASE_ENV_PID:-}" != "$$" ]]; then
+    exec /usr/bin/env -i \
+        AGENTLIMITS_RELEASE_ENV_PID="$$" \
+        DEVELOPER_DIR="${DEVELOPER_DIR:-}" \
+        HOME="$agentlimits_release_home" \
+        LANG=C \
+        LC_ALL=C \
+        PATH=/usr/bin:/bin:/usr/sbin:/sbin \
+        /bin/bash -p "$agentlimits_release_entrypoint" "$@"
+fi
+
+agentlimits_release_environment_error=""
+while IFS= read -r agentlimits_release_environment_entry; do
+    agentlimits_release_environment_name="${agentlimits_release_environment_entry%%=*}"
+    case "$agentlimits_release_environment_name" in
+        BASH_FUNC_*)
+            agentlimits_release_environment_error="inherited shell function"
+            break
+            ;;
+        AGENTLIMITS_RELEASE_ENV_PID|DEVELOPER_DIR|HOME|LANG|LC_ALL|PATH|PWD|SHLVL|_)
+            ;;
+        *)
+            agentlimits_release_environment_error="unexpected variable: $agentlimits_release_environment_name"
+            break
+            ;;
+    esac
+done < <(/usr/bin/env)
+if [[ -z "$agentlimits_release_environment_error" ]]; then
+    if [[ "${LANG:-}" != C \
+        || "${LC_ALL:-}" != C \
+        || "${HOME:-}" != "$agentlimits_release_home" \
+        || "${PATH:-}" != /usr/bin:/bin:/usr/sbin:/sbin ]]; then
+        agentlimits_release_environment_error="unexpected fixed variable value"
+    fi
+fi
+if [[ -n "$agentlimits_release_environment_error" ]]; then
+    printf 'Release environment was not sanitized (%s)\n' \
+        "$agentlimits_release_environment_error" >&2
+    exit 70
+fi
 
 set -euo pipefail
 
@@ -698,7 +755,7 @@ submit_notary() {
     local status
     local submit_exit=0
 
-    xcrun notarytool submit "$artifact" \
+    /usr/bin/xcrun --no-cache notarytool submit "$artifact" \
         --keychain-profile "$notary_profile" \
         --wait \
         --timeout 60m \
@@ -711,7 +768,7 @@ submit_notary() {
     fi
     submission_id="$(plutil -extract id raw "$result")"
     status="$(plutil -extract status raw "$result")"
-    xcrun notarytool log "$submission_id" \
+    /usr/bin/xcrun --no-cache notarytool log "$submission_id" \
         --keychain-profile "$notary_profile" \
         "$log" \
         >/dev/null
@@ -824,7 +881,7 @@ verify_packaged_app() {
         fi
     done
 
-    xcrun stapler validate "$candidate_app"
+    /usr/bin/xcrun --no-cache stapler validate "$candidate_app"
     spctl --assess --type execute --verbose=4 "$candidate_app"
 }
 
@@ -834,8 +891,8 @@ ditto -c -k --sequesterRsrc --keepParent "$app" "$temporary_notary_zip"
 
 echo "Notarizing the app..."
 submit_notary "$temporary_notary_zip" app
-xcrun stapler staple "$app"
-xcrun stapler validate "$app"
+/usr/bin/xcrun --no-cache stapler staple "$app"
+/usr/bin/xcrun --no-cache stapler validate "$app"
 reference_app_arm64_cdhash="$(code_directory_hash "$app" arm64 "macOS app")"
 reference_app_x86_64_cdhash="$(code_directory_hash "$app" x86_64 "macOS app")"
 reference_widget_arm64_cdhash="$(code_directory_hash \
@@ -869,8 +926,8 @@ fi
 
 echo "Notarizing installer package..."
 submit_notary "$pkg" pkg
-xcrun stapler staple "$pkg"
-xcrun stapler validate "$pkg"
+/usr/bin/xcrun --no-cache stapler staple "$pkg"
+/usr/bin/xcrun --no-cache stapler validate "$pkg"
 final_package_signature="$(pkgutil --check-signature "$pkg" 2>&1)"
 if ! printf '%s\n' "$final_package_signature" \
         | grep -Fq "$installer_identity" \
@@ -917,8 +974,8 @@ hdiutil verify "$dmg" >/dev/null
 
 echo "Notarizing disk image..."
 submit_notary "$dmg" dmg
-xcrun stapler staple "$dmg"
-xcrun stapler validate "$dmg"
+/usr/bin/xcrun --no-cache stapler staple "$dmg"
+/usr/bin/xcrun --no-cache stapler validate "$dmg"
 codesign --verify --strict --verbose=4 "$dmg"
 hdiutil verify "$dmg" >/dev/null
 
@@ -964,16 +1021,6 @@ spctl --assess --type open \
     --context context:primary-signature \
     --verbose=4 "$dmg"
 
-(
-    verify_source_unchanged
-    cd "$output_dir"
-    shasum -a 256 \
-        "$(basename "$zip")" \
-        "$(basename "$dmg")" \
-        "$(basename "$pkg")" \
-        > SHA256SUMS
-)
-
 cat >"$output_dir/BUILD-METADATA.txt" <<EOF
 AgentLimits Forked $version ($build)
 Team ID: $team_id
@@ -990,6 +1037,17 @@ Nested Sparkle Developer ID verification: passed
 Notarization and stapling: passed for app, PKG, and DMG
 Final ZIP, PKG, and DMG reopen verification: passed
 EOF
+
+(
+    verify_source_unchanged
+    cd "$output_dir"
+    shasum -a 256 \
+        "$(basename "$zip")" \
+        "$(basename "$dmg")" \
+        "$(basename "$pkg")" \
+        BUILD-METADATA.txt \
+        > SHA256SUMS
+)
 
 verify_source_unchanged
 publish_staged_release_directory \
