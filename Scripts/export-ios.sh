@@ -302,6 +302,9 @@ validate_app_store_product \
 app_store_validate_executable_bundle_topology \
     "$verification_root" "$ios_app" "$watch_app" \
     "$work_dir/ipa-product-topology" || exit $?
+app_store_validate_executable_code_inventory \
+    "$verification_root" "$ios_app/$ios_executable" \
+    "$watch_app/$watch_executable" "$work_dir/ipa-product-code" || exit $?
 if [[ " $ios_archs " != *" arm64 "* ]]; then
     echo "Exported iOS app lacks arm64: $ios_archs" >&2
     exit 1

@@ -124,8 +124,8 @@ information.
 - Release enforcement: `VALIDATE_PRODUCT=YES` plus
   `Scripts/app-store-product-validation.sh` verifies the manifest declarations
   for these privacy claims, encryption declarations, product IDs/versions,
-  launch/icon metadata, and the embedded dependent Watch relationship in
-  unsigned and signed workflows
+  launch/icon metadata, the embedded dependent Watch relationship, and the
+  exact executable-code inventory in unsigned and signed workflows
 
 Under Apple's definitions, data processed only on-device is not "collected."
 Data sent to a third party solely to service a user request and not retained

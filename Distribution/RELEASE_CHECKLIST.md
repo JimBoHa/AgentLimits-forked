@@ -70,6 +70,8 @@
 - [ ] iOS/Watch version and build values match.
 - [ ] Bundle IDs, version/build values, encryption declarations, launch/icon
       metadata, and Watch companion relationship match the audited contract.
+- [ ] IPA contains only the audited iOS and Watch executable code objects; no
+      unexpected framework, service, extension, bundle, library, or raw Mach-O.
 - [ ] Both privacy manifests declare no tracking, no collected-data types, no
       tracking domains, and only UserDefaults reason `CA92.1`.
 - [ ] Xcode/App Store validation passes without warning.

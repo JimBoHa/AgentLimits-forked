@@ -119,7 +119,9 @@ then compares the exported products with the audited App Store contract:
 - generated iPhone/iPad launch and icon metadata, correctly sized PNGs, and
   opaque named icon renditions in the compiled asset catalogs; and
 - one dependent Watch product bound to the iOS companion identifier and not
-  declared independently distributable.
+  declared independently distributable; and
+- exactly the audited iOS and Watch Mach-O executables, with no additional
+  executable files, frameworks, services, bundles, libraries, or extensions.
 
 Any deliberate product or privacy change requires updating the implementation,
 App Store Connect answers, metadata documentation, and validator in one review.

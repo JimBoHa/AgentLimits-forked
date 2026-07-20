@@ -124,6 +124,45 @@ app_store_require_regular_file() {
 validated_app_store_ipa=""
 validated_app_store_ios_app=""
 
+app_store_validate_applications_root() {
+    if [[ $# -ne 3 ]]; then
+        app_store_validation_error \
+            "usage: app_store_validate_applications_root ROOT EXPECTED_APP SCRATCH_FILE"
+        return 64
+    fi
+
+    local applications_root="$1"
+    local expected_app="$2"
+    local scratch_file="$3"
+    local candidate
+    local candidate_count=0
+
+    if [[ ! -d "$applications_root" || -L "$applications_root" \
+        || ! -d "$expected_app" || -L "$expected_app" ]]; then
+        app_store_validation_error \
+            "archive Applications root or expected app is missing or is a symlink"
+        return 1
+    fi
+    if ! /usr/bin/find "$applications_root" -mindepth 1 -maxdepth 1 \
+            -print0 >"$scratch_file-entries"; then
+        app_store_validation_error "archive Applications root could not be inspected"
+        return 1
+    fi
+    while IFS= read -r -d '' candidate; do
+        ((candidate_count += 1))
+        if [[ "$candidate" != "$expected_app" ]]; then
+            app_store_validation_error \
+                "archive Applications root contains an unexpected entry"
+            return 1
+        fi
+    done <"$scratch_file-entries"
+    if [[ "$candidate_count" != "1" ]]; then
+        app_store_validation_error \
+            "archive Applications root must contain exactly one expected app"
+        return 1
+    fi
+}
+
 app_store_select_single_ipa() {
     if [[ $# -ne 2 ]]; then
         app_store_validation_error \
@@ -271,6 +310,99 @@ app_store_validate_executable_bundle_topology() {
     if [[ "$search_root" != "$ios_app" && "$ios_count" != "1" ]]; then
         app_store_validation_error \
             "IPA must contain exactly one expected iOS app"
+        return 1
+    fi
+}
+
+app_store_validate_executable_code_inventory() {
+    if [[ $# -ne 4 ]]; then
+        app_store_validation_error \
+            "usage: app_store_validate_executable_code_inventory ROOT IOS_EXECUTABLE WATCH_EXECUTABLE SCRATCH_FILE"
+        return 64
+    fi
+
+    local search_root="$1"
+    local ios_executable="$2"
+    local watch_executable="$3"
+    local scratch_file="$4"
+    local candidate
+    local kind
+    local ios_mode_count=0
+    local watch_mode_count=0
+    local ios_macho_count=0
+    local watch_macho_count=0
+
+    if [[ ! -d "$search_root" || -L "$search_root" \
+        || ! -f "$ios_executable" || -L "$ios_executable" \
+        || ! -f "$watch_executable" || -L "$watch_executable" ]]; then
+        app_store_validation_error \
+            "audited executable root or expected executable is missing or unsafe"
+        return 1
+    fi
+    if ! /usr/bin/find "$search_root" -mindepth 1 \
+            \( -iname '*.framework' -o -iname '*.xpc' \
+            -o -iname '*.bundle' -o -iname '*.dylib' \
+            -o -iname '*.plugin' -o -iname '*.kext' \
+            -o -iname '*.systemextension' \) \
+            -print0 >"$scratch_file-code-containers"; then
+        app_store_validation_error "code containers could not be inspected"
+        return 1
+    fi
+    if [[ -s "$scratch_file-code-containers" ]]; then
+        app_store_validation_error \
+            "product contains an unaudited framework, service, bundle, or library"
+        return 1
+    fi
+
+    if ! /usr/bin/find "$search_root" -type f -perm +111 \
+            -print0 >"$scratch_file-executable-mode"; then
+        app_store_validation_error "executable-mode files could not be inspected"
+        return 1
+    fi
+    while IFS= read -r -d '' candidate; do
+        if [[ "$candidate" == "$ios_executable" ]]; then
+            ((ios_mode_count += 1))
+        elif [[ "$candidate" == "$watch_executable" ]]; then
+            ((watch_mode_count += 1))
+        else
+            app_store_validation_error \
+                "product contains an unaudited executable-mode file"
+            return 1
+        fi
+    done <"$scratch_file-executable-mode"
+    if [[ "$ios_mode_count" != "1" || "$watch_mode_count" != "1" ]]; then
+        app_store_validation_error \
+            "expected iOS and Watch executables must be executable files"
+        return 1
+    fi
+
+    if ! /usr/bin/find "$search_root" -type f \
+            -print0 >"$scratch_file-regular-files"; then
+        app_store_validation_error "regular product files could not be inspected"
+        return 1
+    fi
+    while IFS= read -r -d '' candidate; do
+        if ! kind="$(LC_ALL=C /usr/bin/file -b "$candidate" 2>/dev/null)"; then
+            app_store_validation_error "product file type could not be inspected"
+            return 1
+        fi
+        case "$kind" in
+            *Mach-O*)
+                if [[ "$candidate" == "$ios_executable" ]]; then
+                    ((ios_macho_count += 1))
+                elif [[ "$candidate" == "$watch_executable" ]]; then
+                    ((watch_macho_count += 1))
+                else
+                    app_store_validation_error \
+                        "product contains an unaudited Mach-O code object"
+                    return 1
+                fi
+                ;;
+        esac
+    done <"$scratch_file-regular-files"
+    if [[ "$ios_macho_count" != "1" || "$watch_macho_count" != "1" ]]; then
+        app_store_validation_error \
+            "expected iOS and Watch executables must be Mach-O code objects"
         return 1
     fi
 }
@@ -528,6 +660,15 @@ app_store_validate_product_with_assetutil() {
     app_store_plist_expect_value \
         "$watch_info" CFBundleIdentifier string \
         com.jimboha.agentlimits.ios.watchkitapp "Watch product" || return 1
+    app_store_plist_expect_value \
+        "$ios_info" CFBundleExecutable string \
+        AgentLimits "iOS product" || return 1
+    app_store_plist_expect_value \
+        "$watch_info" CFBundleExecutable string \
+        AgentLimitsWatch "Watch product" || return 1
+    app_store_validate_executable_code_inventory \
+        "$ios_app" "$ios_app/AgentLimits" "$watch_app/AgentLimitsWatch" \
+        "$scratch_dir/product-code" || return 1
     for plist_and_label in ios watch; do
         local plist
         local label

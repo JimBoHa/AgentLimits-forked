@@ -46,6 +46,20 @@ final class AppStoreProductValidationTests: XCTestCase {
             exportScript
         )
         XCTAssertTrue(exportScript.contains("-sdk iphoneos"), exportScript)
+
+        let unsignedScript = try String(
+            contentsOf: repositoryRoot.appendingPathComponent(
+                "Scripts/build-unsigned-artifacts.sh"
+            ),
+            encoding: .utf8
+        )
+        XCTAssertEqual(
+            unsignedScript.components(
+                separatedBy: "app_store_validate_applications_root"
+            ).count - 1,
+            2,
+            unsignedScript
+        )
     }
 
     func testValidAppStoreProductPassesSemanticValidation() throws {
@@ -68,6 +82,11 @@ final class AppStoreProductValidationTests: XCTestCase {
             ("bundle-id", { fixture in
                 try self.mutatePropertyList(fixture.iosInfo) {
                     $0["CFBundleIdentifier"] = "org.example.changed"
+                }
+            }),
+            ("executable-name", { fixture in
+                try self.mutatePropertyList(fixture.watchInfo) {
+                    $0["CFBundleExecutable"] = "Unexpected"
                 }
             }),
             ("version", { fixture in
@@ -184,6 +203,59 @@ final class AppStoreProductValidationTests: XCTestCase {
                     at: fixture.iosApp.appendingPathComponent("UnexpectedLink"),
                     withDestinationURL: fixture.iosInfo
                 )
+            }),
+            ("unexpected-framework", { fixture in
+                try FileManager.default.createDirectory(
+                    at: fixture.iosApp.appendingPathComponent(
+                        "Frameworks/Unexpected.framework"
+                    ),
+                    withIntermediateDirectories: true
+                )
+            }),
+            ("unexpected-xpc", { fixture in
+                try FileManager.default.createDirectory(
+                    at: fixture.iosApp.appendingPathComponent(
+                        "XPCServices/Unexpected.xpc"
+                    ),
+                    withIntermediateDirectories: true
+                )
+            }),
+            ("unexpected-bundle", { fixture in
+                try FileManager.default.createDirectory(
+                    at: fixture.iosApp.appendingPathComponent(
+                        "Resources/Unexpected.bundle"
+                    ),
+                    withIntermediateDirectories: true
+                )
+            }),
+            ("unexpected-dylib", { fixture in
+                let frameworks = fixture.iosApp.appendingPathComponent(
+                    "Frameworks"
+                )
+                try FileManager.default.createDirectory(
+                    at: frameworks,
+                    withIntermediateDirectories: false
+                )
+                try Data([1]).write(
+                    to: frameworks.appendingPathComponent("Unexpected.dylib")
+                )
+            }),
+            ("raw-mach-o", { fixture in
+                let code = fixture.iosApp.appendingPathComponent(
+                    "UnexpectedCode"
+                )
+                try FileManager.default.copyItem(
+                    at: URL(fileURLWithPath: "/usr/bin/true"),
+                    to: code
+                )
+                try self.setPermissions(0o600, for: code)
+            }),
+            ("executable-script", { fixture in
+                let script = fixture.iosApp.appendingPathComponent(
+                    "UnexpectedTool"
+                )
+                try Data("#!/bin/sh\n".utf8).write(to: script)
+                try self.setPermissions(0o700, for: script)
             })
         ]
 
@@ -324,6 +396,41 @@ final class AppStoreProductValidationTests: XCTestCase {
         XCTAssertNotEqual(result.status, 0, result.output)
     }
 
+    func testArchiveApplicationsRootRejectsSiblingEntry() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let applications = directory.appendingPathComponent("Applications")
+        let expected = applications.appendingPathComponent("AgentLimits.app")
+        try FileManager.default.createDirectory(
+            at: expected,
+            withIntermediateDirectories: true
+        )
+
+        var result = try runValidationHelper(
+            "app_store_validate_applications_root",
+            arguments: [
+                applications.path,
+                expected.path,
+                directory.appendingPathComponent("root-valid").path
+            ]
+        )
+        XCTAssertEqual(result.status, 0, result.output)
+
+        try FileManager.default.createDirectory(
+            at: applications.appendingPathComponent("Unexpected.app"),
+            withIntermediateDirectories: false
+        )
+        result = try runValidationHelper(
+            "app_store_validate_applications_root",
+            arguments: [
+                applications.path,
+                expected.path,
+                directory.appendingPathComponent("root-sibling").path
+            ]
+        )
+        XCTAssertNotEqual(result.status, 0, result.output)
+    }
+
     private struct ProductFixture {
         let iosApp: URL
         let iosInfo: URL
@@ -387,6 +494,7 @@ final class AppStoreProductValidationTests: XCTestCase {
                     "CFBundleIconName": "agentlimits"
                 ]
             ],
+            "CFBundleExecutable": "AgentLimits",
             "CFBundleIdentifier": "com.jimboha.agentlimits.ios",
             "CFBundleName": "AgentLimits",
             "CFBundlePackageType": "APPL",
@@ -404,6 +512,7 @@ final class AppStoreProductValidationTests: XCTestCase {
             "CFBundleIcons": [
                 "CFBundlePrimaryIcon": ["CFBundleIconName": "agentlimits"]
             ],
+            "CFBundleExecutable": "AgentLimitsWatch",
             "CFBundleIdentifier": "com.jimboha.agentlimits.ios.watchkitapp",
             "CFBundleName": "AgentLimitsWatch",
             "CFBundlePackageType": "APPL",
@@ -429,6 +538,20 @@ final class AppStoreProductValidationTests: XCTestCase {
         ]
         try writePropertyList(privacy, to: iosPrivacy)
         try writePropertyList(privacy, to: watchPrivacy)
+
+        let systemExecutable = URL(fileURLWithPath: "/usr/bin/true")
+        let iosExecutable = iosApp.appendingPathComponent("AgentLimits")
+        let watchExecutable = watchApp.appendingPathComponent("AgentLimitsWatch")
+        try FileManager.default.copyItem(
+            at: systemExecutable,
+            to: iosExecutable
+        )
+        try FileManager.default.copyItem(
+            at: systemExecutable,
+            to: watchExecutable
+        )
+        try setPermissions(0o700, for: iosExecutable)
+        try setPermissions(0o700, for: watchExecutable)
 
         let iosAssets = iosApp.appendingPathComponent("Assets.car")
         let watchAssets = watchApp.appendingPathComponent("Assets.car")
@@ -519,6 +642,13 @@ final class AppStoreProductValidationTests: XCTestCase {
                 userInfo: [NSLocalizedDescriptionKey: "Could not write PNG fixture"]
             )
         }
+    }
+
+    private func setPermissions(_ permissions: Int, for url: URL) throws {
+        try FileManager.default.setAttributes(
+            [.posixPermissions: permissions],
+            ofItemAtPath: url.path
+        )
     }
 
     private func writeAssetCatalogInfo(

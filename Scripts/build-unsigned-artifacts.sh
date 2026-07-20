@@ -328,6 +328,13 @@ ios_app="$ios_archive/Products/Applications/AgentLimits.app"
 watch_app="$ios_app/Watch/AgentLimitsWatch.app"
 widget="$mac_app/Contents/PlugIns/AgentLimitsWidgetExtension.appex"
 
+app_store_validate_applications_root \
+    "$mac_archive/Products/Applications" "$mac_app" \
+    "$work_dir/mac-applications-root" || exit $?
+app_store_validate_applications_root \
+    "$ios_archive/Products/Applications" "$ios_app" \
+    "$work_dir/ios-applications-root" || exit $?
+
 for required_path in \
     "$mac_app" \
     "$widget" \
