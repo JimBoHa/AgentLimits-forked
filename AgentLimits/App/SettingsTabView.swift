@@ -44,7 +44,10 @@ enum SettingsTab: String, Hashable, CaseIterable, Identifiable {
 // MARK: - Settings Tab View
 
 struct SettingsTabView: View {
-    @AppStorage("selectedSettingsTab") private var selectedTabRaw: String = SettingsTab.usage.rawValue
+    @AppStorage(
+        "selectedSettingsTab",
+        store: AppDefaults.shared
+    ) private var selectedTabRaw: String = SettingsTab.usage.rawValue
     let viewModel: UsageViewModel
     let webViewPool: UsageWebViewPool
     let tokenUsageViewModel: TokenUsageViewModel
@@ -67,7 +70,11 @@ struct SettingsTabView: View {
             List(SettingsTab.allCases, selection: selectedTabBinding) { tab in
                 Label(tab.title, systemImage: tab.iconName)
                     .tag(tab)
+                    .accessibilityIdentifier(
+                        "mac.settings.tab.\(tab.rawValue)"
+                    )
             }
+            .accessibilityIdentifier("mac.settings.sidebar")
             .navigationSplitViewColumnWidth(min: 180, ideal: 200, max: 220)
         } detail: {
             detailContent

@@ -81,20 +81,49 @@ jobs:
         include:
           - name: macOS
             scheme: AgentLimits
+            configuration: Debug
             destination: platform=macOS
             result: macOS
+            code_signing_allowed: "NO"
+            code_signing_required: "NO"
+            code_sign_identity: ""
+            development_team: ""
+          - name: macOS UI
+            scheme: AgentLimitsUITests
+            configuration: UI Testing
+            destination: platform=macOS,arch=arm64
+            result: Mac-UI
+            code_signing_allowed: "YES"
+            code_signing_required: "YES"
+            code_sign_identity: "-"
+            development_team: ""
           - name: iPhone
             scheme: AgentLimitsiOS
+            configuration: Debug
             destination: platform=iOS Simulator,name=iPhone 17 Pro,OS=latest
             result: iPhone
+            code_signing_allowed: "NO"
+            code_signing_required: "NO"
+            code_sign_identity: ""
+            development_team: ""
           - name: iPad
             scheme: AgentLimitsiOS
+            configuration: Debug
             destination: platform=iOS Simulator,name=iPad Pro 13-inch (M5),OS=latest
             result: iPad
+            code_signing_allowed: "NO"
+            code_signing_required: "NO"
+            code_sign_identity: ""
+            development_team: ""
           - name: Apple Watch
             scheme: AgentLimitsWatch
+            configuration: Debug
             destination: ""
             result: Watch
+            code_signing_allowed: "NO"
+            code_signing_required: "NO"
+            code_sign_identity: ""
+            development_team: ""
     steps:
       - name: Check out source
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -183,6 +212,11 @@ jobs:
       - name: Run tests
         env:
           CONFIGURED_DESTINATION: ${{ matrix.destination }}
+          CONFIGURATION: ${{ matrix.configuration }}
+          CODE_SIGNING_ALLOWED_VALUE: ${{ matrix.code_signing_allowed }}
+          CODE_SIGNING_REQUIRED_VALUE: ${{ matrix.code_signing_required }}
+          CODE_SIGN_IDENTITY_VALUE: ${{ matrix.code_sign_identity }}
+          DEVELOPMENT_TEAM_VALUE: ${{ matrix.development_team }}
           RESOLVED_WATCH_DESTINATION: ${{ steps.watch-destination.outputs.destination }}
           TEST_RESULT: ${{ matrix.result }}
         run: |
@@ -200,15 +234,15 @@ jobs:
           xcodebuild test \
             -project AgentLimits.xcodeproj \
             -scheme "${{ matrix.scheme }}" \
-            -configuration Debug \
+            -configuration "$CONFIGURATION" \
             -destination "$destination" \
             -onlyUsePackageVersionsFromResolvedFile \
             -resultBundlePath "$RUNNER_TEMP/${{ matrix.result }}.xcresult" \
             -derivedDataPath "$RUNNER_TEMP/DerivedData-${{ matrix.result }}" \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY= \
-            DEVELOPMENT_TEAM= \
+            CODE_SIGNING_ALLOWED="$CODE_SIGNING_ALLOWED_VALUE" \
+            CODE_SIGNING_REQUIRED="$CODE_SIGNING_REQUIRED_VALUE" \
+            CODE_SIGN_IDENTITY="$CODE_SIGN_IDENTITY_VALUE" \
+            DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM_VALUE" \
             COMPILER_INDEX_STORE_ENABLE=NO \
             SWIFT_TREAT_WARNINGS_AS_ERRORS=YES \
             GCC_TREAT_WARNINGS_AS_ERRORS=YES

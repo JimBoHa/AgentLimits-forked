@@ -224,8 +224,10 @@ final class UsageViewModel: ObservableObject {
             }
             .store(in: &lifecycleCancellables)
 
-        for provider in UsageProvider.allCases {
-            publishSelectedProjection(for: provider)
+        if !AppRuntimeEnvironment.isUITesting {
+            for provider in UsageProvider.allCases {
+                publishSelectedProjection(for: provider)
+            }
         }
     }
 

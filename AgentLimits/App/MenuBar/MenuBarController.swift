@@ -56,13 +56,17 @@ final class MenuBarController: NSObject {
 
     /// UserDefaults の `menu_bar_icon_hidden` と一時復活フラグに基づきアイコン表示を制御する
     private func applyIconVisibility() {
-        let isHidden = UserDefaults.standard.bool(forKey: UserDefaultsKeys.menuBarIconHidden)
+        let isHidden = AppDefaults.shared.bool(
+            forKey: UserDefaultsKeys.menuBarIconHidden
+        )
         statusItem.isVisible = !(isHidden && !isTemporarilyRevealed)
     }
 
     /// 再起動（reopen）時にアイコンを一時復活させる。非表示設定時のみフラグを立てる。
     func temporarilyRevealForReopen() {
-        let isHidden = UserDefaults.standard.bool(forKey: UserDefaultsKeys.menuBarIconHidden)
+        let isHidden = AppDefaults.shared.bool(
+            forKey: UserDefaultsKeys.menuBarIconHidden
+        )
         guard isHidden else { return }
         isTemporarilyRevealed = true
         applyIconVisibility()
@@ -150,7 +154,7 @@ final class MenuBarController: NSObject {
     }
 
     private func isMenuBarEnabled(_ provider: UsageProvider) -> Bool {
-        let defaults = UserDefaults.standard
+        let defaults = AppDefaults.shared
         switch provider {
         case .chatgptCodex: return defaults.bool(forKey: UserDefaultsKeys.menuBarStatusCodexEnabled)
         case .claudeCode: return defaults.bool(forKey: UserDefaultsKeys.menuBarStatusClaudeEnabled)
@@ -160,7 +164,7 @@ final class MenuBarController: NSObject {
 
     private func loadDisplayMode() -> UsageDisplayMode {
         UsageDisplayMode.makeSelectableMode(
-            from: UserDefaults.standard.string(forKey: UserDefaultsKeys.displayMode)
+            from: AppDefaults.shared.string(forKey: UserDefaultsKeys.displayMode)
         )
     }
 
@@ -194,7 +198,12 @@ final class MenuBarController: NSObject {
             UserDefaultsKeys.providerDisplayOrder,
             UserDefaultsKeys.menuBarIconHidden,
         ] {
-            UserDefaults.standard.addObserver(self, forKeyPath: key, options: [.new], context: nil)
+            AppDefaults.shared.addObserver(
+                self,
+                forKeyPath: key,
+                options: [.new],
+                context: nil
+            )
         }
         // addObserver と removeObserver で同じインスタンスを保持する
         let appGroupDefaults = AppGroupDefaults.shared
@@ -285,7 +294,7 @@ final class MenuBarController: NSObject {
             "provider_display_order", "menu_bar_icon_hidden",
         ]
         for key in standardKeys {
-            UserDefaults.standard.removeObserver(self, forKeyPath: key)
+            AppDefaults.shared.removeObserver(self, forKeyPath: key)
         }
         // addObserver と同じインスタンスで解除する
         let appGroupKeys = [
@@ -464,7 +473,7 @@ extension MenuBarController: NSMenuDelegate {
     }
 
     private func isDashboardEnabled(_ provider: UsageProvider) -> Bool {
-        let defaults = UserDefaults.standard
+        let defaults = AppDefaults.shared
         switch provider {
         case .chatgptCodex:
             return defaults.object(forKey: UserDefaultsKeys.menuBarDashboardCodexEnabled) as? Bool ?? true
@@ -585,7 +594,10 @@ extension MenuBarController: NSMenuDelegate {
     @objc private func setDisplayMode(_ sender: NSMenuItem) {
         guard let mode = sender.representedObject as? UsageDisplayMode else { return }
         let displayMode = mode.normalizedSelectableMode
-        UserDefaults.standard.set(displayMode.rawValue, forKey: UserDefaultsKeys.displayMode)
+        AppDefaults.shared.set(
+            displayMode.rawValue,
+            forKey: UserDefaultsKeys.displayMode
+        )
         appState.viewModel.updateDisplayMode(displayMode)
     }
 

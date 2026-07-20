@@ -4,6 +4,8 @@
 <dict>
 	<key>AgentLimitsAppGroupIdentifier</key>
 	<string>$(AGENTLIMITS_APP_GROUP_IDENTIFIER)</string>
+	<key>AgentLimitsURLScheme</key>
+	<string>$(AGENTLIMITS_URL_SCHEME)</string>
 	<key>NSExtension</key>
 	<dict>
 		<key>NSExtensionPointIdentifier</key>
