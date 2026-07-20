@@ -403,6 +403,9 @@ final class DistributionScriptTests: XCTestCase {
 
     func testUnsignedBuildUsesCleanSnapshotAndAtomicStaging() throws {
         let script = try releaseScript(named: "build-unsigned-artifacts.sh")
+        let containerValidation = try releaseScript(
+            named: "macos-container-validation.sh"
+        )
 
         XCTAssertTrue(script.contains("PATH=\"/usr/bin:/bin:/usr/sbin:/sbin\""))
         XCTAssertTrue(script.contains("source \"$script_dir/signing-config.sh\""))
@@ -424,8 +427,7 @@ final class DistributionScriptTests: XCTestCase {
         XCTAssertTrue(script.contains("publication_lock"))
         XCTAssertTrue(script.contains("publish_staged_directory"))
         XCTAssertTrue(
-            try releaseScript(named: "macos-container-validation.sh")
-                .contains("Output path appeared while building")
+            containerValidation.contains("Output path appeared while building")
         )
     }
 
