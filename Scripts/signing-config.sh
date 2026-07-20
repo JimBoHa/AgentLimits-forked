@@ -77,5 +77,32 @@ prepare_xcode_signing_environment() {
 
     XCODE_XCCONFIG_FILE="$sanitized_config"
     export XCODE_XCCONFIG_FILE
-    unset TOOLCHAINS XCRUN_TOOLCHAIN_NAME
+    unset \
+        TOOLCHAINS \
+        XCRUN_TOOLCHAIN_NAME \
+        SDKROOT \
+        CC \
+        CXX \
+        LD \
+        AR \
+        AS \
+        NM \
+        RANLIB \
+        STRIP \
+        COMPILER_PATH \
+        GCC_EXEC_PREFIX \
+        CPATH \
+        C_INCLUDE_PATH \
+        CPLUS_INCLUDE_PATH \
+        OBJC_INCLUDE_PATH \
+        LIBRARY_PATH \
+        LD_LIBRARY_PATH \
+        DYLD_LIBRARY_PATH \
+        DYLD_FRAMEWORK_PATH \
+        SWIFT_EXEC \
+        SWIFT_FRONTEND_EXEC \
+        SWIFT_DRIVER_SWIFT_FRONTEND_EXEC \
+        MACOSX_DEPLOYMENT_TARGET \
+        IPHONEOS_DEPLOYMENT_TARGET \
+        WATCHOS_DEPLOYMENT_TARGET
 }
