@@ -54,7 +54,12 @@ final class AgentLimitsUITests: XCTestCase {
             "Account manager did not open"
         )
 
-        element("mac.accounts.add", in: app).click()
+        let addAccount = element("mac.accounts.add", in: app)
+        XCTAssertTrue(
+            waitForHittable(addAccount, timeout: 5),
+            "Account manager controls lost their accessibility identifiers"
+        )
+        addAccount.click()
         XCTAssertTrue(
             element("mac.accounts.editor.root", in: app)
                 .waitForExistence(timeout: 5),

@@ -35,6 +35,7 @@ struct ProviderAccountsSettingsView: View {
             HStack {
                 Text("accounts.title".localized())
                     .font(.title2.bold())
+                    .accessibilityIdentifier("mac.accounts.root")
                 Spacer()
                 Button {
                     editorConfiguration = AccountEditorConfiguration(
@@ -88,7 +89,6 @@ struct ProviderAccountsSettingsView: View {
         .padding(DesignTokens.Spacing.large)
         .frame(minWidth: 760, minHeight: 430)
         .interactiveDismissDisabled(isBusy)
-        .accessibilityIdentifier("mac.accounts.root")
         .sheet(item: $editorConfiguration) { configuration in
             ProviderAccountEditorView(configuration: configuration) {
                 label, isEnabled, cliDataRoot in
@@ -335,9 +335,6 @@ struct ProviderAccountsSettingsView: View {
             )
         }
         .padding(.vertical, 4)
-        .accessibilityIdentifier(
-            "mac.accounts.row.\(account.id.uuidString.lowercased())"
-        )
     }
 
     private func isSelected(_ account: ProviderAccount) -> Bool {
@@ -435,6 +432,7 @@ private struct ProviderAccountEditorView: View {
                     : "accounts.edit".localized()
             )
             .font(.title2.bold())
+            .accessibilityIdentifier("mac.accounts.editor.root")
 
             Form {
                 LabeledContent("content.provider".localized()) {
@@ -513,7 +511,6 @@ private struct ProviderAccountEditorView: View {
         }
         .padding(DesignTokens.Spacing.large)
         .frame(width: 430)
-        .accessibilityIdentifier("mac.accounts.editor.root")
         .alert(
             "accounts.title".localized(),
             isPresented: Binding(
