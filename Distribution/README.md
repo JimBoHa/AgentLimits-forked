@@ -60,6 +60,10 @@ The output includes unsigned macOS ZIP/DMG/PKG files and unsigned macOS and
 iOS/watchOS archives. These are non-distributable preflight artifacts. Do not
 re-sign or upload them. A final release must be rebuilt by the signed workflows
 below so Xcode records the Team, signing identity, and provisioning metadata.
+The preflight also runs the same fail-closed product/privacy gate as signed IPA
+export. It rejects changed identifiers, versions, encryption declarations,
+privacy claims, required-reason APIs, app icons, launch metadata, or the
+dependent Watch relationship.
 
 ## Signed iOS and watchOS export
 
@@ -78,6 +82,19 @@ Scripts/export-ios.sh /absolute/output/directory release-testing
 Both commands archive the `AgentLimitsiOS` scheme. They verify that the signed
 IPA contains `Watch/AgentLimitsWatch.app`, that identifiers and version numbers
 match, and that distribution signatures do not contain `get-task-allow`.
+Release builds enable Xcode product validation. A separate semantic validator
+then compares the exported products with the audited App Store contract:
+
+- exact iOS and Watch bundle IDs, marketing version, and build number;
+- non-exempt encryption declarations set to `false` in both products;
+- no tracking or maintainer-collected data, no tracking domains, and only the
+  audited UserDefaults required-reason declaration (`CA92.1`);
+- generated iPhone/iPad launch and icon metadata plus compiled icon assets; and
+- one dependent Watch product bound to the iOS companion identifier and not
+  declared independently distributable.
+
+Any deliberate product or privacy change requires updating the implementation,
+App Store Connect answers, metadata documentation, and validator in one review.
 
 After local verification, validate and upload through Xcode Organizer or App
 Store Connect. TestFlight and a physical paired iPhone/Apple Watch smoke test

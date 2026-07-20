@@ -21,6 +21,8 @@
 - [ ] Watch simulator unit/UI suite passes with warnings as errors.
 - [ ] Static analysis passes for macOS and iOS/Watch Release graphs.
 - [ ] Secret scan and dependency audit pass.
+- [ ] Xcode product validation and fail-closed App Store product/privacy
+      validation pass for the unsigned archive and final exported IPA.
 
 ## Device and behavior gates
 
@@ -64,6 +66,10 @@
 - [ ] iOS app is `arm64`; embedded Watch app is `arm64_32` + `arm64`.
 - [ ] IPA includes both privacy manifests and the dependent Watch app.
 - [ ] iOS/Watch version and build values match.
+- [ ] Bundle IDs, version/build values, encryption declarations, launch/icon
+      metadata, and Watch companion relationship match the audited contract.
+- [ ] Both privacy manifests declare no tracking, no collected-data types, no
+      tracking domains, and only UserDefaults reason `CA92.1`.
 - [ ] Xcode/App Store validation passes without warning.
 - [ ] TestFlight install and full smoke test pass.
 

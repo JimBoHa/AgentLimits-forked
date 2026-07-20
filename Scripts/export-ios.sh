@@ -39,6 +39,8 @@ validated_development_team=""
 validated_development_team_config_hash=""
 # shellcheck disable=SC1091
 source "$script_dir/signing-config.sh"
+# shellcheck disable=SC1091
+source "$script_dir/app-store-product-validation.sh"
 
 if [[ ! -x "$developer_dir/usr/bin/xcodebuild" ]]; then
     echo "Xcode not found at $developer_dir" >&2
@@ -107,11 +109,26 @@ settings="$(xcodebuild \
 resolved_team_id="$(printf '%s\n' "$settings" \
     | sed -n 's/^[[:space:]]*DEVELOPMENT_TEAM = //p' \
     | head -1)"
+expected_version="$(printf '%s\n' "$settings" \
+    | sed -n 's/^[[:space:]]*MARKETING_VERSION = //p' \
+    | head -1)"
+expected_build="$(printf '%s\n' "$settings" \
+    | sed -n 's/^[[:space:]]*CURRENT_PROJECT_VERSION = //p' \
+    | head -1)"
+resolved_validate_product="$(printf '%s\n' "$settings" \
+    | sed -n 's/^[[:space:]]*VALIDATE_PRODUCT = //p' \
+    | head -1)"
 
 if [[ "$resolved_team_id" != "$team_id" ]]; then
     echo "Resolved Apple Team does not match the validated local config" >&2
     exit 78
 fi
+if [[ "$resolved_validate_product" != "YES" ]]; then
+    echo "iOS Release product validation is not enabled" >&2
+    exit 78
+fi
+app_store_validate_expected_version_build \
+    "$expected_version" "$expected_build"
 verify_source_unchanged
 
 archive="$output_dir/AgentLimits-iOS-watchOS.xcarchive"
@@ -187,9 +204,6 @@ for required_path in \
         exit 1
     fi
 done
-
-plutil -lint "$ios_app/PrivacyInfo.xcprivacy" >/dev/null
-plutil -lint "$watch_app/PrivacyInfo.xcprivacy" >/dev/null
 
 codesign --verify --deep --strict --verbose=4 "$ios_app"
 codesign --verify --deep --strict --verbose=4 "$watch_app"
@@ -277,18 +291,9 @@ watch_executable="$(plutil -extract CFBundleExecutable raw "$watch_info")"
 ios_archs="$(lipo -archs "$ios_app/$ios_executable")"
 watch_archs="$(lipo -archs "$watch_app/$watch_executable")"
 
-if [[ "$(plutil -extract CFBundleIdentifier raw "$ios_info")" \
-        != "com.jimboha.agentlimits.ios" \
-    || "$(plutil -extract CFBundleIdentifier raw "$watch_info")" \
-        != "com.jimboha.agentlimits.ios.watchkitapp" \
-    || "$(plutil -extract WKCompanionAppBundleIdentifier raw "$watch_info")" \
-        != "com.jimboha.agentlimits.ios" \
-    || "$(plutil -extract CFBundleShortVersionString raw "$watch_info")" \
-        != "$version" \
-    || "$(plutil -extract CFBundleVersion raw "$watch_info")" != "$build" ]]; then
-    echo "Exported iOS/watchOS identifiers or versions are inconsistent" >&2
-    exit 1
-fi
+validate_app_store_product \
+    "$ios_app" "$expected_version" "$expected_build" \
+    "$work_dir/app-store-product-validation"
 if [[ " $ios_archs " != *" arm64 "* ]]; then
     echo "Exported iOS app lacks arm64: $ios_archs" >&2
     exit 1
@@ -298,12 +303,6 @@ if [[ " $watch_archs " != *" arm64_32 "* \
     echo "Exported Watch app lacks device architectures: $watch_archs" >&2
     exit 1
 fi
-if [[ "$(plutil -extract WKRunsIndependentlyOfCompanionApp raw \
-        "$watch_info")" != "false" ]]; then
-    echo "Exported Watch app unexpectedly declares independent distribution" >&2
-    exit 1
-fi
-
 validate_profile \
     "$ios_app/embedded.mobileprovision" \
     "com.jimboha.agentlimits.ios" \

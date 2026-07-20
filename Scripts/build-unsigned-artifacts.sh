@@ -16,6 +16,8 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 project_root="$(cd "$script_dir/.." && pwd)"
 output_dir="$1"
 developer_dir="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}"
+# shellcheck disable=SC1091
+source "$script_dir/app-store-product-validation.sh"
 
 if [[ ! -x "$developer_dir/usr/bin/xcodebuild" ]]; then
     echo "Xcode not found at $developer_dir" >&2
@@ -129,16 +131,14 @@ if [[ "$(plutil -extract CFBundleShortVersionString raw "$ios_info")" != "$versi
 fi
 
 if [[ "$(plutil -extract CFBundleIdentifier raw "$mac_info")" \
-        != "com.jimboha.agentlimits.macos" \
-    || "$(plutil -extract CFBundleIdentifier raw "$ios_info")" \
-        != "com.jimboha.agentlimits.ios" \
-    || "$(plutil -extract CFBundleIdentifier raw "$watch_info")" \
-        != "com.jimboha.agentlimits.ios.watchkitapp" \
-    || "$(plutil -extract WKCompanionAppBundleIdentifier raw "$watch_info")" \
-        != "com.jimboha.agentlimits.ios" ]]; then
+        != "com.jimboha.agentlimits.macos" ]]; then
     echo "Unexpected release bundle identifiers" >&2
     exit 1
 fi
+
+validate_app_store_product \
+    "$ios_app" "$version" "$build" \
+    "$work_dir/app-store-product-validation"
 
 mac_executable="$(plutil -extract CFBundleExecutable raw "$mac_info")"
 ios_executable="$(plutil -extract CFBundleExecutable raw "$ios_info")"
@@ -167,17 +167,9 @@ if [[ " $watch_archs " != *" arm64_32 "* || " $watch_archs " != *" arm64 "* ]]; 
     echo "Watch app lacks expected device architectures: $watch_archs" >&2
     exit 1
 fi
-if [[ "$(plutil -extract WKRunsIndependentlyOfCompanionApp raw \
-        "$watch_info")" != "false" ]]; then
-    echo "Watch app unexpectedly declares independent distribution" >&2
-    exit 1
-fi
-
 for manifest in \
     "$mac_app/Contents/Resources/PrivacyInfo.xcprivacy" \
-    "$widget/Contents/Resources/PrivacyInfo.xcprivacy" \
-    "$ios_app/PrivacyInfo.xcprivacy" \
-    "$watch_app/PrivacyInfo.xcprivacy"; do
+    "$widget/Contents/Resources/PrivacyInfo.xcprivacy"; do
     plutil -lint "$manifest" >/dev/null
 done
 
