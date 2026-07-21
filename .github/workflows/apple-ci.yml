@@ -369,9 +369,6 @@ jobs:
             exit 69
           fi
           xcode_bundle="${canonical_developer_dir%/Contents/Developer}"
-          echo "Canonical Xcode signature before hardening:"
-          /usr/bin/codesign --verify --deep --strict --verbose=4 \
-            "$xcode_bundle"
           sudo chown -R root:wheel "$xcode_bundle"
           sudo chmod -RN "$xcode_bundle"
           sudo chmod -R go-w "$xcode_bundle"
@@ -382,9 +379,6 @@ jobs:
             "$canonical_developer_dir/usr" \
             "$canonical_developer_dir/usr/bin" \
             "$canonical_developer_dir/usr/bin/xcodebuild"
-          echo "Canonical Xcode signature after hardening:"
-          /usr/bin/codesign --verify --deep --strict --verbose=4 \
-            "$xcode_bundle"
           echo "Canonical Xcode trust metadata after hardening:"
           /usr/bin/stat -f '%Su:%Sg %Lp %N' \
             "$xcode_bundle" \

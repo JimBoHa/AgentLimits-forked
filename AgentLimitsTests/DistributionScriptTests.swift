@@ -374,14 +374,12 @@ final class DistributionScriptTests: XCTestCase {
         )
         XCTAssertTrue(
             helper.contains(
-                #"certificate leaf[field.1.2.840.113635.100.6.1.9] exists"#
+                #"anchor apple generic and (certificate leaf[field.1.2.840.113635.100.6.1.9] exists or certificate leaf[subject.OU] = "59GAB85EFG")"#
             )
         )
-        XCTAssertTrue(
-            helper.contains(
-                #"certificate leaf[subject.OU] = "59GAB85EFG""#
-            )
-        )
+        XCTAssertTrue(helper.contains("1.2.840.113635.100.6.1.9"))
+        XCTAssertFalse(helper.contains("1.2.840.113635.100.6.1.13"))
+        XCTAssertFalse(helper.contains("1.2.840.113635.100.6.2.6"))
         XCTAssertTrue(helper.contains(#"identifier "com.apple.dt.Xcode""#))
         XCTAssertTrue(helper.contains("'!' -uid 0"))
         XCTAssertTrue(helper.contains("-o -perm -0002"))
