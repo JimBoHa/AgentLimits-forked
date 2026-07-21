@@ -84,20 +84,73 @@ developer_dir="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}"
 local_config="$project_root/Configurations/DevelopmentTeam.local.xcconfig"
 validated_development_team=""
 validated_development_team_config_hash=""
-# shellcheck disable=SC1091
-source "$script_dir/signing-config.sh"
+trusted_signing_config_directory="$(
+    /usr/bin/mktemp -d /private/tmp/AgentLimits-signing-bootstrap.XXXXXX
+)" || {
+    echo "Could not create a trusted release bootstrap directory" >&2
+    exit 65
+}
+trusted_signing_config="$trusted_signing_config_directory/signing-config.sh"
+trusted_signing_config_metadata="$(
+    /usr/bin/stat -f '%u %Lp' "$trusted_signing_config_directory" 2>/dev/null
+)" || {
+    /bin/rmdir "$trusted_signing_config_directory" 2>/dev/null || true
+    echo "Could not validate the trusted release bootstrap directory" >&2
+    exit 65
+}
+if [[ ! "$trusted_signing_config_directory" =~ ^/private/tmp/AgentLimits-signing-bootstrap\.[A-Za-z0-9]{6}$ \
+    || -L "$trusted_signing_config_directory" \
+    || ! -d "$trusted_signing_config_directory" \
+    || "$trusted_signing_config_metadata" != "$(/usr/bin/id -u) 700" ]]; then
+    /bin/rmdir "$trusted_signing_config_directory" 2>/dev/null || true
+    echo "Could not secure the trusted release bootstrap directory" >&2
+    exit 65
+fi
+if ! /usr/bin/env -i \
+        GIT_ATTR_NOSYSTEM=1 \
+        GIT_CONFIG_GLOBAL=/dev/null \
+        GIT_CONFIG_NOSYSTEM=1 \
+        GIT_NO_REPLACE_OBJECTS=1 \
+        HOME="$HOME" \
+        LANG=C \
+        LC_ALL=C \
+        PATH=/usr/bin:/bin:/usr/sbin:/sbin \
+        /usr/bin/git -C "$project_root" cat-file blob \
+            HEAD:Scripts/signing-config.sh \
+        >"$trusted_signing_config"; then
+    /bin/rm -f "$trusted_signing_config"
+    /bin/rmdir "$trusted_signing_config_directory" 2>/dev/null || true
+    echo "Could not load the committed release bootstrap" >&2
+    exit 65
+fi
+/bin/chmod 0400 "$trusted_signing_config" || exit 65
+# shellcheck disable=SC1090
+source "$trusted_signing_config"
+/bin/rm -f "$trusted_signing_config" || exit 65
+/bin/rmdir "$trusted_signing_config_directory" || exit 65
+unset \
+    trusted_signing_config \
+    trusted_signing_config_directory \
+    trusted_signing_config_metadata
 sanitize_release_git_environment
+pin_clean_release_source "$project_root" || exit $?
+source_commit="$validated_release_source_commit"
+source_tree="$validated_release_source_tree"
 # shellcheck disable=SC1091
 source "$script_dir/release-output.sh"
 # shellcheck disable=SC1091
-source "$script_dir/release-artifact-validation.sh"
+source "$script_dir/apple-toolchain.sh"
 # shellcheck disable=SC1091
+source "$script_dir/release-artifact-validation.sh"
 source "$script_dir/app-store-product-validation.sh"
 
 if [[ ! -x "$developer_dir/usr/bin/xcodebuild" ]]; then
     echo "Xcode not found at $developer_dir" >&2
     exit 69
 fi
+validate_apple_distribution_toolchain \
+    "$developer_dir" iphoneos watchos || exit $?
+developer_dir="$validated_apple_developer_dir"
 if [[ ! -e "$local_config" && ! -L "$local_config" ]]; then
     echo "Missing $local_config" >&2
     echo "Copy the .example file and set your Apple Developer Team ID." >&2
@@ -111,10 +164,6 @@ output_parent="$validated_release_output_parent"
 output_parent_identity="$validated_release_output_parent_identity"
 output_name="$validated_release_output_name"
 release_output_dir="$validated_release_output_directory"
-pin_clean_release_source "$project_root" || exit $?
-source_commit="$validated_release_source_commit"
-source_tree="$validated_release_source_tree"
-
 verify_source_unchanged() {
     verify_development_team_config_unchanged \
         "$local_config" "$team_id" "$local_config_hash" || exit $?
@@ -286,6 +335,12 @@ if [[ "$archive_team" != "$team_id" || -z "$archive_identity" ]]; then
     echo "Archive is missing the expected Team or signing identity" >&2
     exit 1
 fi
+archive_ios_info="$archive/Products/Applications/AgentLimits.app/Info.plist"
+archive_watch_info="$archive/Products/Applications/AgentLimits.app/Watch/AgentLimitsWatch.app/Info.plist"
+verify_apple_product_toolchain_metadata \
+    "$archive_ios_info" iphoneos "Archived iOS app" || exit $?
+verify_apple_product_toolchain_metadata \
+    "$archive_watch_info" watchos "Archived Watch app" || exit $?
 
 validate_only_named_directory_entry \
     "$archive/Products/Applications" \
@@ -473,6 +528,10 @@ verify_distribution_signature "$watch_app" "Watch app"
 
 ios_info="$ios_app/Info.plist"
 watch_info="$watch_app/Info.plist"
+verify_apple_product_toolchain_metadata \
+    "$ios_info" iphoneos "Exported iOS app" || exit $?
+verify_apple_product_toolchain_metadata \
+    "$watch_info" watchos "Exported Watch app" || exit $?
 version="$(plutil -extract CFBundleShortVersionString raw "$ios_info")"
 build="$(plutil -extract CFBundleVersion raw "$ios_info")"
 ios_executable="$(plutil -extract CFBundleExecutable raw "$ios_info")"
@@ -573,12 +632,6 @@ ipa_name="AgentLimitsForked-$version-$build-$distribution_method.ipa"
 mv "$ipa" "$output_dir/$ipa_name"
 rm -rf "$export_dir"
 
-(
-    verify_source_unchanged
-    cd "$output_dir"
-    shasum -a 256 "$ipa_name" > SHA256SUMS
-)
-
 cat >"$output_dir/BUILD-METADATA.txt" <<EOF
 AgentLimits Forked $version ($build)
 Distribution method: $distribution_method
@@ -586,7 +639,9 @@ Team ID: $team_id
 Git commit: $source_commit
 Signing config SHA-256: $local_config_hash
 Build source: clean git archive with generated Team-only config
-Xcode: $(xcodebuild -version | tr '\n' ' ')
+Xcode: $validated_apple_xcode_version ($validated_apple_xcode_build), DTXcode $validated_apple_dtxcode
+iOS/iPadOS SDK: $validated_apple_iphoneos_sdk_version ($validated_apple_iphoneos_sdk_build)
+watchOS SDK: $validated_apple_watchos_sdk_version ($validated_apple_watchos_sdk_build)
 Watch app: embedded in iOS IPA
 iOS architectures: $ios_archs
 watchOS architectures: $watch_archs
@@ -595,6 +650,12 @@ Archive/product cardinality: passed
 dSYM UUID and architecture identity: passed
 Provisioning profile validity windows: passed
 EOF
+
+(
+    verify_source_unchanged
+    cd "$output_dir"
+    shasum -a 256 "$ipa_name" BUILD-METADATA.txt > SHA256SUMS
+)
 
 verify_source_unchanged
 # Both profiles use one timestamp, after every other fallible release check.

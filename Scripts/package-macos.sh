@@ -71,9 +71,58 @@ developer_dir="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}"
 local_config="$project_root/Configurations/DevelopmentTeam.local.xcconfig"
 validated_development_team=""
 validated_development_team_config_hash=""
-# shellcheck disable=SC1091
-source "$script_dir/signing-config.sh"
+trusted_signing_config_directory="$(
+    /usr/bin/mktemp -d /private/tmp/AgentLimits-signing-bootstrap.XXXXXX
+)" || {
+    echo "Could not create a trusted release bootstrap directory" >&2
+    exit 65
+}
+trusted_signing_config="$trusted_signing_config_directory/signing-config.sh"
+trusted_signing_config_metadata="$(
+    /usr/bin/stat -f '%u %Lp' "$trusted_signing_config_directory" 2>/dev/null
+)" || {
+    /bin/rmdir "$trusted_signing_config_directory" 2>/dev/null || true
+    echo "Could not validate the trusted release bootstrap directory" >&2
+    exit 65
+}
+if [[ ! "$trusted_signing_config_directory" =~ ^/private/tmp/AgentLimits-signing-bootstrap\.[A-Za-z0-9]{6}$ \
+    || -L "$trusted_signing_config_directory" \
+    || ! -d "$trusted_signing_config_directory" \
+    || "$trusted_signing_config_metadata" != "$(/usr/bin/id -u) 700" ]]; then
+    /bin/rmdir "$trusted_signing_config_directory" 2>/dev/null || true
+    echo "Could not secure the trusted release bootstrap directory" >&2
+    exit 65
+fi
+if ! /usr/bin/env -i \
+        GIT_ATTR_NOSYSTEM=1 \
+        GIT_CONFIG_GLOBAL=/dev/null \
+        GIT_CONFIG_NOSYSTEM=1 \
+        GIT_NO_REPLACE_OBJECTS=1 \
+        HOME="$HOME" \
+        LANG=C \
+        LC_ALL=C \
+        PATH=/usr/bin:/bin:/usr/sbin:/sbin \
+        /usr/bin/git -C "$project_root" cat-file blob \
+            HEAD:Scripts/signing-config.sh \
+        >"$trusted_signing_config"; then
+    /bin/rm -f "$trusted_signing_config"
+    /bin/rmdir "$trusted_signing_config_directory" 2>/dev/null || true
+    echo "Could not load the committed release bootstrap" >&2
+    exit 65
+fi
+/bin/chmod 0400 "$trusted_signing_config" || exit 65
+# shellcheck disable=SC1090
+source "$trusted_signing_config"
+/bin/rm -f "$trusted_signing_config" || exit 65
+/bin/rmdir "$trusted_signing_config_directory" || exit 65
+unset \
+    trusted_signing_config \
+    trusted_signing_config_directory \
+    trusted_signing_config_metadata
 sanitize_release_git_environment
+pin_clean_release_source "$project_root" || exit $?
+source_commit="$validated_release_source_commit"
+source_tree="$validated_release_source_tree"
 # shellcheck disable=SC1091
 source "$script_dir/notary-log.sh"
 # shellcheck disable=SC1091
@@ -83,6 +132,8 @@ source "$script_dir/macos-container-validation.sh"
 # shellcheck disable=SC1091
 source "$script_dir/release-output.sh"
 # shellcheck disable=SC1091
+source "$script_dir/apple-toolchain.sh"
+# shellcheck disable=SC1091
 source "$script_dir/release-artifact-validation.sh"
 validated_container_app=""
 validated_dmg_device=""
@@ -91,6 +142,8 @@ if [[ ! -x "$developer_dir/usr/bin/xcodebuild" ]]; then
     echo "Xcode not found at $developer_dir" >&2
     exit 69
 fi
+validate_apple_distribution_toolchain "$developer_dir" macosx || exit $?
+developer_dir="$validated_apple_developer_dir"
 if [[ ! -e "$local_config" && ! -L "$local_config" ]]; then
     echo "Missing $local_config" >&2
     echo "Copy the .example file and set your Apple Developer Team ID." >&2
@@ -104,10 +157,6 @@ output_parent="$validated_release_output_parent"
 output_parent_identity="$validated_release_output_parent_identity"
 output_name="$validated_release_output_name"
 release_output_dir="$validated_release_output_directory"
-pin_clean_release_source "$project_root" || exit $?
-source_commit="$validated_release_source_commit"
-source_tree="$validated_release_source_tree"
-
 verify_source_unchanged() {
     verify_development_team_config_unchanged \
         "$local_config" "$team_id" "$local_config_hash" || exit $?
@@ -289,6 +338,13 @@ if [[ "$archive_team" != "$team_id" || -z "$archive_identity" ]]; then
     echo "Archive is missing the expected Team or signing identity" >&2
     exit 1
 fi
+archive_app="$archive/Products/Applications/AgentLimitsForked.app"
+archive_widget="$archive_app/Contents/PlugIns/AgentLimitsWidgetExtension.appex"
+verify_apple_product_toolchain_metadata \
+    "$archive_app/Contents/Info.plist" macosx "Archived macOS app" || exit $?
+verify_apple_product_toolchain_metadata \
+    "$archive_widget/Contents/Info.plist" macosx "Archived macOS widget" \
+    || exit $?
 
 validate_only_named_directory_entry \
     "$archive/Products/Applications" \
@@ -722,6 +778,10 @@ build="$(plutil -extract CFBundleVersion raw "$app_info")"
 executable="$(plutil -extract CFBundleExecutable raw "$app_info")"
 architectures="$(lipo -archs "$app/Contents/MacOS/$executable")"
 widget_info="$widget/Contents/Info.plist"
+verify_apple_product_toolchain_metadata \
+    "$app_info" macosx "Developer ID app" || exit $?
+verify_apple_product_toolchain_metadata \
+    "$widget_info" macosx "Developer ID widget" || exit $?
 widget_executable="$(plutil -extract CFBundleExecutable raw "$widget_info")"
 widget_architectures="$(lipo -archs \
     "$widget/Contents/MacOS/$widget_executable")"
@@ -812,7 +872,7 @@ submit_notary() {
     local status
     local submit_exit=0
 
-    xcrun notarytool submit "$artifact" \
+    /usr/bin/xcrun --no-cache notarytool submit "$artifact" \
         --keychain-profile "$notary_profile" \
         --wait \
         --timeout 60m \
@@ -825,7 +885,7 @@ submit_notary() {
     fi
     submission_id="$(plutil -extract id raw "$result")"
     status="$(plutil -extract status raw "$result")"
-    xcrun notarytool log "$submission_id" \
+    /usr/bin/xcrun --no-cache notarytool log "$submission_id" \
         --keychain-profile "$notary_profile" \
         "$log" \
         >/dev/null
@@ -873,6 +933,10 @@ verify_packaged_app() {
         echo "$label is missing the regular app or widget bundle" >&2
         exit 1
     fi
+    verify_apple_product_toolchain_metadata \
+        "$candidate_info" macosx "$label" || exit $?
+    verify_apple_product_toolchain_metadata \
+        "$candidate_widget_info" macosx "$label widget" || exit $?
     codesign --verify --all-architectures --deep --strict --verbose=4 \
         "$candidate_app"
     verify_developer_id_signature \
@@ -934,7 +998,7 @@ verify_packaged_app() {
         fi
     done
 
-    xcrun stapler validate "$candidate_app"
+    /usr/bin/xcrun --no-cache stapler validate "$candidate_app"
     spctl --assess --type execute --verbose=4 "$candidate_app"
 }
 
@@ -944,8 +1008,8 @@ ditto -c -k --sequesterRsrc --keepParent "$app" "$temporary_notary_zip"
 
 echo "Notarizing the app..."
 submit_notary "$temporary_notary_zip" app
-xcrun stapler staple "$app"
-xcrun stapler validate "$app"
+/usr/bin/xcrun --no-cache stapler staple "$app"
+/usr/bin/xcrun --no-cache stapler validate "$app"
 reference_app_arm64_cdhash="$(code_directory_hash "$app" arm64 "macOS app")"
 reference_app_x86_64_cdhash="$(code_directory_hash "$app" x86_64 "macOS app")"
 reference_widget_arm64_cdhash="$(code_directory_hash \
@@ -979,8 +1043,8 @@ fi
 
 echo "Notarizing installer package..."
 submit_notary "$pkg" pkg
-xcrun stapler staple "$pkg"
-xcrun stapler validate "$pkg"
+/usr/bin/xcrun --no-cache stapler staple "$pkg"
+/usr/bin/xcrun --no-cache stapler validate "$pkg"
 final_package_signature="$(pkgutil --check-signature "$pkg" 2>&1)"
 if ! printf '%s\n' "$final_package_signature" \
         | grep -Fq "$installer_identity" \
@@ -1027,8 +1091,8 @@ hdiutil verify "$dmg" >/dev/null
 
 echo "Notarizing disk image..."
 submit_notary "$dmg" dmg
-xcrun stapler staple "$dmg"
-xcrun stapler validate "$dmg"
+/usr/bin/xcrun --no-cache stapler staple "$dmg"
+/usr/bin/xcrun --no-cache stapler validate "$dmg"
 codesign --verify --strict --verbose=4 "$dmg"
 hdiutil verify "$dmg" >/dev/null
 
@@ -1074,23 +1138,14 @@ spctl --assess --type open \
     --context context:primary-signature \
     --verbose=4 "$dmg"
 
-(
-    verify_source_unchanged
-    cd "$output_dir"
-    shasum -a 256 \
-        "$(basename "$zip")" \
-        "$(basename "$dmg")" \
-        "$(basename "$pkg")" \
-        > SHA256SUMS
-)
-
 cat >"$output_dir/BUILD-METADATA.txt" <<EOF
 AgentLimits Forked $version ($build)
 Team ID: $team_id
 Git commit: $source_commit
 Signing config SHA-256: $local_config_hash
 Build source: clean git archive with generated Team-only config
-Xcode: $(xcodebuild -version | tr '\n' ' ')
+Xcode: $validated_apple_xcode_version ($validated_apple_xcode_build), DTXcode $validated_apple_dtxcode
+macOS SDK: $validated_apple_macosx_sdk_version ($validated_apple_macosx_sdk_build)
 macOS architectures: $architectures
 macOS widget architectures: $widget_architectures
 Sparkle: $sparkle_version ($sparkle_revision), build $sparkle_build
@@ -1102,6 +1157,17 @@ Archive/product cardinality: passed
 dSYM UUID and architecture identity: passed
 Provisioning profile validity windows: passed
 EOF
+
+(
+    verify_source_unchanged
+    cd "$output_dir"
+    shasum -a 256 \
+        "$(basename "$zip")" \
+        "$(basename "$dmg")" \
+        "$(basename "$pkg")" \
+        BUILD-METADATA.txt \
+        > SHA256SUMS
+)
 
 verify_source_unchanged
 # Both profiles use one timestamp, after every other fallible release check.

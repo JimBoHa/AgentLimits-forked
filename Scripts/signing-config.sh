@@ -7,9 +7,34 @@
 validated_release_source_commit=""
 validated_release_source_tree=""
 
+sanitize_release_tool_environment() {
+    local variable
+
+    # System release tools must not inherit Clang-driver or loader injection,
+    # nor option files that can change grep, Perl, or bsdtar behavior before
+    # Xcode starts. Clear the complete dynamic namespaces, not only names known
+    # by today's toolchain.
+    for variable in "${!CCC_@}" "${!DYLD_@}"; do
+        if [[ -n "$variable" ]]; then
+            unset "$variable"
+        fi
+    done
+    unset \
+        BASH_ENV \
+        ENV \
+        GREP_OPTIONS \
+        PERL5OPT \
+        PERL5LIB \
+        PERLLIB \
+        TAR_READER_OPTIONS \
+        TAR_WRITER_OPTIONS \
+        COPYFILE_DISABLE
+}
+
 sanitize_release_git_environment() {
     local variable
 
+    sanitize_release_tool_environment
     # Repository selectors, command-line config injection, and replacement
     # refs must not redirect or reinterpret the source snapshot being signed.
     for variable in "${!GIT_@}"; do
@@ -51,6 +76,91 @@ sanitize_release_git_environment() {
         LC_ALL
 }
 
+run_release_git() (
+    # Apple /usr/bin/git is selected through xcrun. Repository validation must
+    # not be redirected or disabled by the Xcode chosen for the later build.
+    unset DEVELOPER_DIR
+    /usr/bin/git "$@"
+)
+
+verify_release_tracked_worktree_against_tree() {
+    local project_root="$1"
+    local expected_tree="$2"
+    local validation_directory
+    local validation_metadata
+    local validation_uid
+    local validation_mode
+    local current_uid
+    local index_path
+    local flags_path
+    local validation_status=0
+
+    if ! current_uid="$(/usr/bin/id -u 2>/dev/null)" \
+        || [[ ! "$current_uid" =~ ^[1-9][0-9]*$ ]]; then
+        echo "Could not determine the release account identity" >&2
+        return 65
+    fi
+    if ! validation_directory="$(
+            /usr/bin/mktemp -d \
+                /private/tmp/AgentLimits-release-index.XXXXXX
+        )"; then
+        echo "Could not create a private release index" >&2
+        return 65
+    fi
+    if [[ ! "$validation_directory" =~ ^/private/tmp/AgentLimits-release-index\.[A-Za-z0-9]{6}$ ]] \
+        || [[ -L "$validation_directory" || ! -d "$validation_directory" ]] \
+        || ! validation_metadata="$(
+            /usr/bin/stat -f '%u %Lp' "$validation_directory" 2>/dev/null
+        )" \
+        || [[ "$validation_metadata" == *$'\n'* ]]; then
+        /bin/rmdir "$validation_directory" 2>/dev/null || true
+        echo "Could not validate the private release index" >&2
+        return 65
+    fi
+    validation_uid="${validation_metadata%% *}"
+    validation_mode="${validation_metadata#* }"
+    if [[ "$validation_uid" != "$current_uid" \
+        || "$validation_mode" != 700 ]]; then
+        echo "Could not secure the private release index" >&2
+        /bin/rmdir "$validation_directory" 2>/dev/null || true
+        return 65
+    fi
+
+    index_path="$validation_directory/index"
+    flags_path="$validation_directory/index-flags"
+    if ! run_release_git -C "$project_root" ls-files -v -z \
+            >"$flags_path"; then
+        echo "Could not inspect release source index flags" >&2
+        validation_status=65
+    elif ! /usr/bin/perl -0ne \
+            'exit 1 if /\A(?:S|[a-z]) /' "$flags_path"; then
+        echo "Release source index contains hidden worktree flags" >&2
+        validation_status=65
+    elif ! GIT_INDEX_FILE="$index_path" \
+            run_release_git -C "$project_root" read-tree "$expected_tree"; then
+        echo "Could not create an independent release index" >&2
+        validation_status=65
+    elif ! GIT_INDEX_FILE="$index_path" \
+            run_release_git -c core.filemode=true -C "$project_root" \
+                update-index --refresh --ignore-submodules; then
+        echo "Tracked release source differs from the pinned tree" >&2
+        validation_status=65
+    elif ! GIT_INDEX_FILE="$index_path" \
+            run_release_git -c core.filemode=true -C "$project_root" \
+                diff-files --quiet --ignore-submodules=all --; then
+        echo "Tracked release source differs from the pinned tree" >&2
+        validation_status=65
+    fi
+
+    if ! /bin/rm -f \
+            "$flags_path" "$index_path" "$index_path.lock" \
+        || ! /bin/rmdir "$validation_directory"; then
+        echo "Could not remove the private release index" >&2
+        validation_status=65
+    fi
+    return "$validation_status"
+}
+
 pin_clean_release_source() {
     local project_root="$1"
     local canonical_root
@@ -66,19 +176,21 @@ pin_clean_release_source() {
         return 65
     fi
     canonical_root="$(cd "$project_root" >/dev/null && pwd -P)" || return 65
-    repository_root="$(/usr/bin/git -C "$canonical_root" rev-parse \
+    repository_root="$(run_release_git -C "$canonical_root" rev-parse \
         --show-toplevel)" || return 65
     if [[ "$repository_root" != "$canonical_root" ]]; then
         echo "Release source root does not match the Git worktree" >&2
         return 65
     fi
-    source_commit="$(/usr/bin/git -C "$canonical_root" rev-parse \
+    source_commit="$(run_release_git -C "$canonical_root" rev-parse \
         --verify 'HEAD^{commit}')" || return 65
-    source_tree="$(/usr/bin/git -C "$canonical_root" rev-parse \
+    source_tree="$(run_release_git -C "$canonical_root" rev-parse \
         --verify "$source_commit^{tree}")" || return 65
     validate_release_git_repository_configuration "$canonical_root" \
         || return $?
-    if ! status_output="$(/usr/bin/git \
+    verify_release_tracked_worktree_against_tree \
+        "$canonical_root" "$source_tree" || return $?
+    if ! status_output="$(run_release_git \
             -c core.fsmonitor=false \
             -c core.untrackedCache=false \
             -C "$canonical_root" status --no-renames \
@@ -104,13 +216,18 @@ verify_pinned_release_source_unchanged() {
     local actual_tree
     local status_output
 
-    actual_commit="$(/usr/bin/git -C "$project_root" rev-parse \
+    actual_commit="$(run_release_git -C "$project_root" rev-parse \
         --verify 'HEAD^{commit}')" || return 65
-    actual_tree="$(/usr/bin/git -C "$project_root" rev-parse \
+    actual_tree="$(run_release_git -C "$project_root" rev-parse \
         --verify "$actual_commit^{tree}")" || return 65
     validate_release_git_repository_configuration "$project_root" \
         || return $?
-    if ! status_output="$(/usr/bin/git \
+    if ! verify_release_tracked_worktree_against_tree \
+            "$project_root" "$expected_tree"; then
+        echo "Could not recheck the exact tracked release source" >&2
+        return 65
+    fi
+    if ! status_output="$(run_release_git \
             -c core.fsmonitor=false \
             -c core.untrackedCache=false \
             -C "$project_root" status --no-renames \
@@ -132,7 +249,7 @@ validate_release_git_repository_configuration() {
     local unsafe_configuration
     local config_status=0
 
-    unsafe_configuration="$(/usr/bin/git -C "$project_root" config \
+    unsafe_configuration="$(run_release_git -C "$project_root" config \
         --includes --name-only --get-regexp \
         '^(core\.fsmonitor|core\.attributesfile|filter\..*\.(clean|process|required))$')" \
         || config_status=$?
@@ -215,44 +332,101 @@ verify_development_team_config_unchanged() {
     fi
 }
 
-prepare_xcode_signing_environment() {
-    local sanitized_config="$1"
+sanitize_release_xcode_environment() {
     local variable
 
-    XCODE_XCCONFIG_FILE="$sanitized_config"
-    export XCODE_XCCONFIG_FILE
-    for variable in "${!DYLD_@}"; do
-        unset "$variable"
+    sanitize_release_tool_environment
+    # Release builds accept build settings only from checked-in project files,
+    # explicit xcodebuild arguments, and the validated Team-only xcconfig.
+    # These namespaces are concrete compiler/driver/loader override surfaces;
+    # clearing each whole namespace also covers new variables in those families.
+    for variable in \
+        "${!CCC_@}" \
+        "${!CLANG_@}" \
+        "${!DYLD_@}" \
+        "${!GCC_@}" \
+        "${!LD_@}" \
+        "${!RC_@}" \
+        "${!SWIFT_@}" \
+        "${!XCODE_@}" \
+        "${!XCRUN_@}" \
+        "${!xcrun_@}"; do
+        if [[ -n "$variable" ]]; then
+            unset "$variable"
+        fi
     done
-    for variable in "${!CCC_@}"; do
-        unset "$variable"
-    done
+
     unset \
-        TOOLCHAINS \
-        XCRUN_TOOLCHAIN_NAME \
+        ARCHS \
+        EXCLUDED_ARCHS \
+        ONLY_ACTIVE_ARCH \
+        VALID_ARCHS \
         SDKROOT \
+        CCC_ADD_ARGS \
+        CCC_OVERRIDE_OPTIONS \
+        CCC_PRINT_OPTIONS \
+        CCC_PRINT_OPTIONS_FILE \
+        ADDITIONAL_SWIFT_DRIVER_FLAGS \
         CC \
         CXX \
+        CPP \
         LD \
         AR \
         AS \
         NM \
         RANLIB \
         STRIP \
+        LIPO \
+        LIBTOOL \
+        OTOOL \
+        DSYMUTIL \
+        CODESIGN_ALLOCATE \
         COMPILER_PATH \
         GCC_EXEC_PREFIX \
         CPATH \
         C_INCLUDE_PATH \
         CPLUS_INCLUDE_PATH \
         OBJC_INCLUDE_PATH \
+        OBJCPLUS_INCLUDE_PATH \
         LIBRARY_PATH \
-        LD_LIBRARY_PATH \
-        DYLD_LIBRARY_PATH \
-        DYLD_FRAMEWORK_PATH \
+        FRAMEWORK_SEARCH_PATHS \
+        HEADER_SEARCH_PATHS \
+        LIBRARY_SEARCH_PATHS \
+        SYSTEM_FRAMEWORK_SEARCH_PATHS \
+        SYSTEM_HEADER_SEARCH_PATHS \
+        USER_HEADER_SEARCH_PATHS \
+        CLANG_MODULE_CACHE_PATH \
+        MODULE_CACHE_DIR \
+        OTHER_CFLAGS \
+        OTHER_CPLUSPLUSFLAGS \
+        OTHER_LDFLAGS \
+        OTHER_SWIFT_FLAGS \
+        GCC_PREPROCESSOR_DEFINITIONS \
         SWIFT_EXEC \
         SWIFT_FRONTEND_EXEC \
         SWIFT_DRIVER_SWIFT_FRONTEND_EXEC \
+        SWIFT_DRIVER_SWIFTSCAN_LIB \
+        SWIFT_DRIVER_TOOLCHAIN_CASPLUGIN_LIB \
+        SWIFT_INCLUDE_PATHS \
+        SWIFT_PLUGIN_SEARCH_PATHS \
+        TOOLCHAINS \
+        XCRUN_TOOLCHAIN_NAME \
         MACOSX_DEPLOYMENT_TARGET \
         IPHONEOS_DEPLOYMENT_TARGET \
-        WATCHOS_DEPLOYMENT_TARGET
+        WATCHOS_DEPLOYMENT_TARGET \
+        ZERO_AR_DATE \
+        GREP_OPTIONS \
+        xcrun_verbose \
+        xcrun_log
+    COPY_EXTENDED_ATTRIBUTES_DISABLE=1
+    COPYFILE_DISABLE=1
+    export COPY_EXTENDED_ATTRIBUTES_DISABLE COPYFILE_DISABLE
+}
+
+prepare_xcode_signing_environment() {
+    local sanitized_config="$1"
+
+    sanitize_release_xcode_environment
+    XCODE_XCCONFIG_FILE="$sanitized_config"
+    export XCODE_XCCONFIG_FILE
 }

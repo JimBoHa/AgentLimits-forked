@@ -7,6 +7,8 @@
       iOS, and Watch targets.
 - [ ] The App Store Connect build number has not already been used.
 - [ ] Dependencies are locked and their security advisories reviewed.
+- [ ] Selected Xcode is version 26 or later; macOS, iOS/iPadOS, and watchOS
+      device SDKs are version 26 or later.
 - [ ] `LICENSE` and complete Sparkle notices are present in source and product.
 - [ ] Privacy policy, privacy manifests, App Store privacy answers, and review
       notes describe the shipping behavior.
@@ -41,6 +43,8 @@
 ## macOS signing and notarization
 
 - [ ] Archive records the intended Team and Developer ID Application identity.
+- [ ] App and widget `DTXcode`/`DTSDK` metadata exactly matches toolchain
+      preflight and the recorded build metadata.
 - [ ] App and widget signatures verify strictly; hardened runtime is present.
 - [ ] Every pinned Sparkle code object and architecture slice has the same Team,
       Developer ID trust, hardened runtime, secure timestamp, expected
@@ -68,6 +72,8 @@
 ## iOS, iPadOS, and watchOS distribution
 
 - [ ] Archive records the intended Team and distribution profiles.
+- [ ] iOS and Watch `DTXcode`/`DTSDK` metadata exactly matches toolchain
+      preflight and the recorded build metadata.
 - [ ] Export produces exactly one IPA, one Payload app, and one embedded Watch
       app; no duplicate product can be selected implicitly.
 - [ ] Exported IPA signatures and embedded profiles match all bundle IDs; each

@@ -51,6 +51,34 @@ inherited Xcode config/toolchain overrides and use the system release-tool path.
 Never commit certificates, private keys, provisioning profiles, App Store
 Connect keys, passwords, or notarization credentials.
 
+## Apple upload toolchain floor
+
+[Apple requires](https://developer.apple.com/news/upcoming-requirements/?id=02032026a)
+App Store Connect uploads made on or after April 28, 2026 to use Xcode 26 or
+later. iOS and iPadOS uploads must use the iOS 26 SDK or later, and embedded
+watchOS apps must use the watchOS 26 SDK or later.
+
+Every release script fails before building unless the selected Xcode and each
+needed device SDK meet version 26. The selected canonical Xcode app and every
+ancestor directory must be root-owned and non-writable by the release account;
+the bundle must also pass strict Apple-signature verification before
+`xcodebuild` runs. This prevents replacing a validated bundle through a
+writable parent while a release is running. Standard administrator-writable
+`/Applications` installations can be locked for the release window with
+`sudo chmod 0755 /Applications` and restored afterward with
+`sudo chmod 0775 /Applications`. Version components are parsed and
+compared as bounded decimal integers, so values such as `26.10` are handled
+correctly and malformed output is rejected. The project applies the same Xcode
+26 and macOS 26 SDK floor to Developer ID and unsigned macOS preflight builds so
+every release unit uses one current toolchain baseline.
+
+After each archive and export, the scripts require every first-party app and
+extension to record the exact preflight `DTXcode`, `DTXcodeBuild`, `DTSDKName`,
+`DTSDKBuild`, platform name, and platform version. Any change visible in those
+recorded values fails closed instead of producing mixed-version provenance.
+The validated versions and builds are recorded in `BUILD-METADATA.txt` and
+covered by `SHA256SUMS`.
+
 ## Unsigned preflight artifacts
 
 Use this only to prove the Release archive and installer layout before signing
@@ -61,11 +89,15 @@ Scripts/build-unsigned-artifacts.sh /absolute/output/directory
 ```
 
 The output includes unsigned macOS ZIP/DMG/PKG files and unsigned macOS and
-iOS/watchOS archives. The builder requires a clean Git tree, proves an exact
-immutable snapshot of the recorded tree, rejects executable local Git status
-configuration, ignores inherited Git selectors and replacement refs, replaces
-inherited Xcode overrides, and publishes only after validation succeeds. Invoke
-the checked-in script directly, not through Bash or a symlink. The output parent
+iOS/watchOS archives. The builder requires a clean Git tree, rejects hidden
+`assume-unchanged` and `skip-worktree` index flags, independently compares
+tracked contents and modes with the pinned tree, and proves an exact immutable
+snapshot of that tree. Release entrypoints load their initial validation helper
+from the committed Git blob before sourcing any worktree helper. They also
+reject executable local Git status configuration, ignore inherited Git
+selectors and replacement refs, replace inherited Xcode overrides, and publish
+only after validation succeeds. Invoke the checked-in script directly, not
+through Bash or a symlink. The output parent
 must already exist, be owned by
 the current user, and have no group/other write mode or ACL that grants mutation
 access. A per-destination lock plus identity-checked directory descriptors and
