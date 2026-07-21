@@ -139,6 +139,7 @@ apple_validate_xcode_bundle_trust() {
     local user_id
     local user_groups
     local group_id
+    local signature_error
     local untrusted_bundle_entry
     local xcode_requirement
     local -a find_arguments
@@ -268,10 +269,13 @@ apple_validate_xcode_bundle_trust() {
         return 69
     fi
     xcode_requirement='(anchor apple generic and certificate leaf[field.1.2.840.113635.100.6.1.9] exists or anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and certificate leaf[subject.OU] = "59GAB85EFG") and identifier "com.apple.dt.Xcode"'
-    if ! /usr/bin/codesign --verify --deep --strict --verbose=0 \
-        -R="$xcode_requirement" \
-        "$xcode_bundle" >/dev/null 2>&1; then
+    if ! signature_error="$(
+            /usr/bin/codesign --verify --deep --strict --verbose=4 \
+                -R="$xcode_requirement" \
+                "$xcode_bundle" 2>&1 >/dev/null
+        )"; then
         echo "Selected Xcode does not have a valid Apple signature" >&2
+        printf '%s\n' "$signature_error" >&2
         return 69
     fi
 }
