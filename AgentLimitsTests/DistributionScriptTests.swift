@@ -3765,6 +3765,46 @@ final class DistributionScriptTests: XCTestCase {
             of: #"xcode_bundle="${canonical_developer_dir%/Contents/Developer}""#,
             in: workflow
         )
+        let ownBundle = try offset(
+            of: #"sudo chown -R root:wheel "$xcode_bundle""#,
+            in: workflow
+        )
+        let clearACLs = try offset(
+            of: #"sudo chmod -RN "$xcode_bundle""#,
+            in: workflow
+        )
+        let clearWriteAccess = try offset(
+            of: #"sudo chmod -R go-w "$xcode_bundle""#,
+            in: workflow
+        )
+        let lockSelectedNodes = try offset(
+            of: "sudo chmod 0755 \\",
+            in: workflow,
+            after: clearWriteAccess
+        )
+        let reportMetadata = try offset(
+            of: "Canonical Xcode trust metadata after hardening:",
+            in: workflow
+        )
+        let reportTrustPaths = try offset(
+            of: #"/usr/bin/stat -f '%Su:%Sg %Lp %N'"#,
+            in: workflow,
+            after: reportMetadata
+        )
+        let inspectBundle = try offset(
+            of: #"sudo /usr/bin/find -x "$xcode_bundle""#,
+            in: workflow,
+            after: reportTrustPaths
+        )
+        let diagnoseUntrustedEntry = try offset(
+            of: "Canonical Xcode hardening left an untrusted entry:",
+            in: workflow
+        )
+        let diagnoseUntrustedMetadata = try offset(
+            of: #"sudo /usr/bin/stat -f '%Su:%Sg %Lp %N'"#,
+            in: workflow,
+            after: diagnoseUntrustedEntry
+        )
         let export = try offset(
             of: #"printf 'DEVELOPER_DIR=%s\n' "$canonical_developer_dir" >> "$GITHUB_ENV""#,
             in: workflow
@@ -3777,11 +3817,25 @@ final class DistributionScriptTests: XCTestCase {
         XCTAssertLessThan(lock, resolve)
         XCTAssertLessThan(resolve, validate)
         XCTAssertLessThan(validate, lockBundle)
-        XCTAssertLessThan(lockBundle, export)
+        XCTAssertLessThan(lockBundle, ownBundle)
+        XCTAssertLessThan(ownBundle, clearACLs)
+        XCTAssertLessThan(clearACLs, clearWriteAccess)
+        XCTAssertLessThan(clearWriteAccess, lockSelectedNodes)
+        XCTAssertLessThan(lockSelectedNodes, reportMetadata)
+        XCTAssertLessThan(reportMetadata, reportTrustPaths)
+        XCTAssertLessThan(reportTrustPaths, inspectBundle)
+        XCTAssertLessThan(inspectBundle, diagnoseUntrustedEntry)
+        XCTAssertLessThan(diagnoseUntrustedEntry, diagnoseUntrustedMetadata)
+        XCTAssertLessThan(diagnoseUntrustedMetadata, export)
         XCTAssertLessThan(export, build)
         XCTAssertTrue(
             workflow.contains(
                 #""$canonical_developer_dir/usr/bin/xcodebuild""#
+            )
+        )
+        XCTAssertTrue(
+            workflow.contains(
+                #"\( ! -uid 0 -o -perm -0022 -o -acl \)"#
             )
         )
     }
