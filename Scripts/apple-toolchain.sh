@@ -104,12 +104,18 @@ apple_require_minimum_version() {
 
 apple_run_selected_tool() (
     local developer_dir="$1"
+    local variable
 
     shift
     # Toolchain discovery needs no caller-controlled build setting, compiler
     # path, plugin path, loader path, cache control, or user configuration.
     # Start from an allowlist so new override variables cannot silently bypass
-    # a denylist. --no-cache is applied by each xcrun caller below.
+    # a denylist. Clear loader variables with shell built-ins before launching
+    # /usr/bin/env; otherwise dyld can consume them before env -i takes effect.
+    # --no-cache is applied by each xcrun caller below.
+    for variable in "${!DYLD_@}"; do
+        unset "$variable"
+    done
     unset xcrun_verbose xcrun_log
     /usr/bin/env -i \
         DEVELOPER_DIR="$developer_dir" \
