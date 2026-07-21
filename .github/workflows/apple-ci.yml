@@ -64,11 +64,7 @@ jobs:
           git diff --check "$comparison_base" HEAD
 
       - name: Reject common committed secrets
-        run: |
-          if git grep -nE '(ghp_[[:alnum:]]{20,}|github_pat_[[:alnum:]_]{20,}|-----BEGIN ((RSA|EC|OPENSSH|ENCRYPTED) )?PRIVATE KEY-----)' -- .; then
-            echo 'Possible credential or private key committed to source.' >&2
-            exit 1
-          fi
+        run: Scripts/reject-common-secrets.sh
 
       - name: Reject committed Apple credential artifacts
         run: Scripts/reject-apple-credential-artifacts.sh
