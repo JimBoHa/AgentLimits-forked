@@ -172,7 +172,29 @@ if [[ ! "$pair_udid" =~ $uuid_pattern ]]; then
   exit 65
 fi
 
-xcrun simctl pair_activate "$pair_udid" >&2
+pairs_json="$(xcrun simctl list pairs --json)"
+if ! jq -e \
+  --arg pair "$pair_udid" \
+  --arg phone "$phone_udid" \
+  --arg watch "$watch_udid" '
+    .pairs[$pair] as $entry
+    | $entry != null
+      and $entry.phone.udid == $phone
+      and $entry.watch.udid == $watch
+  ' <<< "$pairs_json" >/dev/null; then
+  echo "simctl did not register the requested simulator pair: $pair_udid" >&2
+  xcrun simctl list pairs >&2 || true
+  exit 69
+fi
+
+if ! jq -e \
+  --arg pair "$pair_udid" '
+    .pairs[$pair].state // ""
+    | tostring
+    | test("(^|[^A-Za-z])active([^A-Za-z]|$)")
+  ' <<< "$pairs_json" >/dev/null; then
+  xcrun simctl pair_activate "$pair_udid" >&2
+fi
 xcrun simctl bootstatus "$phone_udid" -b >&2
 xcrun simctl bootstatus "$watch_udid" -b >&2
 
@@ -189,8 +211,8 @@ for (( readiness_attempt = 1; readiness_attempt <= 60; readiness_attempt++ )); d
         and $entry.phone.state == "Booted"
         and $entry.watch.udid == $watch
         and $entry.watch.state == "Booted"
-        and ($entry.state | contains("active"))
-        and ($entry.state | contains("connected"))
+        and ($entry.state | test("(^|[^A-Za-z])active([^A-Za-z]|$)"))
+        and ($entry.state | test("(^|[^A-Za-z])connected([^A-Za-z]|$)"))
     ' <<< "$pairs_json" >/dev/null; then
     pair_ready=1
     break

@@ -4004,6 +4004,7 @@ final class DistributionScriptTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: directory) }
         let fakeXcrun = directory.appendingPathComponent("xcrun")
         let successLog = directory.appendingPathComponent("success.log")
+        let activeLog = directory.appendingPathComponent("active.log")
         let failureLog = directory.appendingPathComponent("failure.log")
         let phoneUDID = "11111111-1111-1111-1111-111111111111"
         let watchUDID = "22222222-2222-2222-2222-222222222222"
@@ -4025,13 +4026,23 @@ final class DistributionScriptTests: XCTestCase {
         elif [[ "$1 $2" == "simctl pair" ]]; then
           printf '%s\n' '\#(pairUDID)'
         elif [[ "$1 $2" == "simctl pair_activate" ]]; then
+          if [[ "${AGENTLIMITS_FAKE_PAIR_ALREADY_ACTIVE:-0}" == "1" ]]; then
+            exit 37
+          fi
+          if [[ "${AGENTLIMITS_FAKE_FAIL_PAIR_ACTIVATION:-0}" == "1" ]]; then
+            exit 43
+          fi
           exit 0
         elif [[ "$1 $2" == "simctl bootstatus" ]]; then
           if [[ "${AGENTLIMITS_FAKE_FAIL_WATCH_BOOT:-0}" == "1" && "$3" == "\#(watchUDID)" ]]; then
             exit 42
           fi
         elif [[ "$1 $2 $3" == "simctl list pairs" ]]; then
-          printf '%s\n' '{"pairs":{"\#(pairUDID)":{"watch":{"udid":"\#(watchUDID)","state":"Booted"},"phone":{"udid":"\#(phoneUDID)","state":"Booted"},"state":"(active, connected)"}}}'
+          pair_state='(inactive, disconnected)'
+          if [[ "${AGENTLIMITS_FAKE_PAIR_ALREADY_ACTIVE:-0}" == "1" ]] || grep -q '^simctl pair_activate ' "$AGENTLIMITS_FAKE_XCRUN_LOG"; then
+            pair_state='(active, connected)'
+          fi
+          printf '%s%s%s\n' '{"pairs":{"\#(pairUDID)":{"watch":{"udid":"\#(watchUDID)","state":"Booted"},"phone":{"udid":"\#(phoneUDID)","state":"Booted"},"state":"' "$pair_state" '"}}}'
         elif [[ "$1 $2" == "simctl unpair" || "$1 $2" == "simctl shutdown" || "$1 $2" == "simctl delete" ]]; then
           exit 0
         else
@@ -4089,9 +4100,15 @@ final class DistributionScriptTests: XCTestCase {
             of: "simctl pair \(watchUDID) \(phoneUDID)",
             in: successCalls
         )
+        let verifyPair = try offset(
+            of: "simctl list pairs --json",
+            in: successCalls,
+            after: pair
+        )
         let activate = try offset(
             of: "simctl pair_activate \(pairUDID)",
-            in: successCalls
+            in: successCalls,
+            after: verifyPair
         )
         let bootPhone = try offset(
             of: "simctl bootstatus \(phoneUDID) -b",
@@ -4101,14 +4118,44 @@ final class DistributionScriptTests: XCTestCase {
             of: "simctl bootstatus \(watchUDID) -b",
             in: successCalls
         )
-        let ready = try offset(of: "simctl list pairs --json", in: successCalls)
+        let ready = try offset(
+            of: "simctl list pairs --json",
+            in: successCalls,
+            after: bootWatch
+        )
         XCTAssertLessThan(createPhone, createWatch)
         XCTAssertLessThan(createWatch, pair)
-        XCTAssertLessThan(pair, activate)
+        XCTAssertLessThan(pair, verifyPair)
+        XCTAssertLessThan(verifyPair, activate)
         XCTAssertLessThan(activate, bootPhone)
         XCTAssertLessThan(bootPhone, bootWatch)
         XCTAssertLessThan(bootWatch, ready)
         XCTAssertFalse(successCalls.contains("simctl delete"))
+
+        let active = try runReleaseScript(
+            relativePath: "Scripts/create-ci-watch-pair.sh",
+            arguments: [
+                "iPhone 17 Pro",
+                "Apple Watch Series 11 (46mm)"
+            ],
+            environment: commonEnvironment.merging(
+                [
+                    "AGENTLIMITS_FAKE_PAIR_ALREADY_ACTIVE": "1",
+                    "AGENTLIMITS_FAKE_XCRUN_LOG": activeLog.path
+                ],
+                uniquingKeysWith: { _, override in override }
+            )
+        )
+        XCTAssertEqual(active.status, 0, active.output)
+        let activeCalls = try String(
+            contentsOf: activeLog,
+            encoding: .utf8
+        )
+        XCTAssertTrue(activeCalls.contains("simctl list pairs --json"))
+        XCTAssertFalse(
+            activeCalls.contains("simctl pair_activate"),
+            activeCalls
+        )
 
         let failure = try runReleaseScript(
             relativePath: "Scripts/create-ci-watch-pair.sh",
@@ -4118,13 +4165,13 @@ final class DistributionScriptTests: XCTestCase {
             ],
             environment: commonEnvironment.merging(
                 [
-                    "AGENTLIMITS_FAKE_FAIL_WATCH_BOOT": "1",
+                    "AGENTLIMITS_FAKE_FAIL_PAIR_ACTIVATION": "1",
                     "AGENTLIMITS_FAKE_XCRUN_LOG": failureLog.path
                 ],
                 uniquingKeysWith: { _, override in override }
             )
         )
-        XCTAssertEqual(failure.status, 42, failure.output)
+        XCTAssertEqual(failure.status, 43, failure.output)
         let failureCalls = try String(
             contentsOf: failureLog,
             encoding: .utf8
