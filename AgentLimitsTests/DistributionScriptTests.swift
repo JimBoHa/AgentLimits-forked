@@ -84,6 +84,10 @@ final class DistributionScriptTests: XCTestCase {
 
         result = try runCommonSecretGuard(repository: repository)
         XCTAssertEqual(result.status, 78, result.output)
+        XCTAssertFalse(
+            result.output.contains(String(repeating: "A", count: 32)),
+            "Secret guard leaked a matched token: \(result.output)"
+        )
         for path in fixturePaths {
             XCTAssertTrue(result.output.contains(path), result.output)
         }
