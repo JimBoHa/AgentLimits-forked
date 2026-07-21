@@ -3761,6 +3761,10 @@ final class DistributionScriptTests: XCTestCase {
             of: #"^/Applications/[A-Za-z0-9._+-]+\.app/Contents/Developer$"#,
             in: workflow
         )
+        let lockBundle = try offset(
+            of: #"xcode_bundle="${canonical_developer_dir%/Contents/Developer}""#,
+            in: workflow
+        )
         let export = try offset(
             of: #"printf 'DEVELOPER_DIR=%s\n' "$canonical_developer_dir" >> "$GITHUB_ENV""#,
             in: workflow
@@ -3772,8 +3776,14 @@ final class DistributionScriptTests: XCTestCase {
 
         XCTAssertLessThan(lock, resolve)
         XCTAssertLessThan(resolve, validate)
-        XCTAssertLessThan(validate, export)
+        XCTAssertLessThan(validate, lockBundle)
+        XCTAssertLessThan(lockBundle, export)
         XCTAssertLessThan(export, build)
+        XCTAssertTrue(
+            workflow.contains(
+                #""$canonical_developer_dir/usr/bin/xcodebuild""#
+            )
+        )
     }
 
     func testCISimulatorProvisionerCreatesLatestRequestedDevice() throws {
