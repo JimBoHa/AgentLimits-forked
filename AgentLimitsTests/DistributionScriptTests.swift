@@ -3750,6 +3750,32 @@ final class DistributionScriptTests: XCTestCase {
         )
     }
 
+    func testUnsignedReleasePreflightSelectsCanonicalLockedXcode() throws {
+        let workflow = try repositoryText(".github/workflows/apple-ci.yml")
+        let lock = try offset(of: "sudo chmod 0755 /Applications", in: workflow)
+        let resolve = try offset(
+            of: #"canonical_developer_dir="$(cd "$DEVELOPER_DIR" && pwd -P)""#,
+            in: workflow
+        )
+        let validate = try offset(
+            of: #"^/Applications/[A-Za-z0-9._+-]+\.app/Contents/Developer$"#,
+            in: workflow
+        )
+        let export = try offset(
+            of: #"printf 'DEVELOPER_DIR=%s\n' "$canonical_developer_dir" >> "$GITHUB_ENV""#,
+            in: workflow
+        )
+        let build = try offset(
+            of: #"Scripts/build-unsigned-artifacts.sh "$RUNNER_TEMP/preflight""#,
+            in: workflow
+        )
+
+        XCTAssertLessThan(lock, resolve)
+        XCTAssertLessThan(resolve, validate)
+        XCTAssertLessThan(validate, export)
+        XCTAssertLessThan(export, build)
+    }
+
     func testCISimulatorProvisionerCreatesLatestRequestedDevice() throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }

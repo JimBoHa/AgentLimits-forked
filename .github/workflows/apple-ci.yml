@@ -360,9 +360,15 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Lock selected Xcode parent against replacement
+      - name: Lock and select canonical Xcode
         run: |
           sudo chmod 0755 /Applications
+          canonical_developer_dir="$(cd "$DEVELOPER_DIR" && pwd -P)"
+          if [[ ! "$canonical_developer_dir" =~ ^/Applications/[A-Za-z0-9._+-]+\.app/Contents/Developer$ ]]; then
+            echo "Selected Xcode resolved outside the expected app-bundle path" >&2
+            exit 69
+          fi
+          printf 'DEVELOPER_DIR=%s\n' "$canonical_developer_dir" >> "$GITHUB_ENV"
 
       - name: Build and inspect unsigned release artifacts
         run: |
