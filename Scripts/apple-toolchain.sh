@@ -268,10 +268,11 @@ apple_validate_xcode_bundle_trust() {
         echo "Apple distribution Xcode path is incomplete" >&2
         return 69
     fi
-    # Developer ID certificate policy extensions can change between Xcode
-    # releases. Accept Apple's Mac App Store signing marker or Apple's stable
-    # Xcode signing Team, always under Apple's anchor and the exact bundle ID.
-    xcode_requirement='anchor apple generic and (certificate leaf[field.1.2.840.113635.100.6.1.9] exists or certificate leaf[subject.OU] = "59GAB85EFG") and identifier "com.apple.dt.Xcode"'
+    # Apple distributes Xcode with both direct Apple signatures and generic
+    # Apple-PKI signatures. For the generic chain, additionally require the
+    # Mac App Store marker or Apple's stable Xcode signing Team. Both paths
+    # remain bound to the exact Xcode bundle identifier.
+    xcode_requirement='(anchor apple or (anchor apple generic and (certificate leaf[field.1.2.840.113635.100.6.1.9] exists or certificate leaf[subject.OU] = "59GAB85EFG"))) and identifier "com.apple.dt.Xcode"'
     if ! signature_error="$(
             /usr/bin/codesign --verify --deep --strict --verbose=1 \
                 -R="$xcode_requirement" \

@@ -374,7 +374,7 @@ final class DistributionScriptTests: XCTestCase {
         )
         XCTAssertTrue(
             helper.contains(
-                #"anchor apple generic and (certificate leaf[field.1.2.840.113635.100.6.1.9] exists or certificate leaf[subject.OU] = "59GAB85EFG")"#
+                #"(anchor apple or (anchor apple generic and (certificate leaf[field.1.2.840.113635.100.6.1.9] exists or certificate leaf[subject.OU] = "59GAB85EFG")))"#
             )
         )
         XCTAssertTrue(helper.contains("1.2.840.113635.100.6.1.9"))
