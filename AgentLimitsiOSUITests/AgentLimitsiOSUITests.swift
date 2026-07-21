@@ -71,7 +71,7 @@ final class AgentLimitsiOSUITests: XCTestCase {
 
     @MainActor
     func testAccessibilityTextSizeKeepsCoreControlsReachable() {
-        XCUIDevice.shared.orientation = .portrait
+        setOrientationIfNeeded(.portrait)
         let app = XCUIApplication()
         app.launchArguments = [
             "-ui-testing-reset",
@@ -89,7 +89,7 @@ final class AgentLimitsiOSUITests: XCTestCase {
 
     @MainActor
     func testLandscapeLayoutKeepsNavigationAndAccountsReachable() {
-        defer { XCUIDevice.shared.orientation = .portrait }
+        defer { setOrientationIfNeeded(.portrait) }
         let app = launchFreshApp(orientation: .landscapeLeft)
 
         XCTAssertTrue(app.buttons["mobile.addAccount"].waitForExistence(timeout: 5))
@@ -106,11 +106,17 @@ final class AgentLimitsiOSUITests: XCTestCase {
     private func launchFreshApp(
         orientation: UIDeviceOrientation = .portrait
     ) -> XCUIApplication {
-        XCUIDevice.shared.orientation = orientation
+        setOrientationIfNeeded(orientation)
         let app = XCUIApplication()
         app.launchArguments = ["-ui-testing-reset"]
         app.launch()
         return app
+    }
+
+    @MainActor
+    private func setOrientationIfNeeded(_ orientation: UIDeviceOrientation) {
+        guard XCUIDevice.shared.orientation != orientation else { return }
+        XCUIDevice.shared.orientation = orientation
     }
 
     @MainActor
