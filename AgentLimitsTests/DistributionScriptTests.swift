@@ -3719,9 +3719,66 @@ final class DistributionScriptTests: XCTestCase {
         )
     }
 
-    func testAppleCIProvisionsDedicatedIOSSimulators() throws {
+    func testAppleCIWarmsDedicatedIOSDeviceWithoutClonesOrRetries() throws {
         let workflow = try repositoryText(".github/workflows/apple-ci.yml")
+        let provision = try offset(
+            of: "- name: Provision dedicated iOS simulator",
+            in: workflow
+        )
+        let build = try offset(
+            of: "- name: Build iOS tests",
+            in: workflow,
+            after: provision
+        )
+        let installStep = try offset(
+            of: "- name: Install and prelaunch iOS test host",
+            in: workflow,
+            after: build
+        )
+        let install = try offset(
+            of: #"xcrun simctl install "$IOS_SIMULATOR_UDID" "$ios_app""#,
+            in: workflow,
+            after: installStep
+        )
+        let verify = try offset(
+            of: "xcrun simctl get_app_container",
+            in: workflow,
+            after: install
+        )
+        let launch = try offset(
+            of: "xcrun simctl launch",
+            in: workflow,
+            after: verify
+        )
+        let terminate = try offset(
+            of: "xcrun simctl terminate",
+            in: workflow,
+            after: launch
+        )
+        let test = try offset(
+            of: "- name: Run iOS tests",
+            in: workflow,
+            after: terminate
+        )
+        let watchProvision = try offset(
+            of: "- name: Provision dedicated Apple Watch pair",
+            in: workflow,
+            after: test
+        )
+        let cleanup = try offset(
+            of: "- name: Delete dedicated iOS simulator",
+            in: workflow,
+            after: test
+        )
 
+        XCTAssertLessThan(provision, build)
+        XCTAssertLessThan(build, installStep)
+        XCTAssertLessThan(installStep, install)
+        XCTAssertLessThan(install, verify)
+        XCTAssertLessThan(verify, launch)
+        XCTAssertLessThan(launch, terminate)
+        XCTAssertLessThan(terminate, test)
+        XCTAssertLessThan(test, cleanup)
         XCTAssertTrue(workflow.contains("device_name: iPhone 17 Pro"))
         XCTAssertTrue(
             workflow.contains("device_name: iPad Pro 13-inch (M5)")
@@ -3733,7 +3790,7 @@ final class DistributionScriptTests: XCTestCase {
         )
         XCTAssertTrue(
             workflow.contains(
-                "RESOLVED_IOS_DESTINATION: ${{ steps.ios-destination.outputs.destination }}"
+                "IOS_DESTINATION: ${{ steps.ios-destination.outputs.destination }}"
             )
         )
         XCTAssertTrue(
@@ -3741,10 +3798,88 @@ final class DistributionScriptTests: XCTestCase {
                 "xcrun simctl delete \"$IOS_SIMULATOR_UDID\""
             )
         )
+        XCTAssertTrue(
+            workflow.contains(
+                "destination_pattern='^platform=iOS Simulator,id=([0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}),arch=arm64$'"
+            )
+        )
+        XCTAssertTrue(
+            workflow.contains(
+                "if: ${{ always() && (matrix.result == 'iPhone' || matrix.result == 'iPad') }}"
+            )
+        )
+        XCTAssertTrue(
+            workflow.contains(
+                "Refusing to clean invalid simulator identifier: $IOS_SIMULATOR_UDID"
+            )
+        )
         XCTAssertFalse(
             workflow.contains(
                 "platform=iOS Simulator,name=iPad Pro 13-inch (M5),OS=latest"
             )
+        )
+
+        let iosFlowStart = workflow.index(
+            workflow.startIndex,
+            offsetBy: provision
+        )
+        let iosFlowEnd = workflow.index(
+            workflow.startIndex,
+            offsetBy: watchProvision
+        )
+        let iosFlow = String(workflow[iosFlowStart..<iosFlowEnd])
+        XCTAssertEqual(
+            occurrenceCount(of: "-parallel-testing-enabled NO", in: iosFlow),
+            2
+        )
+        XCTAssertEqual(
+            occurrenceCount(
+                of: #"-destination "$IOS_DESTINATION""#,
+                in: iosFlow
+            ),
+            2
+        )
+        XCTAssertEqual(
+            occurrenceCount(of: "xcodebuild build-for-testing", in: iosFlow),
+            1
+        )
+        XCTAssertEqual(
+            occurrenceCount(of: "xcodebuild test-without-building", in: iosFlow),
+            1
+        )
+        XCTAssertTrue(iosFlow.contains("-ui-testing-reset"))
+        XCTAssertFalse(iosFlow.localizedCaseInsensitiveContains("retry"))
+
+        let scheme = try schemeDocument(named: "AgentLimitsiOS")
+        let testables = try scheme.nodes(forXPath: "//TestableReference")
+        XCTAssertEqual(testables.count, 2)
+        for case let testable as XMLElement in testables {
+            XCTAssertEqual(
+                testable.attribute(forName: "parallelizable")?.stringValue,
+                "NO"
+            )
+        }
+    }
+
+    func testAppleCIPreservesMacUIWarningGate() throws {
+        let workflow = try repositoryText(".github/workflows/apple-ci.yml")
+
+        XCTAssertTrue(
+            workflow.contains(
+                "if: ${{ matrix.result == 'macOS' || matrix.result == 'Mac-UI' }}"
+            )
+        )
+        assertOrderedSnippets(
+            [
+                #"if [[ "$TEST_RESULT" == "Mac-UI" ]]; then"#,
+                #"warning_prefix="Publishing changes from within view ""#,
+                #"runtime_warning="${warning_prefix}updates is not allowed""#,
+                #"if grep -Fq -- "$runtime_warning" "$test_log"; then"#,
+                "SwiftUI publication-during-update warning detected.",
+                "exit 1"
+            ],
+            in: workflow,
+            context: "Mac-UI warning gate"
         )
     }
 
@@ -3896,13 +4031,6 @@ final class DistributionScriptTests: XCTestCase {
                 #"xcrun simctl delete "$device_udid""#
             )
         )
-        XCTAssertEqual(
-            occurrenceCount(
-                of: "-parallel-testing-enabled NO",
-                in: workflow
-            ),
-            2
-        )
         XCTAssertFalse(
             workflow.contains("- name: Resolve Apple Watch simulator")
         )
@@ -3934,6 +4062,13 @@ final class DistributionScriptTests: XCTestCase {
             offsetBy: analyze
         )
         let watchFlow = workflow[watchFlowStart..<watchFlowEnd]
+        XCTAssertEqual(
+            occurrenceCount(
+                of: "-parallel-testing-enabled NO",
+                in: String(watchFlow)
+            ),
+            2
+        )
         XCTAssertFalse(
             String(watchFlow).localizedCaseInsensitiveContains("retry")
         )
@@ -3950,11 +4085,13 @@ final class DistributionScriptTests: XCTestCase {
         )
     }
 
-    func testCISimulatorProvisionerCreatesLatestRequestedDevice() throws {
+    func testCISimulatorProvisionerBootsExactDeviceAndCleansFailure() throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let fakeXcrun = directory.appendingPathComponent("xcrun")
-        let log = directory.appendingPathComponent("xcrun.log")
+        let successLog = directory.appendingPathComponent("success.log")
+        let failureLog = directory.appendingPathComponent("failure.log")
+        let deviceUDID = "01234567-89AB-CDEF-0123-456789ABCDEF"
         let fakeScript = #"""
         #!/bin/bash
         set -euo pipefail
@@ -3964,8 +4101,15 @@ final class DistributionScriptTests: XCTestCase {
         elif [[ "$1 $2 $3" == "simctl list devicetypes" ]]; then
           printf '%s\n' '{"devicetypes":[{"identifier":"com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro","name":"iPhone 17 Pro"},{"identifier":"com.apple.CoreSimulator.SimDeviceType.iPad-Pro-13-inch-M5-12GB","name":"iPad Pro 13-inch (M5)"}]}'
         elif [[ "$1 $2" == "simctl create" ]]; then
-          printf '%s\n' '01234567-89AB-CDEF-0123-456789ABCDEF'
-        elif [[ "$1 $2" == "simctl delete" ]]; then
+          printf '%s\n' '\#(deviceUDID)'
+        elif [[ "$1 $2" == "simctl boot" ]]; then
+          exit 0
+        elif [[ "$1 $2" == "simctl bootstatus" ]]; then
+          if [[ "${AGENTLIMITS_FAKE_FAIL_BOOTSTATUS:-0}" == "1" ]]; then
+            exit 42
+          fi
+          exit 0
+        elif [[ "$1 $2" == "simctl shutdown" || "$1 $2" == "simctl delete" ]]; then
           exit 0
         else
           exit 99
@@ -3974,28 +4118,69 @@ final class DistributionScriptTests: XCTestCase {
         try Data(fakeScript.utf8).write(to: fakeXcrun)
         try setPermissions(0o700, for: fakeXcrun)
 
-        let result = try runReleaseScript(
+        let commonEnvironment = [
+            "GITHUB_RUN_ATTEMPT": "3",
+            "GITHUB_RUN_ID": "12345",
+            "PATH": "\(directory.path):/usr/bin:/bin"
+        ]
+        let success = try runReleaseScript(
             relativePath: "Scripts/create-ci-ios-simulator.sh",
             arguments: ["iPad Pro 13-inch (M5)"],
-            environment: [
-                "AGENTLIMITS_FAKE_XCRUN_LOG": log.path,
-                "GITHUB_RUN_ATTEMPT": "3",
-                "GITHUB_RUN_ID": "12345",
-                "PATH": "\(directory.path):/usr/bin:/bin"
-            ]
+            environment: commonEnvironment.merging(
+                ["AGENTLIMITS_FAKE_XCRUN_LOG": successLog.path],
+                uniquingKeysWith: { _, override in override }
+            )
         )
 
-        XCTAssertEqual(result.status, 0, result.output)
+        XCTAssertEqual(success.status, 0, success.output)
         XCTAssertEqual(
-            result.output,
-            "platform=iOS Simulator,id=01234567-89AB-CDEF-0123-456789ABCDEF\n"
+            success.output,
+            "platform=iOS Simulator,id=\(deviceUDID),arch=arm64\n"
         )
-        let calls = try String(contentsOf: log, encoding: .utf8)
-        XCTAssertTrue(
-            calls.contains(
-                "simctl create AgentLimits CI - iPad Pro 13-inch (M5) - 12345-3 com.apple.CoreSimulator.SimDeviceType.iPad-Pro-13-inch-M5-12GB com.apple.CoreSimulator.SimRuntime.iOS-26-5"
-            ),
-            calls
+        let successCalls = try String(
+            contentsOf: successLog,
+            encoding: .utf8
+        )
+        assertOrderedSnippets(
+            [
+                "simctl create AgentLimits CI - iPad Pro 13-inch (M5) - 12345-3 com.apple.CoreSimulator.SimDeviceType.iPad-Pro-13-inch-M5-12GB com.apple.CoreSimulator.SimRuntime.iOS-26-5",
+                "simctl boot \(deviceUDID)",
+                "simctl bootstatus \(deviceUDID) -b"
+            ],
+            in: successCalls,
+            context: "dedicated iOS simulator provisioning"
+        )
+        XCTAssertFalse(successCalls.contains("simctl delete"), successCalls)
+
+        let failure = try runReleaseScript(
+            relativePath: "Scripts/create-ci-ios-simulator.sh",
+            arguments: ["iPad Pro 13-inch (M5)"],
+            environment: commonEnvironment.merging(
+                [
+                    "AGENTLIMITS_FAKE_FAIL_BOOTSTATUS": "1",
+                    "AGENTLIMITS_FAKE_XCRUN_LOG": failureLog.path
+                ],
+                uniquingKeysWith: { _, override in override }
+            )
+        )
+        XCTAssertEqual(failure.status, 42, failure.output)
+        let failureCalls = try String(
+            contentsOf: failureLog,
+            encoding: .utf8
+        )
+        assertOrderedSnippets(
+            [
+                "simctl bootstatus \(deviceUDID) -b",
+                "simctl shutdown \(deviceUDID)",
+                "simctl delete \(deviceUDID)"
+            ],
+            in: failureCalls,
+            context: "failed dedicated iOS simulator cleanup"
+        )
+        XCTAssertEqual(
+            occurrenceCount(of: "simctl delete", in: failureCalls),
+            1,
+            failureCalls
         )
     }
 

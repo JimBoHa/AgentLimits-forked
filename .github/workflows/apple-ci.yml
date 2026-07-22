@@ -144,9 +144,149 @@ jobs:
           set -euo pipefail
 
           destination="$(Scripts/create-ci-ios-simulator.sh "$IOS_DEVICE_NAME")"
-          udid="${destination##*,id=}"
+          destination_pattern='^platform=iOS Simulator,id=([0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}),arch=arm64$'
+          if [[ ! "$destination" =~ $destination_pattern ]]; then
+            echo "Invalid dedicated iOS simulator destination: $destination" >&2
+            exit 65
+          fi
+          udid="${BASH_REMATCH[1]}"
           printf 'destination=%s\nudid=%s\n' \
             "$destination" "$udid" >> "$GITHUB_OUTPUT"
+
+      - name: Build iOS tests
+        if: ${{ matrix.result == 'iPhone' || matrix.result == 'iPad' }}
+        env:
+          CONFIGURATION: ${{ matrix.configuration }}
+          CODE_SIGNING_ALLOWED_VALUE: ${{ matrix.code_signing_allowed }}
+          CODE_SIGNING_REQUIRED_VALUE: ${{ matrix.code_signing_required }}
+          CODE_SIGN_IDENTITY_VALUE: ${{ matrix.code_sign_identity }}
+          DEVELOPMENT_TEAM_VALUE: ${{ matrix.development_team }}
+          IOS_DESTINATION: ${{ steps.ios-destination.outputs.destination }}
+          TEST_RESULT: ${{ matrix.result }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "$IOS_DESTINATION" ]]; then
+            echo "No dedicated iOS destination was resolved for $TEST_RESULT." >&2
+            exit 69
+          fi
+          xcodebuild build-for-testing \
+            -project AgentLimits.xcodeproj \
+            -scheme AgentLimitsiOS \
+            -configuration "$CONFIGURATION" \
+            -destination "$IOS_DESTINATION" \
+            -parallel-testing-enabled NO \
+            -onlyUsePackageVersionsFromResolvedFile \
+            -resultBundlePath "$RUNNER_TEMP/${TEST_RESULT}-build.xcresult" \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData-${TEST_RESULT}" \
+            CODE_SIGNING_ALLOWED="$CODE_SIGNING_ALLOWED_VALUE" \
+            CODE_SIGNING_REQUIRED="$CODE_SIGNING_REQUIRED_VALUE" \
+            CODE_SIGN_IDENTITY="$CODE_SIGN_IDENTITY_VALUE" \
+            DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM_VALUE" \
+            COMPILER_INDEX_STORE_ENABLE=NO \
+            SWIFT_TREAT_WARNINGS_AS_ERRORS=YES \
+            GCC_TREAT_WARNINGS_AS_ERRORS=YES
+
+      - name: Install and prelaunch iOS test host
+        if: ${{ matrix.result == 'iPhone' || matrix.result == 'iPad' }}
+        env:
+          CONFIGURATION: ${{ matrix.configuration }}
+          IOS_SIMULATOR_UDID: ${{ steps.ios-destination.outputs.udid }}
+          TEST_RESULT: ${{ matrix.result }}
+        run: |
+          set -euo pipefail
+
+          uuid_pattern='^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$'
+          if [[ ! "$IOS_SIMULATOR_UDID" =~ $uuid_pattern ]]; then
+            echo "Invalid dedicated iOS simulator UDID: $IOS_SIMULATOR_UDID" >&2
+            exit 65
+          fi
+          expected_bundle_id='com.jimboha.agentlimits.ios'
+          ios_app="$RUNNER_TEMP/DerivedData-${TEST_RESULT}/Build/Products/$CONFIGURATION-iphonesimulator/AgentLimits.app"
+          if [[ ! -d "$ios_app" ]]; then
+            echo "Built iOS test host is missing: $ios_app" >&2
+            exit 66
+          fi
+          built_bundle_id="$(
+            /usr/libexec/PlistBuddy \
+              -c 'Print :CFBundleIdentifier' \
+              "$ios_app/Info.plist"
+          )"
+          if [[ "$built_bundle_id" != "$expected_bundle_id" ]]; then
+            echo "Unexpected built iOS bundle identifier: $built_bundle_id" >&2
+            exit 65
+          fi
+
+          xcrun simctl install "$IOS_SIMULATOR_UDID" "$ios_app"
+          installed_app=''
+          for (( readiness_attempt = 1; readiness_attempt <= 30; readiness_attempt++ )); do
+            if installed_app="$(
+              xcrun simctl get_app_container \
+                "$IOS_SIMULATOR_UDID" \
+                "$expected_bundle_id" \
+                app 2>/dev/null
+            )" && [[ -d "$installed_app" ]]; then
+              break
+            fi
+            installed_app=''
+            sleep 1
+          done
+          if [[ -z "$installed_app" ]]; then
+            echo "Installed iOS test host was not registered: $expected_bundle_id" >&2
+            exit 69
+          fi
+          installed_bundle_id="$(
+            /usr/libexec/PlistBuddy \
+              -c 'Print :CFBundleIdentifier' \
+              "$installed_app/Info.plist"
+          )"
+          if [[ "$installed_bundle_id" != "$expected_bundle_id" ]]; then
+            echo "Unexpected installed iOS bundle identifier: $installed_bundle_id" >&2
+            exit 65
+          fi
+          xcrun simctl launch \
+            --arch=arm64 \
+            --terminate-running-process \
+            "$IOS_SIMULATOR_UDID" \
+            "$expected_bundle_id" \
+            -ui-testing-reset
+          xcrun simctl terminate \
+            "$IOS_SIMULATOR_UDID" \
+            "$expected_bundle_id"
+
+      - name: Run iOS tests
+        if: ${{ matrix.result == 'iPhone' || matrix.result == 'iPad' }}
+        env:
+          CONFIGURATION: ${{ matrix.configuration }}
+          CODE_SIGNING_ALLOWED_VALUE: ${{ matrix.code_signing_allowed }}
+          CODE_SIGNING_REQUIRED_VALUE: ${{ matrix.code_signing_required }}
+          CODE_SIGN_IDENTITY_VALUE: ${{ matrix.code_sign_identity }}
+          DEVELOPMENT_TEAM_VALUE: ${{ matrix.development_team }}
+          IOS_DESTINATION: ${{ steps.ios-destination.outputs.destination }}
+          TEST_RESULT: ${{ matrix.result }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "$IOS_DESTINATION" ]]; then
+            echo "No dedicated iOS destination was resolved for $TEST_RESULT." >&2
+            exit 69
+          fi
+          xcodebuild test-without-building \
+            -project AgentLimits.xcodeproj \
+            -scheme AgentLimitsiOS \
+            -configuration "$CONFIGURATION" \
+            -destination "$IOS_DESTINATION" \
+            -parallel-testing-enabled NO \
+            -onlyUsePackageVersionsFromResolvedFile \
+            -resultBundlePath "$RUNNER_TEMP/${TEST_RESULT}.xcresult" \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData-${TEST_RESULT}" \
+            CODE_SIGNING_ALLOWED="$CODE_SIGNING_ALLOWED_VALUE" \
+            CODE_SIGNING_REQUIRED="$CODE_SIGNING_REQUIRED_VALUE" \
+            CODE_SIGN_IDENTITY="$CODE_SIGN_IDENTITY_VALUE" \
+            DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM_VALUE" \
+            COMPILER_INDEX_STORE_ENABLE=NO \
+            SWIFT_TREAT_WARNINGS_AS_ERRORS=YES \
+            GCC_TREAT_WARNINGS_AS_ERRORS=YES
 
       - name: Provision dedicated Apple Watch pair
         if: ${{ matrix.result == 'Watch' }}
@@ -175,7 +315,7 @@ jobs:
           echo "Provisioned $WATCH_DEVICE_NAME with $PHONE_DEVICE_NAME on $runtime_version: $pair_udid"
 
       - name: Run tests
-        if: ${{ matrix.result != 'Watch' }}
+        if: ${{ matrix.result == 'macOS' || matrix.result == 'Mac-UI' }}
         env:
           CONFIGURED_DESTINATION: ${{ matrix.destination }}
           CONFIGURATION: ${{ matrix.configuration }}
@@ -183,16 +323,11 @@ jobs:
           CODE_SIGNING_REQUIRED_VALUE: ${{ matrix.code_signing_required }}
           CODE_SIGN_IDENTITY_VALUE: ${{ matrix.code_sign_identity }}
           DEVELOPMENT_TEAM_VALUE: ${{ matrix.development_team }}
-          RESOLVED_IOS_DESTINATION: ${{ steps.ios-destination.outputs.destination }}
           TEST_RESULT: ${{ matrix.result }}
         run: |
           set -o pipefail
 
-          if [[ "$TEST_RESULT" == "iPhone" || "$TEST_RESULT" == "iPad" ]]; then
-            destination="$RESOLVED_IOS_DESTINATION"
-          else
-            destination="$CONFIGURED_DESTINATION"
-          fi
+          destination="$CONFIGURED_DESTINATION"
 
           if [[ -z "$destination" ]]; then
             echo "No test destination was resolved for $TEST_RESULT." >&2
@@ -359,8 +494,15 @@ jobs:
         env:
           IOS_SIMULATOR_UDID: ${{ steps.ios-destination.outputs.udid }}
         run: |
+          set -u
+
           if [[ -z "$IOS_SIMULATOR_UDID" ]]; then
             exit 0
+          fi
+          uuid_pattern='^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$'
+          if [[ ! "$IOS_SIMULATOR_UDID" =~ $uuid_pattern ]]; then
+            echo "Refusing to clean invalid simulator identifier: $IOS_SIMULATOR_UDID" >&2
+            exit 65
           fi
           xcrun simctl shutdown "$IOS_SIMULATOR_UDID" >/dev/null 2>&1 || true
           xcrun simctl delete "$IOS_SIMULATOR_UDID"
