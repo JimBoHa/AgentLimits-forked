@@ -35,6 +35,97 @@ final class DistributionScriptTests: XCTestCase {
         )
     }
 
+    func testCommonSecretGuardCoversGitHubTokenFamilies() throws {
+        let repository = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: repository) }
+        _ = try runGit(["init", "-q", "-b", "main"], in: repository)
+        _ = try runGit(
+            ["config", "user.name", "Common Secret Guard Fixture"],
+            in: repository
+        )
+        _ = try runGit(
+            ["config", "user.email", "fixture@example.invalid"],
+            in: repository
+        )
+        try Data("safe\n".utf8).write(
+            to: repository.appendingPathComponent("README.md")
+        )
+        _ = try runGit(["add", "README.md"], in: repository)
+        _ = try runGit(["commit", "-q", "-m", "base"], in: repository)
+
+        var result = try runCommonSecretGuard(repository: repository)
+        XCTAssertEqual(result.status, 0, result.output)
+        XCTAssertEqual(result.output, "")
+
+        let stagedPath = "staged-token.txt"
+        let stagedTokenBody = String(repeating: "B", count: 32)
+        try Data(("ghp_" + stagedTokenBody + "\n").utf8).write(
+            to: repository.appendingPathComponent(stagedPath)
+        )
+        _ = try runGit(["add", "--", stagedPath], in: repository)
+        try Data("safe\n".utf8).write(
+            to: repository.appendingPathComponent(stagedPath)
+        )
+
+        result = try runCommonSecretGuard(repository: repository)
+        XCTAssertEqual(result.status, 78, result.output)
+        XCTAssertTrue(result.output.contains(stagedPath), result.output)
+        XCTAssertFalse(
+            result.output.contains(stagedTokenBody),
+            "Secret guard leaked a staged token: \(result.output)"
+        )
+
+        _ = try runGit(["add", "--", stagedPath], in: repository)
+        result = try runCommonSecretGuard(repository: repository)
+        XCTAssertEqual(result.status, 0, result.output)
+        XCTAssertEqual(result.output, "")
+
+        let tokenPrefixes = [
+            "ghp_",
+            "gho_",
+            "ghu_",
+            "ghs_",
+            "ghr_",
+            "github_pat_",
+        ]
+        var fixturePaths: [String] = []
+        for (index, prefix) in tokenPrefixes.enumerated() {
+            let path = "credential-\(index).txt"
+            fixturePaths.append(path)
+            let token = prefix + String(repeating: "A", count: 32) + "\n"
+            try Data(token.utf8).write(
+                to: repository.appendingPathComponent(path)
+            )
+        }
+        let privateKeyPath = "private-key.txt"
+        fixturePaths.append(privateKeyPath)
+        let privateKeyHeader = "-----BEGIN " + "PRIVATE KEY-----\n"
+        try Data(privateKeyHeader.utf8).write(
+            to: repository.appendingPathComponent(privateKeyPath)
+        )
+        _ = try runGit(["add", "--"] + fixturePaths, in: repository)
+
+        result = try runCommonSecretGuard(repository: repository)
+        XCTAssertEqual(result.status, 78, result.output)
+        XCTAssertFalse(
+            result.output.contains(String(repeating: "A", count: 32)),
+            "Secret guard leaked a matched token: \(result.output)"
+        )
+        for path in fixturePaths {
+            XCTAssertTrue(result.output.contains(path), result.output)
+        }
+
+        let workflow = try repositoryText(".github/workflows/apple-ci.yml")
+        XCTAssertTrue(
+            workflow.contains(
+                "      - name: Reject common committed secrets\n"
+                    + "        run: Scripts/reject-common-secrets.sh"
+            )
+        )
+        let guardScript = try releaseScript(named: "reject-common-secrets.sh")
+        XCTAssertTrue(guardScript.contains("gh[pousr]_"))
+    }
+
     func testAppleCredentialArtifactGuardIsLiveAndCaseInsensitive() throws {
         let gitignore = try repositoryText(".gitignore")
         let workflow = try repositoryText(".github/workflows/apple-ci.yml")
@@ -4488,6 +4579,27 @@ final class DistributionScriptTests: XCTestCase {
         let process = Process()
         process.executableURL = repositoryRoot.appendingPathComponent(
             "Scripts/reject-apple-credential-artifacts.sh"
+        )
+        process.arguments = [repository.path]
+        process.environment = dependencyPolicyProcessEnvironment()
+        let output = Pipe()
+        process.standardOutput = output
+        process.standardError = output
+        try process.run()
+        process.waitUntilExit()
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        return (
+            process.terminationStatus,
+            String(decoding: data, as: UTF8.self)
+        )
+    }
+
+    private func runCommonSecretGuard(
+        repository: URL
+    ) throws -> (status: Int32, output: String) {
+        let process = Process()
+        process.executableURL = repositoryRoot.appendingPathComponent(
+            "Scripts/reject-common-secrets.sh"
         )
         process.arguments = [repository.path]
         process.environment = dependencyPolicyProcessEnvironment()
