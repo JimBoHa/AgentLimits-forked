@@ -4,22 +4,7 @@
 import SwiftUI
 import WidgetKit
 
-// MARK: - Heatmap Level
-
-/// Heatmap color levels based on quartile distribution.
-/// Inspired by GitHub contributions graph color scheme.
-enum HeatmapLevel: Int, CaseIterable {
-    /// No usage (0 tokens)
-    case none = 0
-    /// Bottom 25% of usage
-    case firstQuartile = 1
-    /// 25-50% of usage
-    case secondQuartile = 2
-    /// 50-75% of usage
-    case thirdQuartile = 3
-    /// Top 25% of usage (highest)
-    case fourthQuartile = 4
-
+extension HeatmapLevel {
     /// Returns the color for this level (full color mode)
     var color: Color {
         switch self {

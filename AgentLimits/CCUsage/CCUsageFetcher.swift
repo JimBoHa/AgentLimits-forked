@@ -269,7 +269,6 @@ final class CCUsageFetcher {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = sourceCalendar.timeZone
         let isoFormatter = Self.makeISODateFormatter(calendar: calendar)
-        let todayString = isoFormatter.string(from: now)
 
         // Calculate a Sunday boundary without locale-dependent week numbering.
         let startOfWeek = SundayWeekStartResolver.resolve(for: now, calendar: calendar)
@@ -280,7 +279,6 @@ final class CCUsageFetcher {
             return try parseClaudeResponse(
                 jsonData: jsonData,
                 provider: provider,
-                todayString: todayString,
                 startOfWeek: startOfWeek,
                 now: now,
                 calendar: calendar,
@@ -290,7 +288,6 @@ final class CCUsageFetcher {
             return try parseCodexResponse(
                 jsonData: jsonData,
                 provider: provider,
-                todayString: todayString,
                 startOfWeek: startOfWeek,
                 now: now,
                 calendar: calendar,
@@ -336,9 +333,8 @@ final class CCUsageFetcher {
         startOfWeek: Date,
         now: Date,
         calendar: Calendar,
-        isTodayEntry: (InternalDailyEntry) -> Bool,
         parseDate: (InternalDailyEntry) -> Date?,
-        normalizeToISO: (InternalDailyEntry) -> String
+        canonicalDate: (Date) -> String
     ) throws -> TokenUsageSnapshot {
         let endOfToday = calendar.date(
             byAdding: .day,
@@ -350,18 +346,23 @@ final class CCUsageFetcher {
             guard let date = parseDate(entry), date < endOfToday else { return nil }
             return (entry, date)
         }
+        let canonicalEntries = try Self.groupByCanonicalDate(
+            datedEntries,
+            canonicalDate: canonicalDate
+        )
 
         // Build "today" usage from valid, non-future daily entries.
-        let todayEntry = datedEntries
+        let todayDate = canonicalDate(now)
+        let todayEntry = canonicalEntries
             .map(\.0)
-            .first(where: isTodayEntry)
+            .first { $0.date == todayDate }
         let today = TokenUsagePeriod(
             costUSD: todayEntry?.costUSD ?? 0,
             totalTokens: todayEntry?.totalTokens ?? 0
         )
 
         // Aggregate week totals from the start-of-week date.
-        let weekEntries = datedEntries.filter { $0.1 >= startOfWeek }.map(\.0)
+        let weekEntries = canonicalEntries.filter { $0.1 >= startOfWeek }.map(\.0)
         let weekTotals = try Self.aggregate(weekEntries)
         let thisWeek = TokenUsagePeriod(
             costUSD: weekTotals.costUSD,
@@ -370,7 +371,7 @@ final class CCUsageFetcher {
 
         let monthComponents = calendar.dateComponents([.year, .month], from: now)
         let startOfMonth = calendar.date(from: monthComponents) ?? startOfWeek
-        let monthEntries = datedEntries.filter { $0.1 >= startOfMonth }.map(\.0)
+        let monthEntries = canonicalEntries.filter { $0.1 >= startOfMonth }.map(\.0)
         let monthTotals = try Self.aggregate(monthEntries)
         let thisMonth = TokenUsagePeriod(
             costUSD: monthTotals.costUSD,
@@ -378,9 +379,9 @@ final class CCUsageFetcher {
         )
 
         // Build daily usage entries with normalized ISO8601 dates for heatmap.
-        let dailyUsage = datedEntries.map { entry, _ in
+        let dailyUsage = canonicalEntries.map { entry, _ in
             DailyUsageEntry(
-                date: normalizeToISO(entry),
+                date: entry.date,
                 totalTokens: entry.totalTokens
             )
         }
@@ -393,6 +394,37 @@ final class CCUsageFetcher {
             thisMonth: thisMonth,
             dailyUsage: dailyUsage
         )
+    }
+
+    private static func groupByCanonicalDate(
+        _ entries: [(InternalDailyEntry, Date)],
+        canonicalDate: (Date) -> String
+    ) throws -> [(InternalDailyEntry, Date)] {
+        let grouped = Dictionary(grouping: entries) {
+            canonicalDate($0.1)
+        }
+        return try grouped.map { date, entries in
+            guard let parsedDate = entries.first?.1 else {
+                throw CCUsageFetcherError.parseError(
+                    "Daily usage contains an empty date group"
+                )
+            }
+            let totals = try aggregate(entries.map(\.0))
+            return (
+                InternalDailyEntry(
+                    date: date,
+                    totalTokens: totals.totalTokens,
+                    costUSD: totals.costUSD
+                ),
+                parsedDate
+            )
+        }
+        .sorted {
+            if $0.1 == $1.1 {
+                return $0.0.date < $1.0.date
+            }
+            return $0.1 < $1.1
+        }
     }
 
     private static func validateNumericFields(
@@ -433,7 +465,6 @@ final class CCUsageFetcher {
     private func parseClaudeResponse(
         jsonData: Data,
         provider: TokenUsageProvider,
-        todayString: String,
         startOfWeek: Date,
         now: Date,
         calendar: Calendar,
@@ -448,17 +479,15 @@ final class CCUsageFetcher {
                 costUSD: entry.totalCost
             )
         }
-        // Build standardized snapshot from normalized entries.
-        // Claude dates are already in ISO8601 format, so return as-is.
+        // Build a standardized snapshot from canonical Gregorian dates.
         return try buildSnapshot(
             provider: provider,
             dailyEntries: dailyEntries,
             startOfWeek: startOfWeek,
             now: now,
             calendar: calendar,
-            isTodayEntry: { $0.date == todayString },
             parseDate: { isoFormatter.date(from: $0.date) },
-            normalizeToISO: { $0.date }
+            canonicalDate: { isoFormatter.string(from: $0) }
         )
     }
 
@@ -466,7 +495,6 @@ final class CCUsageFetcher {
     private func parseCodexResponse(
         jsonData: Data,
         provider: TokenUsageProvider,
-        todayString: String,
         startOfWeek: Date,
         now: Date,
         calendar: Calendar,
@@ -486,9 +514,8 @@ final class CCUsageFetcher {
             startOfWeek: startOfWeek,
             now: now,
             calendar: calendar,
-            isTodayEntry: { $0.date == todayString },
             parseDate: { isoFormatter.date(from: $0.date) },
-            normalizeToISO: { $0.date }
+            canonicalDate: { isoFormatter.string(from: $0) }
         )
     }
 }
