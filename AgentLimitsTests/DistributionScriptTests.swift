@@ -57,6 +57,29 @@ final class DistributionScriptTests: XCTestCase {
         XCTAssertEqual(result.status, 0, result.output)
         XCTAssertEqual(result.output, "")
 
+        let stagedPath = "staged-token.txt"
+        let stagedTokenBody = String(repeating: "B", count: 32)
+        try Data(("ghp_" + stagedTokenBody + "\n").utf8).write(
+            to: repository.appendingPathComponent(stagedPath)
+        )
+        _ = try runGit(["add", "--", stagedPath], in: repository)
+        try Data("safe\n".utf8).write(
+            to: repository.appendingPathComponent(stagedPath)
+        )
+
+        result = try runCommonSecretGuard(repository: repository)
+        XCTAssertEqual(result.status, 78, result.output)
+        XCTAssertTrue(result.output.contains(stagedPath), result.output)
+        XCTAssertFalse(
+            result.output.contains(stagedTokenBody),
+            "Secret guard leaked a staged token: \(result.output)"
+        )
+
+        _ = try runGit(["add", "--", stagedPath], in: repository)
+        result = try runCommonSecretGuard(repository: repository)
+        XCTAssertEqual(result.status, 0, result.output)
+        XCTAssertEqual(result.output, "")
+
         let tokenPrefixes = [
             "ghp_",
             "gho_",

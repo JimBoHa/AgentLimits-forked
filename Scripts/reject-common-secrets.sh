@@ -30,7 +30,7 @@ cleanup() {
 trap cleanup EXIT
 
 status=0
-git -C "$repository" grep -lzE "$secret_pattern" -- . > "$match_list" \
+git -C "$repository" grep --cached -lzE "$secret_pattern" -- . > "$match_list" \
   || status=$?
 case "$status" in
   0)
