@@ -29,11 +29,7 @@ final class ThresholdNotificationStore: @unchecked Sendable {
             Logger.notification.info("ThresholdNotificationStore: No saved settings, returning defaults")
             return makeDefaultSettings()
         }
-        var result = Dictionary(uniqueKeysWithValues: settings.map { ($0.provider, $0) })
-        // Fill in defaults for any newly added providers not yet in persisted data.
-        for provider in UsageProvider.allCases where result[provider] == nil {
-            result[provider] = ProviderThresholdSettings.defaultSettings(for: provider)
-        }
+        let result = recoverSettings(settings)
         for (provider, providerSettings) in result {
             let primaryWarningLastNotified = providerSettings.primaryWindow.warning.lastNotifiedResetAt
                 .map { Int($0.timeIntervalSince1970) } ?? -1
@@ -45,6 +41,42 @@ final class ThresholdNotificationStore: @unchecked Sendable {
                 .map { Int($0.timeIntervalSince1970) } ?? -1
             Logger.notification.debug("ThresholdNotificationStore: Loaded \(provider.rawValue) primary.warning.lastNotified=\(primaryWarningLastNotified) primary.danger.lastNotified=\(primaryDangerLastNotified) secondary.warning.lastNotified=\(secondaryWarningLastNotified) secondary.danger.lastNotified=\(secondaryDangerLastNotified)")
         }
+        return result
+    }
+
+    /// Recovers a complete provider map from persisted array data.
+    ///
+    /// Duplicate provider records are ambiguous, so the affected provider falls back to
+    /// defaults instead of allowing one persisted record to win based on array order.
+    /// Providers absent from older payloads also receive defaults.
+    private func recoverSettings(
+        _ settings: [ProviderThresholdSettings]
+    ) -> [UsageProvider: ProviderThresholdSettings] {
+        var result = makeDefaultSettings()
+        var seenProviders = Set<UsageProvider>()
+        var duplicatedProviders = Set<UsageProvider>()
+
+        for providerSettings in settings {
+            let provider = providerSettings.provider
+            guard !duplicatedProviders.contains(provider) else { continue }
+
+            guard seenProviders.insert(provider).inserted else {
+                duplicatedProviders.insert(provider)
+                result[provider] = ProviderThresholdSettings.defaultSettings(for: provider)
+                continue
+            }
+
+            result[provider] = providerSettings
+        }
+
+        if !duplicatedProviders.isEmpty {
+            let providers = UsageProvider.allCases
+                .filter { duplicatedProviders.contains($0) }
+                .map(\.rawValue)
+                .joined(separator: ",")
+            Logger.notification.error("ThresholdNotificationStore: Duplicate provider settings for \(providers, privacy: .public); using defaults")
+        }
+
         return result
     }
 
@@ -87,8 +119,8 @@ final class ThresholdNotificationStore: @unchecked Sendable {
 
     /// Creates default settings for all providers
     private func makeDefaultSettings() -> [UsageProvider: ProviderThresholdSettings] {
-        Dictionary(uniqueKeysWithValues: UsageProvider.allCases.map {
-            ($0, ProviderThresholdSettings.defaultSettings(for: $0))
-        })
+        UsageProvider.allCases.reduce(into: [:]) { result, provider in
+            result[provider] = ProviderThresholdSettings.defaultSettings(for: provider)
+        }
     }
 }
