@@ -22,7 +22,7 @@ final class WakeUpCommandBuilderTests: XCTestCase {
     func testLoggedPipelineQuotesPathsContainingApostrophes() throws {
         let result = try runLoggedCommand(
             "printf 'quoted\\n'",
-            directoryName: "AgentLimitsWakeUpTests-'quoted'"
+            directoryName: "AgentLimitsWakeUpTests-'quoted'-\(UUID().uuidString)"
         )
 
         XCTAssertEqual(result.status, 0)
