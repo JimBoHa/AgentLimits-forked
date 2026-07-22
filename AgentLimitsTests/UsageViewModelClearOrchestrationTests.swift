@@ -254,7 +254,7 @@ final class UsageViewModelClearOrchestrationTests: XCTestCase {
             accountStore: accountStore,
             settingsStore: CCUsageSettingsStore(
                 userDefaults: UserDefaults(
-                    suiteName: "ProjectionRetry-(UUID().uuidString)"
+                    suiteName: "ProjectionRetry-\(UUID().uuidString)"
                 )!
             )
         )
