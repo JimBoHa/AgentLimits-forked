@@ -3838,6 +3838,118 @@ final class DistributionScriptTests: XCTestCase {
         )
     }
 
+    func testAppleCIProvisionsAndVerifiesDedicatedWatchPair() throws {
+        let workflow = try repositoryText(".github/workflows/apple-ci.yml")
+        let provision = try offset(
+            of: "- name: Provision dedicated Apple Watch pair",
+            in: workflow
+        )
+        let build = try offset(
+            of: "xcodebuild build-for-testing",
+            in: workflow,
+            after: provision
+        )
+        let install = try offset(
+            of: #"xcrun simctl install "$WATCH_UDID" "$watch_app""#,
+            in: workflow,
+            after: build
+        )
+        let verify = try offset(
+            of: "xcrun simctl get_app_container",
+            in: workflow,
+            after: install
+        )
+        let launch = try offset(
+            of: "xcrun simctl launch",
+            in: workflow,
+            after: verify
+        )
+        let test = try offset(
+            of: "xcodebuild test-without-building",
+            in: workflow,
+            after: launch
+        )
+        let cleanup = try offset(
+            of: "- name: Delete dedicated Apple Watch pair",
+            in: workflow,
+            after: test
+        )
+
+        XCTAssertLessThan(provision, build)
+        XCTAssertLessThan(build, install)
+        XCTAssertLessThan(install, verify)
+        XCTAssertLessThan(verify, launch)
+        XCTAssertLessThan(launch, test)
+        XCTAssertLessThan(test, cleanup)
+        XCTAssertTrue(
+            workflow.contains("Scripts/create-ci-watch-pair.sh \\")
+        )
+        XCTAssertTrue(workflow.contains(#""$PHONE_DEVICE_NAME""#))
+        XCTAssertTrue(workflow.contains(#""$WATCH_DEVICE_NAME""#))
+        XCTAssertTrue(
+            workflow.contains(
+                #"xcrun simctl unpair "$PAIR_UDID""#
+            )
+        )
+        XCTAssertTrue(
+            workflow.contains(
+                #"xcrun simctl delete "$device_udid""#
+            )
+        )
+        XCTAssertEqual(
+            occurrenceCount(
+                of: "-parallel-testing-enabled NO",
+                in: workflow
+            ),
+            2
+        )
+        XCTAssertFalse(
+            workflow.contains("- name: Resolve Apple Watch simulator")
+        )
+        XCTAssertTrue(workflow.contains("if: ${{ always() }}"))
+        XCTAssertEqual(
+            occurrenceCount(
+                of: "if: ${{ always() && matrix.result == 'Watch' }}",
+                in: workflow
+            ),
+            1
+        )
+        XCTAssertTrue(
+            workflow.contains(
+                "uuid_pattern='^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$'"
+            )
+        )
+
+        let analyze = try offset(
+            of: "\n  analyze:",
+            in: workflow,
+            after: cleanup
+        )
+        let watchFlowStart = workflow.index(
+            workflow.startIndex,
+            offsetBy: provision
+        )
+        let watchFlowEnd = workflow.index(
+            workflow.startIndex,
+            offsetBy: analyze
+        )
+        let watchFlow = workflow[watchFlowStart..<watchFlowEnd]
+        XCTAssertFalse(
+            String(watchFlow).localizedCaseInsensitiveContains("retry")
+        )
+
+        let scheme = try schemeDocument(named: "AgentLimitsWatch")
+        let unitTests = try scheme.nodes(
+            forXPath: "//TestableReference[BuildableReference[@BlueprintIdentifier='D30000000000000000000009']]"
+        )
+        let unitTest = try XCTUnwrap(unitTests.first as? XMLElement)
+        XCTAssertEqual(unitTests.count, 1)
+        XCTAssertEqual(
+            unitTest.attribute(forName: "parallelizable")?.stringValue,
+            "NO"
+        )
+    }
+
     func testCISimulatorProvisionerCreatesLatestRequestedDevice() throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -3884,6 +3996,197 @@ final class DistributionScriptTests: XCTestCase {
                 "simctl create AgentLimits CI - iPad Pro 13-inch (M5) - 12345-3 com.apple.CoreSimulator.SimDeviceType.iPad-Pro-13-inch-M5-12GB com.apple.CoreSimulator.SimRuntime.iOS-26-5"
             ),
             calls
+        )
+    }
+
+    func testCIWatchPairProvisionerCreatesReadyPairAndCleansFailure() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let fakeXcrun = directory.appendingPathComponent("xcrun")
+        let successLog = directory.appendingPathComponent("success.log")
+        let activeLog = directory.appendingPathComponent("active.log")
+        let failureLog = directory.appendingPathComponent("failure.log")
+        let phoneUDID = "11111111-1111-1111-1111-111111111111"
+        let watchUDID = "22222222-2222-2222-2222-222222222222"
+        let pairUDID = "33333333-3333-3333-3333-333333333333"
+        let fakeScript = #"""
+        #!/bin/bash
+        set -euo pipefail
+        printf '%s\n' "$*" >> "$AGENTLIMITS_FAKE_XCRUN_LOG"
+        if [[ "$1 $2 $3" == "simctl list runtimes" ]]; then
+          printf '%s\n' '{"runtimes":[{"identifier":"com.apple.CoreSimulator.SimRuntime.iOS-26-4","version":"26.4","platform":"iOS","isAvailable":true},{"identifier":"com.apple.CoreSimulator.SimRuntime.watchOS-26-4","version":"26.4","platform":"watchOS","isAvailable":true},{"identifier":"com.apple.CoreSimulator.SimRuntime.iOS-26-5","version":"26.5","platform":"iOS","isAvailable":true},{"identifier":"com.apple.CoreSimulator.SimRuntime.watchOS-26-5","version":"26.5","platform":"watchOS","isAvailable":true},{"identifier":"com.apple.CoreSimulator.SimRuntime.iOS-27-0","version":"27.0","platform":"iOS","isAvailable":false}]}'
+        elif [[ "$1 $2 $3" == "simctl list devicetypes" ]]; then
+          printf '%s\n' '{"devicetypes":[{"identifier":"com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro","name":"iPhone 17 Pro"},{"identifier":"com.apple.CoreSimulator.SimDeviceType.Apple-Watch-Series-11-46mm","name":"Apple Watch Series 11 (46mm)"}]}'
+        elif [[ "$1 $2" == "simctl create" ]]; then
+          if [[ "$4" == "com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro" ]]; then
+            printf '%s\n' '\#(phoneUDID)'
+          else
+            printf '%s\n' '\#(watchUDID)'
+          fi
+        elif [[ "$1 $2" == "simctl pair" ]]; then
+          printf '%s\n' '\#(pairUDID)'
+        elif [[ "$1 $2" == "simctl pair_activate" ]]; then
+          if [[ "${AGENTLIMITS_FAKE_PAIR_ALREADY_ACTIVE:-0}" == "1" ]]; then
+            exit 37
+          fi
+          if [[ "${AGENTLIMITS_FAKE_FAIL_PAIR_ACTIVATION:-0}" == "1" ]]; then
+            exit 43
+          fi
+          exit 0
+        elif [[ "$1 $2" == "simctl bootstatus" ]]; then
+          if [[ "${AGENTLIMITS_FAKE_FAIL_WATCH_BOOT:-0}" == "1" && "$3" == "\#(watchUDID)" ]]; then
+            exit 42
+          fi
+        elif [[ "$1 $2 $3" == "simctl list pairs" ]]; then
+          pair_state='(inactive, disconnected)'
+          if [[ "${AGENTLIMITS_FAKE_PAIR_ALREADY_ACTIVE:-0}" == "1" ]] || grep -q '^simctl pair_activate ' "$AGENTLIMITS_FAKE_XCRUN_LOG"; then
+            pair_state='(active, connected)'
+          fi
+          printf '%s%s%s\n' '{"pairs":{"\#(pairUDID)":{"watch":{"udid":"\#(watchUDID)","state":"Booted"},"phone":{"udid":"\#(phoneUDID)","state":"Booted"},"state":"' "$pair_state" '"}}}'
+        elif [[ "$1 $2" == "simctl unpair" || "$1 $2" == "simctl shutdown" || "$1 $2" == "simctl delete" ]]; then
+          exit 0
+        else
+          exit 99
+        fi
+        """#
+        try Data(fakeScript.utf8).write(to: fakeXcrun)
+        try setPermissions(0o700, for: fakeXcrun)
+
+        let commonEnvironment = [
+            "GITHUB_RUN_ATTEMPT": "4",
+            "GITHUB_RUN_ID": "67890",
+            "PATH": "\(directory.path):/usr/bin:/bin"
+        ]
+        let success = try runReleaseScript(
+            relativePath: "Scripts/create-ci-watch-pair.sh",
+            arguments: [
+                "iPhone 17 Pro",
+                "Apple Watch Series 11 (46mm)"
+            ],
+            environment: commonEnvironment.merging(
+                ["AGENTLIMITS_FAKE_XCRUN_LOG": successLog.path],
+                uniquingKeysWith: { _, override in override }
+            )
+        )
+
+        XCTAssertEqual(success.status, 0, success.output)
+        let outputData = try XCTUnwrap(success.output.data(using: .utf8))
+        let output = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: outputData)
+                as? [String: String]
+        )
+        XCTAssertEqual(
+            output["destination"],
+            "platform=watchOS Simulator,id=\(watchUDID),arch=arm64"
+        )
+        XCTAssertEqual(output["phone_udid"], phoneUDID)
+        XCTAssertEqual(output["watch_udid"], watchUDID)
+        XCTAssertEqual(output["pair_udid"], pairUDID)
+        XCTAssertEqual(output["runtime_version"], "26.5")
+
+        let successCalls = try String(
+            contentsOf: successLog,
+            encoding: .utf8
+        )
+        let createPhone = try offset(
+            of: "simctl create AgentLimits CI - iPhone 17 Pro - 67890-4 com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro com.apple.CoreSimulator.SimRuntime.iOS-26-5",
+            in: successCalls
+        )
+        let createWatch = try offset(
+            of: "simctl create AgentLimits CI - Apple Watch Series 11 (46mm) - 67890-4 com.apple.CoreSimulator.SimDeviceType.Apple-Watch-Series-11-46mm com.apple.CoreSimulator.SimRuntime.watchOS-26-5",
+            in: successCalls
+        )
+        let pair = try offset(
+            of: "simctl pair \(watchUDID) \(phoneUDID)",
+            in: successCalls
+        )
+        let verifyPair = try offset(
+            of: "simctl list pairs --json",
+            in: successCalls,
+            after: pair
+        )
+        let activate = try offset(
+            of: "simctl pair_activate \(pairUDID)",
+            in: successCalls,
+            after: verifyPair
+        )
+        let bootPhone = try offset(
+            of: "simctl bootstatus \(phoneUDID) -b",
+            in: successCalls
+        )
+        let bootWatch = try offset(
+            of: "simctl bootstatus \(watchUDID) -b",
+            in: successCalls
+        )
+        let ready = try offset(
+            of: "simctl list pairs --json",
+            in: successCalls,
+            after: bootWatch
+        )
+        XCTAssertLessThan(createPhone, createWatch)
+        XCTAssertLessThan(createWatch, pair)
+        XCTAssertLessThan(pair, verifyPair)
+        XCTAssertLessThan(verifyPair, activate)
+        XCTAssertLessThan(activate, bootPhone)
+        XCTAssertLessThan(bootPhone, bootWatch)
+        XCTAssertLessThan(bootWatch, ready)
+        XCTAssertFalse(successCalls.contains("simctl delete"))
+
+        let active = try runReleaseScript(
+            relativePath: "Scripts/create-ci-watch-pair.sh",
+            arguments: [
+                "iPhone 17 Pro",
+                "Apple Watch Series 11 (46mm)"
+            ],
+            environment: commonEnvironment.merging(
+                [
+                    "AGENTLIMITS_FAKE_PAIR_ALREADY_ACTIVE": "1",
+                    "AGENTLIMITS_FAKE_XCRUN_LOG": activeLog.path
+                ],
+                uniquingKeysWith: { _, override in override }
+            )
+        )
+        XCTAssertEqual(active.status, 0, active.output)
+        let activeCalls = try String(
+            contentsOf: activeLog,
+            encoding: .utf8
+        )
+        XCTAssertTrue(activeCalls.contains("simctl list pairs --json"))
+        XCTAssertFalse(
+            activeCalls.contains("simctl pair_activate"),
+            activeCalls
+        )
+
+        let failure = try runReleaseScript(
+            relativePath: "Scripts/create-ci-watch-pair.sh",
+            arguments: [
+                "iPhone 17 Pro",
+                "Apple Watch Series 11 (46mm)"
+            ],
+            environment: commonEnvironment.merging(
+                [
+                    "AGENTLIMITS_FAKE_FAIL_PAIR_ACTIVATION": "1",
+                    "AGENTLIMITS_FAKE_XCRUN_LOG": failureLog.path
+                ],
+                uniquingKeysWith: { _, override in override }
+            )
+        )
+        XCTAssertEqual(failure.status, 43, failure.output)
+        let failureCalls = try String(
+            contentsOf: failureLog,
+            encoding: .utf8
+        )
+        XCTAssertTrue(
+            failureCalls.contains("simctl unpair \(pairUDID)"),
+            failureCalls
+        )
+        XCTAssertTrue(
+            failureCalls.contains("simctl delete \(watchUDID)"),
+            failureCalls
+        )
+        XCTAssertTrue(
+            failureCalls.contains("simctl delete \(phoneUDID)"),
+            failureCalls
         )
     }
 

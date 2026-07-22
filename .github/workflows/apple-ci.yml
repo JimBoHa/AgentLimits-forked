@@ -148,86 +148,34 @@ jobs:
           printf 'destination=%s\nudid=%s\n' \
             "$destination" "$udid" >> "$GITHUB_OUTPUT"
 
-      - name: Resolve Apple Watch simulator
+      - name: Provision dedicated Apple Watch pair
         if: ${{ matrix.result == 'Watch' }}
-        id: watch-destination
+        id: watch-pair
         env:
+          PHONE_DEVICE_NAME: iPhone 17 Pro
           WATCH_DEVICE_NAME: Apple Watch Series 11 (46mm)
         run: |
           set -euo pipefail
 
-          runtimes_json="$(xcrun simctl list runtimes --json)"
-          available_runtimes="$(
-            jq -c '
-              [.runtimes[]
-                | select(.platform == "watchOS" and .isAvailable == true)
-                | {identifier, version}]
-            ' <<< "$runtimes_json"
+          pair_json="$(
+            Scripts/create-ci-watch-pair.sh \
+              "$PHONE_DEVICE_NAME" \
+              "$WATCH_DEVICE_NAME"
           )"
-          runtime_count="$(jq 'length' <<< "$available_runtimes")"
-
-          if [[ "$runtime_count" -eq 0 ]]; then
-            echo 'No available watchOS simulator runtime is installed.' >&2
-            jq -r '
-              .runtimes[]
-              | select(.platform == "watchOS")
-              | "  \(.name) [\(.identifier)] available=\(.isAvailable)"
-            ' <<< "$runtimes_json" >&2
-            exit 1
-          fi
-
-          latest_version="$(
-            jq -r 'max_by(.version | split(".") | map(tonumber)) | .version' \
-              <<< "$available_runtimes"
-          )"
-          latest_runtimes="$(
-            jq -c --arg version "$latest_version" \
-              '[.[] | select(.version == $version)]' \
-              <<< "$available_runtimes"
-          )"
-          latest_runtime_count="$(jq 'length' <<< "$latest_runtimes")"
-
-          if [[ "$latest_runtime_count" -ne 1 ]]; then
-            echo "Expected exactly one available watchOS $latest_version runtime; found $latest_runtime_count:" >&2
-            jq -r '.[] | "  \(.identifier)"' <<< "$latest_runtimes" >&2
-            exit 1
-          fi
-
-          runtime_id="$(jq -r '.[0].identifier' <<< "$latest_runtimes")"
-          devices_json="$(xcrun simctl list devices --json)"
-          matching_devices="$(
-            jq -c \
-              --arg runtime "$runtime_id" \
-              --arg name "$WATCH_DEVICE_NAME" \
-              '[.devices[$runtime][]?
-                | select(.name == $name and .isAvailable == true)
-                | {udid, state}]' \
-              <<< "$devices_json"
-          )"
-          device_count="$(jq 'length' <<< "$matching_devices")"
-
-          if [[ "$device_count" -eq 0 ]]; then
-            echo "No available '$WATCH_DEVICE_NAME' simulator exists for watchOS $latest_version ($runtime_id)." >&2
-            echo 'Available devices for that runtime:' >&2
-            jq -r --arg runtime "$runtime_id" '
-              .devices[$runtime][]?
-              | select(.isAvailable == true)
-              | "  \(.name): \(.udid)"
-            ' <<< "$devices_json" | sort >&2
-            exit 1
-          fi
-
-          if [[ "$device_count" -ne 1 ]]; then
-            echo "Expected exactly one available '$WATCH_DEVICE_NAME' simulator for watchOS $latest_version; found $device_count:" >&2
-            jq -r '.[] | "  \(.udid) (\(.state))"' <<< "$matching_devices" >&2
-            exit 1
-          fi
-
-          watch_udid="$(jq -r '.[0].udid' <<< "$matching_devices")"
-          printf 'destination=platform=watchOS Simulator,id=%s\n' "$watch_udid" >> "$GITHUB_OUTPUT"
-          echo "Selected $WATCH_DEVICE_NAME on watchOS $latest_version: $watch_udid"
+          destination="$(jq -er '.destination' <<< "$pair_json")"
+          pair_udid="$(jq -er '.pair_udid' <<< "$pair_json")"
+          phone_udid="$(jq -er '.phone_udid' <<< "$pair_json")"
+          runtime_version="$(jq -er '.runtime_version' <<< "$pair_json")"
+          watch_udid="$(jq -er '.watch_udid' <<< "$pair_json")"
+          printf '%s\n' \
+            "destination=$destination" \
+            "pair_udid=$pair_udid" \
+            "phone_udid=$phone_udid" \
+            "watch_udid=$watch_udid" >> "$GITHUB_OUTPUT"
+          echo "Provisioned $WATCH_DEVICE_NAME with $PHONE_DEVICE_NAME on $runtime_version: $pair_udid"
 
       - name: Run tests
+        if: ${{ matrix.result != 'Watch' }}
         env:
           CONFIGURED_DESTINATION: ${{ matrix.destination }}
           CONFIGURATION: ${{ matrix.configuration }}
@@ -236,14 +184,11 @@ jobs:
           CODE_SIGN_IDENTITY_VALUE: ${{ matrix.code_sign_identity }}
           DEVELOPMENT_TEAM_VALUE: ${{ matrix.development_team }}
           RESOLVED_IOS_DESTINATION: ${{ steps.ios-destination.outputs.destination }}
-          RESOLVED_WATCH_DESTINATION: ${{ steps.watch-destination.outputs.destination }}
           TEST_RESULT: ${{ matrix.result }}
         run: |
           set -o pipefail
 
-          if [[ "$TEST_RESULT" == "Watch" ]]; then
-            destination="$RESOLVED_WATCH_DESTINATION"
-          elif [[ "$TEST_RESULT" == "iPhone" || "$TEST_RESULT" == "iPad" ]]; then
+          if [[ "$TEST_RESULT" == "iPhone" || "$TEST_RESULT" == "iPad" ]]; then
             destination="$RESOLVED_IOS_DESTINATION"
           else
             destination="$CONFIGURED_DESTINATION"
@@ -282,12 +227,130 @@ jobs:
             fi
           fi
 
+      - name: Build Apple Watch tests
+        if: ${{ matrix.result == 'Watch' }}
+        env:
+          CONFIGURATION: ${{ matrix.configuration }}
+          CODE_SIGNING_ALLOWED_VALUE: ${{ matrix.code_signing_allowed }}
+          CODE_SIGNING_REQUIRED_VALUE: ${{ matrix.code_signing_required }}
+          CODE_SIGN_IDENTITY_VALUE: ${{ matrix.code_sign_identity }}
+          DEVELOPMENT_TEAM_VALUE: ${{ matrix.development_team }}
+          WATCH_DESTINATION: ${{ steps.watch-pair.outputs.destination }}
+        run: |
+          set -euo pipefail
+
+          xcodebuild build-for-testing \
+            -project AgentLimits.xcodeproj \
+            -scheme AgentLimitsWatch \
+            -configuration "$CONFIGURATION" \
+            -destination "$WATCH_DESTINATION" \
+            -parallel-testing-enabled NO \
+            -onlyUsePackageVersionsFromResolvedFile \
+            -resultBundlePath "$RUNNER_TEMP/Watch-build.xcresult" \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData-Watch" \
+            CODE_SIGNING_ALLOWED="$CODE_SIGNING_ALLOWED_VALUE" \
+            CODE_SIGNING_REQUIRED="$CODE_SIGNING_REQUIRED_VALUE" \
+            CODE_SIGN_IDENTITY="$CODE_SIGN_IDENTITY_VALUE" \
+            DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM_VALUE" \
+            COMPILER_INDEX_STORE_ENABLE=NO \
+            SWIFT_TREAT_WARNINGS_AS_ERRORS=YES \
+            GCC_TREAT_WARNINGS_AS_ERRORS=YES
+
+      - name: Install and verify Apple Watch test host
+        if: ${{ matrix.result == 'Watch' }}
+        env:
+          CONFIGURATION: ${{ matrix.configuration }}
+          WATCH_UDID: ${{ steps.watch-pair.outputs.watch_udid }}
+        run: |
+          set -euo pipefail
+
+          expected_bundle_id='com.jimboha.agentlimits.ios.watchkitapp'
+          watch_app="$RUNNER_TEMP/DerivedData-Watch/Build/Products/$CONFIGURATION-watchsimulator/AgentLimitsWatch.app"
+          if [[ ! -d "$watch_app" ]]; then
+            echo "Built Watch test host is missing: $watch_app" >&2
+            exit 66
+          fi
+          built_bundle_id="$(
+            /usr/libexec/PlistBuddy \
+              -c 'Print :CFBundleIdentifier' \
+              "$watch_app/Info.plist"
+          )"
+          if [[ "$built_bundle_id" != "$expected_bundle_id" ]]; then
+            echo "Unexpected built Watch bundle identifier: $built_bundle_id" >&2
+            exit 65
+          fi
+
+          xcrun simctl install "$WATCH_UDID" "$watch_app"
+          installed_app=''
+          for (( readiness_attempt = 1; readiness_attempt <= 30; readiness_attempt++ )); do
+            if installed_app="$(
+              xcrun simctl get_app_container \
+                "$WATCH_UDID" \
+                "$expected_bundle_id" \
+                app 2>/dev/null
+            )" && [[ -d "$installed_app" ]]; then
+              break
+            fi
+            installed_app=''
+            sleep 1
+          done
+          if [[ -z "$installed_app" ]]; then
+            echo "Installed Watch test host was not registered: $expected_bundle_id" >&2
+            exit 69
+          fi
+          installed_bundle_id="$(
+            /usr/libexec/PlistBuddy \
+              -c 'Print :CFBundleIdentifier' \
+              "$installed_app/Info.plist"
+          )"
+          if [[ "$installed_bundle_id" != "$expected_bundle_id" ]]; then
+            echo "Unexpected installed Watch bundle identifier: $installed_bundle_id" >&2
+            exit 65
+          fi
+          xcrun simctl launch \
+            --arch=arm64 \
+            --terminate-running-process \
+            "$WATCH_UDID" \
+            "$expected_bundle_id"
+          xcrun simctl terminate "$WATCH_UDID" "$expected_bundle_id"
+
+      - name: Run Apple Watch tests
+        if: ${{ matrix.result == 'Watch' }}
+        env:
+          CONFIGURATION: ${{ matrix.configuration }}
+          CODE_SIGNING_ALLOWED_VALUE: ${{ matrix.code_signing_allowed }}
+          CODE_SIGNING_REQUIRED_VALUE: ${{ matrix.code_signing_required }}
+          CODE_SIGN_IDENTITY_VALUE: ${{ matrix.code_sign_identity }}
+          DEVELOPMENT_TEAM_VALUE: ${{ matrix.development_team }}
+          WATCH_DESTINATION: ${{ steps.watch-pair.outputs.destination }}
+        run: |
+          set -euo pipefail
+
+          xcodebuild test-without-building \
+            -project AgentLimits.xcodeproj \
+            -scheme AgentLimitsWatch \
+            -configuration "$CONFIGURATION" \
+            -destination "$WATCH_DESTINATION" \
+            -parallel-testing-enabled NO \
+            -onlyUsePackageVersionsFromResolvedFile \
+            -resultBundlePath "$RUNNER_TEMP/Watch.xcresult" \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData-Watch" \
+            CODE_SIGNING_ALLOWED="$CODE_SIGNING_ALLOWED_VALUE" \
+            CODE_SIGNING_REQUIRED="$CODE_SIGNING_REQUIRED_VALUE" \
+            CODE_SIGN_IDENTITY="$CODE_SIGN_IDENTITY_VALUE" \
+            DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM_VALUE" \
+            COMPILER_INDEX_STORE_ENABLE=NO \
+            SWIFT_TREAT_WARNINGS_AS_ERRORS=YES \
+            GCC_TREAT_WARNINGS_AS_ERRORS=YES
+
       - name: Upload test result
         if: ${{ always() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: test-result-${{ matrix.result }}
-          path: ${{ runner.temp }}/${{ matrix.result }}.xcresult
+          path: |
+            ${{ runner.temp }}/${{ matrix.result }}.xcresult
+            ${{ runner.temp }}/${{ matrix.result }}-build.xcresult
           if-no-files-found: error
           retention-days: 14
 
@@ -301,6 +364,38 @@ jobs:
           fi
           xcrun simctl shutdown "$IOS_SIMULATOR_UDID" >/dev/null 2>&1 || true
           xcrun simctl delete "$IOS_SIMULATOR_UDID"
+
+      - name: Delete dedicated Apple Watch pair
+        if: ${{ always() && matrix.result == 'Watch' }}
+        env:
+          PAIR_UDID: ${{ steps.watch-pair.outputs.pair_udid }}
+          PHONE_UDID: ${{ steps.watch-pair.outputs.phone_udid }}
+          WATCH_UDID: ${{ steps.watch-pair.outputs.watch_udid }}
+        run: |
+          set -u
+
+          uuid_pattern='^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$'
+          for identifier in "$PAIR_UDID" "$PHONE_UDID" "$WATCH_UDID"; do
+            if [[ -n "$identifier" && ! "$identifier" =~ $uuid_pattern ]]; then
+              echo "Refusing to clean invalid simulator identifier: $identifier" >&2
+              exit 65
+            fi
+          done
+
+          cleanup_status=0
+          if [[ -n "$PAIR_UDID" ]]; then
+            xcrun simctl unpair "$PAIR_UDID" >/dev/null 2>&1 || true
+          fi
+          for device_udid in "$WATCH_UDID" "$PHONE_UDID"; do
+            if [[ -z "$device_udid" ]]; then
+              continue
+            fi
+            xcrun simctl shutdown "$device_udid" >/dev/null 2>&1 || true
+            if ! xcrun simctl delete "$device_udid"; then
+              cleanup_status=1
+            fi
+          done
+          exit "$cleanup_status"
 
   analyze:
     name: Analyze — ${{ matrix.name }}
