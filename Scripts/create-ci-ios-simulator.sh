@@ -94,23 +94,31 @@ if [[ ! "$run_id" =~ ^([0-9]+|local)$ || ! "$run_attempt" =~ ^[0-9]+$ ]]; then
 fi
 
 simulator_name="AgentLimits CI - $device_name - $run_id-$run_attempt"
-created_udid=""
-cleanup_on_error() {
+uuid_pattern='^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$'
+created_udid=''
+cleanup_required=1
+cleanup_on_exit() {
   local status=$?
-  if [[ -n "$created_udid" ]]; then
+  trap - EXIT
+  if (( cleanup_required )) && [[ "$created_udid" =~ $uuid_pattern ]]; then
+    xcrun simctl shutdown "$created_udid" >/dev/null 2>&1 || true
     xcrun simctl delete "$created_udid" >/dev/null 2>&1 || true
   fi
   exit "$status"
 }
-trap cleanup_on_error ERR
+trap cleanup_on_exit EXIT
 
 created_udid="$(
   xcrun simctl create "$simulator_name" "$device_type_id" "$runtime_id"
 )"
-if [[ ! "$created_udid" =~ ^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$ ]]; then
+if [[ ! "$created_udid" =~ $uuid_pattern ]]; then
   echo "simctl returned an invalid simulator UDID: $created_udid" >&2
   exit 65
 fi
 
-trap - ERR
-printf 'platform=iOS Simulator,id=%s\n' "$created_udid"
+xcrun simctl boot "$created_udid" >&2
+xcrun simctl bootstatus "$created_udid" -b >&2
+
+cleanup_required=0
+trap - EXIT
+printf 'platform=iOS Simulator,id=%s,arch=arm64\n' "$created_udid"
