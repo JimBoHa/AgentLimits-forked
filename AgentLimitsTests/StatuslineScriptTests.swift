@@ -28,7 +28,7 @@ final class StatuslineScriptTests: XCTestCase {
     ) throws -> String {
         let fileManager = FileManager.default
         let temporaryHome = fileManager.temporaryDirectory
-            .appendingPathComponent("AgentLimitsStatuslineTests-(UUID().uuidString)")
+            .appendingPathComponent("AgentLimitsStatuslineTests-\(UUID().uuidString)")
         defer { try? fileManager.removeItem(at: temporaryHome) }
 
         let snapshotDirectory = temporaryHome
@@ -71,7 +71,7 @@ final class StatuslineScriptTests: XCTestCase {
         process.arguments = [scriptURL.path, "-en"]
         var environment = ProcessInfo.processInfo.environment
         environment["HOME"] = temporaryHome.path
-        environment["PATH"] = "(mockBin.path):/usr/bin:/bin"
+        environment["PATH"] = "\(mockBin.path):/usr/bin:/bin"
         process.environment = environment
 
         let stdout = Pipe()
