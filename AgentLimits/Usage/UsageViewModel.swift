@@ -126,7 +126,7 @@ final class UsageViewModel: ObservableObject {
     @Published var snapshot: UsageSnapshot?
     @Published var statusMessage: String
     @Published var isFetching: Bool
-    @Published var selectedProvider: UsageProvider {
+    @Published private(set) var selectedProvider: UsageProvider {
         didSet {
             updateSelectedProviderState()
         }
@@ -263,6 +263,13 @@ final class UsageViewModel: ObservableObject {
 
     func accounts(for provider: UsageProvider) -> [ProviderAccount] {
         stateManager.accounts.filter { $0.provider == provider }
+    }
+
+    /// Changes the displayed provider and its account-bound projection.
+    /// SwiftUI controls must call this after their current update pass ends.
+    func selectProvider(_ provider: UsageProvider) {
+        guard provider != selectedProvider else { return }
+        selectedProvider = provider
     }
 
     /// Compatibility for provider-only callers. Runtime activation uses the
