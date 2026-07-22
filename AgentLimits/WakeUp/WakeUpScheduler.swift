@@ -1460,7 +1460,20 @@ final class WakeUpScheduleStore {
               let schedules = try? JSONDecoder().decode([WakeUpSchedule].self, from: data) else {
             return makeDefaultSchedules()
         }
-        return Dictionary(uniqueKeysWithValues: schedules.map { ($0.provider, $0) })
+
+        var recoveredSchedules = makeDefaultSchedules()
+        let schedulesByProvider = Dictionary(grouping: schedules, by: \.provider)
+        for provider in UsageProvider.allCases {
+            guard let savedSchedules = schedulesByProvider[provider],
+                  savedSchedules.count == 1,
+                  let savedSchedule = savedSchedules.first else {
+                // Missing providers stay disabled. Duplicate providers are
+                // ambiguous, so never choose an order-dependent configuration.
+                continue
+            }
+            recoveredSchedules[provider] = savedSchedule
+        }
+        return recoveredSchedules
     }
 
     /// Saves all schedules to storage
