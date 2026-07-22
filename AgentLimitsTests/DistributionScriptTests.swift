@@ -1302,7 +1302,8 @@ final class DistributionScriptTests: XCTestCase {
         for name in [
             "build-unsigned-artifacts.sh",
             "export-ios.sh",
-            "package-macos.sh"
+            "package-macos.sh",
+            "capture-app-store-screenshots.sh"
         ] {
             let script = repositoryRoot.appendingPathComponent("Scripts/\(name)")
             let scriptText = try releaseScript(named: name)
@@ -1636,6 +1637,289 @@ final class DistributionScriptTests: XCTestCase {
         XCTAssertTrue(result.output.contains("not immutable"), result.output)
     }
 
+    func testScreenshotCaptureUsesPinnedImmutableAtomicPipeline() throws {
+        let script = try releaseScript(
+            named: "capture-app-store-screenshots.sh"
+        )
+        let committedBootstrap = try offset(
+            of: "HEAD:Scripts/signing-config.sh",
+            in: script
+        )
+        let trustedSource = try offset(
+            of: "source \"$trusted_signing_config\"",
+            in: script
+        )
+        let sanitizeGit = try offset(
+            of: "sanitize_release_git_environment",
+            in: script
+        )
+        let pin = try offset(of: "pin_clean_release_source", in: script)
+        let releaseHelper = try offset(
+            of: "source \"$script_dir/release-output.sh\"",
+            in: script
+        )
+        let toolchainHelper = try offset(
+            of: "source \"$script_dir/apple-toolchain.sh\"",
+            in: script
+        )
+        let toolchainValidation = try offset(
+            of: "validate_apple_distribution_toolchain",
+            in: script
+        )
+        let sanitizeXcode = try offset(
+            of: "sanitize_release_xcode_environment",
+            in: script
+        )
+        let outputLock = try offset(
+            of: "acquire_release_publication_lock",
+            in: script
+        )
+        let snapshot = try offset(
+            of: "create_immutable_release_source_snapshot",
+            in: script
+        )
+        let simulatorProbe = try offset(
+            of: #"runtimes_json="$(selected_xcrun"#,
+            in: script
+        )
+        let simulatorLocks = try offset(
+            of: "acquire_all_simulator_locks",
+            in: script,
+            after: simulatorProbe
+        )
+        let simulatorStateSnapshot = try offset(
+            of: #"devices_json="$(selected_xcrun"#,
+            in: script,
+            after: simulatorLocks
+        )
+        let manifest = try offset(of: "schemaVersion: 2", in: script)
+        let publish = try offset(
+            of: "publish_staged_release_directory",
+            in: script
+        )
+
+        assertOrderedSnippets(
+            [
+                "HEAD:Scripts/signing-config.sh",
+                "source \"$trusted_signing_config\"",
+                "sanitize_release_git_environment",
+                "pin_clean_release_source",
+                "source \"$script_dir/release-output.sh\"",
+                "source \"$script_dir/apple-toolchain.sh\"",
+                "validate_apple_distribution_toolchain",
+                "sanitize_release_xcode_environment"
+            ],
+            in: script,
+            context: "capture-app-store-screenshots.sh"
+        )
+        XCTAssertLessThan(committedBootstrap, trustedSource)
+        XCTAssertLessThan(trustedSource, sanitizeGit)
+        XCTAssertLessThan(sanitizeGit, pin)
+        XCTAssertLessThan(pin, releaseHelper)
+        XCTAssertLessThan(releaseHelper, toolchainHelper)
+        XCTAssertLessThan(toolchainHelper, toolchainValidation)
+        XCTAssertLessThan(toolchainValidation, sanitizeXcode)
+        XCTAssertLessThan(sanitizeXcode, outputLock)
+        XCTAssertLessThan(outputLock, snapshot)
+        XCTAssertLessThan(snapshot, simulatorProbe)
+        XCTAssertLessThan(simulatorProbe, simulatorLocks)
+        XCTAssertLessThan(simulatorLocks, simulatorStateSnapshot)
+        XCTAssertLessThan(simulatorProbe, manifest)
+        XCTAssertLessThan(manifest, publish)
+        XCTAssertFalse(
+            script.contains("source \"$script_dir/signing-config.sh\"")
+        )
+        XCTAssertTrue(
+            script.contains(
+                "\"$developer_dir\" iphoneos watchos || exit $?"
+            )
+        )
+        XCTAssertTrue(
+            script.contains("/usr/bin/xcrun --no-cache \"$@\"")
+        )
+        XCTAssertFalse(script.contains("\nxcrun "))
+        XCTAssertTrue(script.contains("$build_root/AgentLimits.xcodeproj"))
+        XCTAssertFalse(script.contains("$project_root/AgentLimits.xcodeproj"))
+        XCTAssertTrue(
+            script.contains(
+                "verify_capture_provenance || exit $?\npublish_staged_release_directory"
+            )
+        )
+        XCTAssertTrue(script.contains("\"$source_tree\""))
+        XCTAssertTrue(script.contains("\"$staging_parent_identity\""))
+        XCTAssertTrue(
+            script.contains("captureSource: \"private immutable git archive\"")
+        )
+        XCTAssertTrue(script.contains("testEvidence:"))
+        XCTAssertTrue(script.contains("totalTestCount: 2"))
+        XCTAssertTrue(script.contains("validatedToolchain:"))
+        XCTAssertEqual(
+            occurrenceCount(
+                of: "verify_apple_product_toolchain_metadata",
+                in: script
+            ),
+            2
+        )
+        XCTAssertTrue(script.hasPrefix("#!/bin/bash -p\n"))
+        XCTAssertEqual(
+            occurrenceCount(of: "exec /usr/bin/env -i", in: script),
+            1
+        )
+        XCTAssertTrue(script.contains("/usr/bin/env -0"))
+        XCTAssertTrue(script.contains("release_environment_needs_reset"))
+        XCTAssertTrue(script.contains("HOME=\"$(cd ~ >/dev/null && pwd -P)\""))
+        XCTAssertTrue(script.contains("verify_all_simulator_locks"))
+        XCTAssertTrue(script.contains("release_all_simulator_locks"))
+        XCTAssertTrue(script.contains("staging-files.inventory"))
+        XCTAssertTrue(script.contains("staging-unexpected.inventory"))
+        XCTAssertTrue(
+            script.contains(
+                "credentialStoreImplementation: \"MobileInMemoryCredentialStore\""
+            )
+        )
+        XCTAssertTrue(
+            script.contains(
+                "usageFetcherImplementation: \"MobileAppStoreScreenshotFetcher\""
+            )
+        )
+        XCTAssertTrue(
+            script.contains(
+                "cacheImplementation: \"WatchAppStoreScreenshotCache\""
+            )
+        )
+        XCTAssertFalse(script.contains("productionDefaultsAccessed: false"))
+        XCTAssertFalse(script.contains("keychainAccessed: false"))
+        XCTAssertFalse(script.contains("networkAccessed: false"))
+        XCTAssertFalse(script.contains("watchConnectivityAccessed: false"))
+        XCTAssertFalse(script.contains("cp -p -n"))
+        XCTAssertFalse(script.contains("${TMPDIR:-"))
+    }
+
+    func testScreenshotCaptureIPhoneNetworkMatchesStatusAssertion() throws {
+        let script = try releaseScript(
+            named: "capture-app-store-screenshots.sh"
+        )
+
+        XCTAssertTrue(
+            script.contains(
+                #"""
+                        iphone)
+                            selected_xcrun simctl status_bar "$udid" override \
+                                --time "$fixed_time" \
+                                --dataNetwork 5g \
+                                --wifiMode active \
+                """#
+            )
+        )
+        XCTAssertTrue(
+            script.contains(
+                """
+                        iphone)
+                            [[ "$status_supported" == "true" ]]
+                            grep -q '^DataNetworkType: 11$' <<<"$status"
+                """
+            )
+        )
+        XCTAssertEqual(
+            occurrenceCount(of: "--dataNetwork 5g", in: script),
+            1
+        )
+        XCTAssertEqual(
+            occurrenceCount(of: "--dataNetwork wifi", in: script),
+            1
+        )
+    }
+
+    func testScreenshotChecksumsIncludeManifestBeforeVerification() throws {
+        let script = try releaseScript(
+            named: "capture-app-store-screenshots.sh"
+        )
+        let manifest = try offset(
+            of: #"' >"$staging_dir/MANIFEST.json""#,
+            in: script
+        )
+        let checksums = try offset(
+            of: "> SHA256SUMS",
+            in: script,
+            after: manifest
+        )
+        let verification = try offset(
+            of: "shasum -a 256 -c SHA256SUMS >/dev/null",
+            in: script,
+            after: checksums
+        )
+        let publish = try offset(
+            of: "publish_staged_release_directory",
+            in: script,
+            after: verification
+        )
+
+        XCTAssertLessThan(manifest, checksums)
+        XCTAssertLessThan(checksums, verification)
+        XCTAssertLessThan(verification, publish)
+        XCTAssertEqual(occurrenceCount(of: "> SHA256SUMS", in: script), 1)
+        XCTAssertTrue(
+            script.contains(
+                #"""
+                    shasum -a 256 \
+                        iphone-6.9-01-copilot-accounts.jpg \
+                        ipad-13-01-copilot-accounts.jpg \
+                        watch-46mm-01-copilot-accounts.jpg \
+                        watch-46mm-02-session-detail.jpg \
+                        MANIFEST.json \
+                        > SHA256SUMS
+                """#
+            )
+        )
+    }
+
+    func testAppStoreScreenshotAttachmentsRequireStableFrames() throws {
+        let ios = try repositoryText(
+            "AgentLimitsiOSUITests/AgentLimitsiOSUITests.swift"
+        )
+        let watch = try repositoryText(
+            "AgentLimitsWatchUITests/AgentLimitsWatchUITests.swift"
+        )
+
+        XCTAssertEqual(
+            ios.components(separatedBy: "addStableScreenshot(named:").count - 1,
+            1
+        )
+        XCTAssertEqual(
+            watch.components(separatedBy: "addStableScreenshot(named:").count - 1,
+            2
+        )
+        for source in [ios, watch] {
+            XCTAssertTrue(source.contains("frame == previousFrame"))
+            XCTAssertTrue(source.contains("requiredMatchingSamples: Int = 3"))
+            XCTAssertTrue(
+                source.contains(
+                    "guard let screenshot = captureVisuallyStableScreenshot()"
+                )
+            )
+            XCTAssertTrue(source.contains("return screenshot"))
+            XCTAssertTrue(
+                source.contains("XCTAttachment(screenshot: screenshot)")
+            )
+            XCTAssertEqual(
+                source.components(
+                    separatedBy: "XCUIScreen.main.screenshot()"
+                ).count - 1,
+                1
+            )
+            XCTAssertFalse(
+                source.contains(
+                    "XCTAttachment(\n            screenshot: XCUIScreen.main.screenshot()"
+                )
+            )
+            XCTAssertTrue(
+                source.contains(
+                    "Screenshot did not reach repeated identical frames"
+                )
+            )
+        }
+    }
+
     func testReleaseScriptsIgnoreHostileCDPATHWithNewlineTrap() throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -1675,6 +1959,10 @@ final class DistributionScriptTests: XCTestCase {
             (
                 "Scripts/build-unsigned-artifacts.sh",
                 [directory.appendingPathComponent("unsigned-output").path]
+            ),
+            (
+                "Scripts/capture-app-store-screenshots.sh",
+                [directory.appendingPathComponent("screenshot-output").path]
             )
         ]
 
@@ -1727,6 +2015,10 @@ final class DistributionScriptTests: XCTestCase {
             (
                 "build-unsigned-artifacts.sh",
                 [directory.appendingPathComponent("unsigned-output").path]
+            ),
+            (
+                "capture-app-store-screenshots.sh",
+                [directory.appendingPathComponent("screenshot-output").path]
             )
         ]
 
@@ -1763,7 +2055,8 @@ final class DistributionScriptTests: XCTestCase {
         for name in [
             "build-unsigned-artifacts.sh",
             "export-ios.sh",
-            "package-macos.sh"
+            "package-macos.sh",
+            "capture-app-store-screenshots.sh"
         ] {
             let script = repositoryRoot
                 .appendingPathComponent("Scripts")

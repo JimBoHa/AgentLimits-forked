@@ -239,6 +239,8 @@ jobs:
           RESOLVED_WATCH_DESTINATION: ${{ steps.watch-destination.outputs.destination }}
           TEST_RESULT: ${{ matrix.result }}
         run: |
+          set -o pipefail
+
           if [[ "$TEST_RESULT" == "Watch" ]]; then
             destination="$RESOLVED_WATCH_DESTINATION"
           elif [[ "$TEST_RESULT" == "iPhone" || "$TEST_RESULT" == "iPad" ]]; then
@@ -252,6 +254,7 @@ jobs:
             exit 1
           fi
 
+          test_log="$RUNNER_TEMP/${TEST_RESULT}.xcodebuild.log"
           xcodebuild test \
             -project AgentLimits.xcodeproj \
             -scheme "${{ matrix.scheme }}" \
@@ -266,7 +269,18 @@ jobs:
             DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM_VALUE" \
             COMPILER_INDEX_STORE_ENABLE=NO \
             SWIFT_TREAT_WARNINGS_AS_ERRORS=YES \
-            GCC_TREAT_WARNINGS_AS_ERRORS=YES
+            GCC_TREAT_WARNINGS_AS_ERRORS=YES \
+            2>&1 | tee "$test_log"
+
+          if [[ "$TEST_RESULT" == "Mac-UI" ]]; then
+            warning_prefix="Publishing changes from within view "
+            runtime_warning="${warning_prefix}updates is not allowed"
+            if grep -Fq -- "$runtime_warning" "$test_log"; then
+              echo "SwiftUI publication-during-update warning detected." >&2
+              grep -Fn -- "$runtime_warning" "$test_log" >&2
+              exit 1
+            fi
+          fi
 
       - name: Upload test result
         if: ${{ always() }}

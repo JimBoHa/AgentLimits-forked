@@ -136,6 +136,50 @@ invalid compiled icon renditions, or the dependent Watch relationship. Changes
 to API usage still require a source audit because a manifest validator cannot
 prove which required-reason APIs compiled code calls.
 
+## App Store screenshots
+
+Capture native-size iPhone, iPad, and Apple Watch screenshots before signing:
+
+```sh
+Scripts/capture-app-store-screenshots.sh /absolute/new/output/directory
+```
+
+The command requires Xcode, `jq`, a clean Git worktree, and a canonical absolute
+output path whose existing parent is current-user-owned without external write
+access. It ignores inherited Git selectors, build overrides, and temporary
+paths by re-executing under privileged Bash with an exact minimal environment,
+pins the source commit/tree, and captures from a private immutable Git archive.
+The selected Xcode and iOS/watchOS device SDKs must pass the same version-26,
+bundle-trust, and product-metadata preflight used by distribution builds.
+It resolves exactly one named simulator from each latest installed iOS/watchOS
+runtime, acquires identity-checked exclusive locks for all selected simulator
+IDs in deterministic order before snapshotting state, and runs screenshot tests
+sequentially. The complete output appears only through an exclusive
+same-filesystem atomic rename after final source, inventory, manifest, and
+checksum validation; existing paths are never overwritten and failures publish
+no partial output. It neither erases nor uninstalls simulator data.
+
+Screenshot launches use a Debug-only fixture containing fictional personal/work
+accounts. The iOS fixture injects a dedicated defaults suite, an in-memory
+credential store, a local fixture fetcher, and disabled Watch connectivity. The
+Watch fixture injects an in-memory cache and disabled connectivity. The manifest
+records these source-bound implementation facts and does not present them as
+dynamic access measurements. The command verifies exact native pixel
+dimensions, converts screenshots to JPEG without resizing, and writes
+`MANIFEST.json` plus `SHA256SUMS`. The manifest identifies the immutable source
+and records each isolated UI-test run, exact pass counts, simulator and runtime
+IDs, dimensions, and image hashes. Every iOS and Watch attachment is gated on
+repeated byte-identical screen frames. The command also builds unsigned Release
+iOS and embedded Watch apps and rejects any screenshot launch argument or
+fixture marker found in either Release executable.
+
+Capture launches force English, light appearance, and standard Dynamic Type.
+Supported simulator-wide appearance, contrast, and status-bar settings are
+normalized, verified, then restored byte-for-byte with the original boot
+state—even after failure. Current watchOS Simulator runtimes reject status-bar
+overrides, so the script capability-checks that limitation and preserves the
+native Watch status bar instead.
+
 ## Signed iOS and watchOS export
 
 Signed workflows require a canonical absolute output path whose parent already

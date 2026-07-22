@@ -103,6 +103,53 @@ final class AgentLimitsiOSUITests: XCTestCase {
     }
 
     @MainActor
+    func testAppStoreCopilotAccountsScreenshot() {
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launchArguments = appStoreScreenshotLaunchArguments
+        app.launch()
+
+        let personalAccount = app.staticTexts["Personal Copilot"]
+        let workAccount = app.staticTexts["Work Copilot"]
+        let personalCounts = app.staticTexts[
+            "5 open · 3 working · 2 waiting"
+        ]
+        let workCounts = app.staticTexts[
+            "8 open · 6 working · 2 waiting"
+        ]
+
+        XCTAssertTrue(workCounts.waitForExistence(timeout: 8))
+        XCTAssertTrue(personalCounts.waitForExistence(timeout: 8))
+        XCTAssertTrue(
+            app.progressIndicators["Refreshing Personal Copilot"]
+                .waitForNonExistence(timeout: 8)
+        )
+        XCTAssertTrue(
+            app.progressIndicators["Refreshing Work Copilot"]
+                .waitForNonExistence(timeout: 8)
+        )
+        XCTAssertTrue(scrollToElement(workAccount, in: app))
+        XCTAssertTrue(personalAccount.exists)
+        XCTAssertTrue(workAccount.isHittable)
+        XCTAssertTrue(workCounts.isHittable)
+        addStableScreenshot(named: "app-store-copilot-accounts")
+    }
+
+    private var appStoreScreenshotLaunchArguments: [String] {
+        [
+            "-ui-testing-sample-data",
+            "-AppleLanguages",
+            "(en)",
+            "-AppleLocale",
+            "en_US",
+            "-AppleInterfaceStyle",
+            "Light",
+            "-UIPreferredContentSizeCategoryName",
+            "UICTContentSizeCategoryL"
+        ]
+    }
+
+    @MainActor
     private func launchFreshApp(
         orientation: UIDeviceOrientation = .portrait
     ) -> XCUIApplication {
@@ -130,5 +177,46 @@ final class AgentLimitsiOSUITests: XCTestCase {
             if element.waitForExistence(timeout: 0.5) { return true }
         }
         return false
+    }
+
+    @MainActor
+    private func captureVisuallyStableScreenshot(
+        timeout: TimeInterval = 5,
+        sampleInterval: TimeInterval = 0.2,
+        requiredMatchingSamples: Int = 3
+    ) -> XCUIScreenshot? {
+        let deadline = Date().addingTimeInterval(timeout)
+        var previousFrame: Data?
+        var matchingSamples = 0
+
+        while Date() < deadline {
+            let screenshot = XCUIScreen.main.screenshot()
+            let frame = screenshot.pngRepresentation
+            if frame == previousFrame {
+                matchingSamples += 1
+                if matchingSamples >= requiredMatchingSamples {
+                    return screenshot
+                }
+            } else {
+                previousFrame = frame
+                matchingSamples = 0
+            }
+            RunLoop.current.run(
+                until: Date().addingTimeInterval(sampleInterval)
+            )
+        }
+        return nil
+    }
+
+    @MainActor
+    private func addStableScreenshot(named name: String) {
+        guard let screenshot = captureVisuallyStableScreenshot() else {
+            XCTFail("Screenshot did not reach repeated identical frames")
+            return
+        }
+        let attachment = XCTAttachment(screenshot: screenshot)
+        attachment.name = name
+        attachment.lifetime = .keepAlways
+        add(attachment)
     }
 }
